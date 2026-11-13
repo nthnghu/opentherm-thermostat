@@ -1,0 +1,348 @@
+// Thermostat control task.
+// Every second: read the SHT40 (every 2nd loop), decide heat demand with hysteresis, compute a flow
+// setpoint (P+I on the room error), and talk OpenTherm to the boiler (real or simulated).
+// Failsafe: no sensor reading for 30 s -> heat demand off. Mode Off still protects against frost (7 °C).
+#include "thermostat.h"
+#include <string.h>
+#include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_task_wdt.h"
+#include "esp_heap_caps.h"
+#include "nvs.h"
+#include "board.h"
+#include "sht4x.h"
+#include "opentherm.h"
+#include "timekeep.h"
+
+static const char *TAG = "thermo";
+
+#define LOOP_MS          1000
+#define SENSOR_STALE_US  ((int64_t)THERMO_SENSOR_STALE_S * 1000000)
+#define SAVE_DELAY_US    (5LL * 1000000)
+#define FLOW_MIN         30.0f
+#define FLOW_MAX         60.0f
+#define FLOW_OFF         10.0f
+#define OT_OFFLINE_AFTER 5   // failed exchanges in a row
+
+static SemaphoreHandle_t s_lock;
+static thermo_state_t s_st;
+static int64_t s_last_reading_us;
+static int64_t s_dirty_since_us;  // 0 = nothing to save
+static float s_integral;
+static thermo_sample_t *s_hist;   // PSRAM ring
+static int s_hist_head, s_hist_count;
+
+#define LOCK()   xSemaphoreTake(s_lock, portMAX_DELAY)
+#define UNLOCK() xSemaphoreGive(s_lock)
+
+/* ------------------------------------------------------------ persistence */
+
+static void load(void)
+{
+    s_st.setpoint = 21.0f;
+    s_st.mode = THERMO_MODE_HEAT;
+    s_st.offset = 0.0f;
+    s_st.hysteresis = 0.2f;
+    s_st.boiler_sim = true;
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
+        int32_t v;
+        uint8_t b;
+        if (nvs_get_i32(h, "sp", &v) == ESP_OK) {
+            s_st.setpoint = v / 10.0f;
+        }
+        if (nvs_get_u8(h, "mode", &b) == ESP_OK) {
+            s_st.mode = b ? THERMO_MODE_HEAT : THERMO_MODE_OFF;
+        }
+        if (nvs_get_i32(h, "ofs", &v) == ESP_OK) {
+            s_st.offset = v / 10.0f;
+        }
+        if (nvs_get_i32(h, "hyst", &v) == ESP_OK) {
+            s_st.hysteresis = v / 100.0f;
+        }
+        if (nvs_get_u8(h, "sim", &b) == ESP_OK) {
+            s_st.boiler_sim = b;
+        }
+        nvs_close(h);
+    }
+}
+
+static void save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    LOCK();
+    thermo_state_t c = s_st;
+    UNLOCK();
+    nvs_set_i32(h, "sp", (int32_t)lroundf(c.setpoint * 10));
+    nvs_set_u8(h, "mode", c.mode);
+    nvs_set_i32(h, "ofs", (int32_t)lroundf(c.offset * 10));
+    nvs_set_i32(h, "hyst", (int32_t)lroundf(c.hysteresis * 100));
+    nvs_set_u8(h, "sim", c.boiler_sim);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "settings saved (sp %.1f, mode %d)", c.setpoint, c.mode);
+}
+
+static void mark_dirty(void)
+{
+    s_dirty_since_us = esp_timer_get_time();
+}
+
+/* ---------------------------------------------------------------- boiler */
+
+static bool ot_exchange(uint8_t type, uint8_t id, uint16_t data, uint16_t *resp_data)
+{
+    uint32_t resp;
+    esp_err_t err = ot_transfer(ot_frame(type, id, data), &resp);
+    uint8_t rt = ot_type(resp);
+    bool ok = err == ESP_OK && ot_id(resp) == id && (rt == OT_READ_ACK || rt == OT_WRITE_ACK);
+    LOCK();
+    if (ok) {
+        s_st.ot_ok++;
+    } else {
+        s_st.ot_errors++;
+    }
+    UNLOCK();
+    if (ok && resp_data) {
+        *resp_data = ot_data(resp);
+    }
+    return ok;
+}
+
+static void boiler_step(bool demand, float flow_sp, int loop)
+{
+    static int fails;
+    // ID 0 every second: master status (CH enable) / slave status (flame).
+    uint16_t st;
+    bool ok = ot_exchange(OT_READ_DATA, OT_ID_STATUS, demand ? 0x0100 : 0x0000, &st);
+    fails = ok ? 0 : fails + 1;
+    bool online = fails < OT_OFFLINE_AFTER;
+    LOCK();
+    s_st.boiler_online = online && (ok || s_st.boiler_online);
+    if (ok) {
+        s_st.flame = st & 0x08;
+    }
+    UNLOCK();
+    if (!ok) {
+        return;  // no boiler: don't spend the loop on more timeouts
+    }
+    // Then one of: control setpoint, flow temperature, modulation.
+    uint16_t d;
+    switch (loop % 3) {
+    case 0:
+        ot_exchange(OT_WRITE_DATA, OT_ID_TSET, ot_to_f88(flow_sp), NULL);
+        break;
+    case 1:
+        if (ot_exchange(OT_READ_DATA, OT_ID_TBOILER, 0, &d)) {
+            LOCK();
+            s_st.flow_c = ot_f88(d);
+            UNLOCK();
+        }
+        break;
+    default:
+        if (ot_exchange(OT_READ_DATA, OT_ID_REL_MOD, 0, &d)) {
+            LOCK();
+            s_st.modulation = ot_f88(d);
+            UNLOCK();
+        }
+        break;
+    }
+}
+
+/* --------------------------------------------------------------- history */
+
+static void history_add(void)
+{
+    LOCK();
+    thermo_sample_t s = {
+        .t = timekeep_valid() ? time(NULL) : 0,
+        .room_c10 = s_st.sensor_ok ? (int16_t)lroundf(s_st.room_c * 10) : INT16_MIN,
+        .humidity = (uint8_t)lroundf(s_st.humidity),
+        .setpoint_c10 = (int16_t)lroundf((s_st.mode == THERMO_MODE_HEAT ? s_st.setpoint : THERMO_FROST) * 10),
+        .demand = s_st.demand,
+    };
+    s_hist[s_hist_head] = s;
+    s_hist_head = (s_hist_head + 1) % THERMO_HISTORY_LEN;
+    if (s_hist_count < THERMO_HISTORY_LEN) {
+        s_hist_count++;
+    }
+    UNLOCK();
+}
+
+int thermo_history(thermo_sample_t *out, int max)
+{
+    LOCK();
+    int n = s_hist_count < max ? s_hist_count : max;
+    int start = (s_hist_head - n + THERMO_HISTORY_LEN) % THERMO_HISTORY_LEN;
+    for (int i = 0; i < n; i++) {
+        out[i] = s_hist[(start + i) % THERMO_HISTORY_LEN];
+    }
+    UNLOCK();
+    return n;
+}
+
+/* ------------------------------------------------------------------ task */
+
+static void thermo_task(void *arg)
+{
+    esp_task_wdt_add(NULL);
+    bool sensor_inited = sht4x_init(board_i2c_bus()) == ESP_OK;
+    ot_init();
+    TickType_t wake = xTaskGetTickCount();
+    int64_t last_hist = 0;
+    for (int loop = 0;; loop++) {
+        esp_task_wdt_reset();
+        int64_t now = esp_timer_get_time();
+
+        // 1. Sensor (every 2 s)
+        if (loop % 2 == 0) {
+            float t, h;
+            esp_err_t err = sensor_inited ? sht4x_measure(&t, &h) : ESP_ERR_INVALID_STATE;
+            if (!sensor_inited) {
+                sensor_inited = sht4x_init(board_i2c_bus()) == ESP_OK;
+            }
+            LOCK();
+            if (err == ESP_OK && t > -20 && t < 60) {
+                s_st.room_c = t + s_st.offset;
+                s_st.humidity = h;
+                s_last_reading_us = now;
+            } else {
+                s_st.sensor_errors++;
+                if (s_st.sensor_errors < 5 || s_st.sensor_errors % 15 == 0) {
+                    ESP_LOGW(TAG, "SHT40 read failed (%s), %lu errors, last good %lld s ago", esp_err_to_name(err),
+                             (unsigned long)s_st.sensor_errors,
+                             s_last_reading_us ? (now - s_last_reading_us) / 1000000 : -1LL);
+                }
+            }
+            s_st.sensor_ok = s_last_reading_us && now - s_last_reading_us < SENSOR_STALE_US;
+            s_st.sensor_age_s = s_last_reading_us ? (int)((now - s_last_reading_us) / 1000000) : -1;
+            UNLOCK();
+        }
+
+        // 2. Control
+        LOCK();
+        float target = s_st.mode == THERMO_MODE_HEAT ? s_st.setpoint : THERMO_FROST;
+        bool demand = s_st.demand;
+        if (!s_st.sensor_ok) {
+            demand = false;  // failsafe
+        } else if (s_st.room_c < target - s_st.hysteresis) {
+            demand = true;
+        } else if (s_st.room_c > target + s_st.hysteresis) {
+            demand = false;
+        }
+        float err = s_st.sensor_ok ? target - s_st.room_c : 0;
+        if (demand) {
+            s_integral += err * 0.02f;  // °C flow per °C·s
+            s_integral = fminf(fmaxf(s_integral, -10.0f), 15.0f);
+        } else {
+            s_integral *= 0.98f;
+        }
+        float flow = demand ? fminf(fmaxf(35.0f + 15.0f * err + s_integral, FLOW_MIN), FLOW_MAX) : FLOW_OFF;
+        s_st.demand = demand;
+        s_st.flow_setpoint = flow;
+        bool sim = s_st.boiler_sim;
+        s_st.loops++;
+        UNLOCK();
+
+        // 3. Boiler
+        ot_set_simulated(sim);
+        if (sim) {
+            ot_sim_tick(LOOP_MS / 1000.0f);
+        }
+        boiler_step(demand, flow, loop);
+
+        // 4. History (1 / min) and debounced save
+        if (now - last_hist >= 60LL * 1000000 || last_hist == 0) {
+            last_hist = now;
+            history_add();
+        }
+        if (s_dirty_since_us && now - s_dirty_since_us > SAVE_DELAY_US) {
+            s_dirty_since_us = 0;
+            save();
+        }
+
+        // Fixed 1 s cadence; if a boiler timeout made us late, don't try to catch up.
+        if (xTaskDelayUntil(&wake, pdMS_TO_TICKS(LOOP_MS)) == pdFALSE) {
+            wake = xTaskGetTickCount();
+        }
+    }
+}
+
+void thermo_start(void)
+{
+    s_lock = xSemaphoreCreateMutex();
+    s_hist = heap_caps_calloc(THERMO_HISTORY_LEN, sizeof(thermo_sample_t), MALLOC_CAP_SPIRAM);
+    load();
+    ESP_LOGI(TAG, "start: setpoint %.1f, mode %s, offset %.1f, boiler %s", s_st.setpoint,
+             s_st.mode ? "heat" : "off", s_st.offset, s_st.boiler_sim ? "simulated" : "real");
+    // Highest application priority, pinned to core 1 (the UI runs on core 0).
+    xTaskCreatePinnedToCore(thermo_task, "thermo", 6144, NULL, 20, NULL, 1);
+}
+
+void thermo_get(thermo_state_t *out)
+{
+    LOCK();
+    *out = s_st;
+    UNLOCK();
+}
+
+void thermo_set_setpoint(float c)
+{
+    c = roundf(c * 2) / 2;  // 0.5 °C steps
+    c = fminf(fmaxf(c, THERMO_SP_MIN), THERMO_SP_MAX);
+    LOCK();
+    s_st.setpoint = c;
+    UNLOCK();
+    mark_dirty();
+}
+
+void thermo_adjust_setpoint(float delta)
+{
+    LOCK();
+    float c = s_st.setpoint + delta;
+    UNLOCK();
+    thermo_set_setpoint(c);
+}
+
+void thermo_set_mode(thermo_mode_t m)
+{
+    LOCK();
+    s_st.mode = m;
+    UNLOCK();
+    mark_dirty();
+}
+
+void thermo_set_offset(float c)
+{
+    c = fminf(fmaxf(roundf(c * 10) / 10, -5.0f), 5.0f);
+    LOCK();
+    s_st.room_c += c - s_st.offset;
+    s_st.offset = c;
+    UNLOCK();
+    mark_dirty();
+}
+
+void thermo_set_hysteresis(float c)
+{
+    c = fminf(fmaxf(roundf(c * 20) / 20, 0.05f), 1.0f);
+    LOCK();
+    s_st.hysteresis = c;
+    UNLOCK();
+    mark_dirty();
+}
+
+void thermo_set_boiler_sim(bool sim)
+{
+    LOCK();
+    s_st.boiler_sim = sim;
+    s_st.boiler_online = false;
+    UNLOCK();
+    mark_dirty();
+}

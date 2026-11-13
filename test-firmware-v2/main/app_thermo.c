@@ -1,0 +1,342 @@
+// Thermostat app: swipeable pages. Page 1 = room temperature, clock, setpoint; page 2 = 24 h chart;
+// further pages are placeholders for later (other sensors, schedule, settings).
+#include <stdio.h>
+#include <time.h>
+#include <math.h>
+#include "esp_heap_caps.h"
+#include "board.h"
+#include "ui.h"
+#include "thermostat.h"
+#include "timekeep.h"
+
+#define CHART_POINTS 144  // 24 h at 10 min
+
+static lv_obj_t *s_scr, *s_tv;
+static lv_obj_t *s_time, *s_date, *s_room, *s_hum, *s_arc, *s_set, *s_mode_btn, *s_mode_lbl, *s_info;
+static lv_obj_t *s_chart, *s_chart_info;
+static lv_chart_series_t *s_ser_room, *s_ser_sp;
+static lv_obj_t *s_dots[5];
+static thermo_sample_t *s_hist;
+
+/* ------------------------------------------------------------- main page */
+
+static void minus_cb(lv_event_t *e)
+{
+    thermo_adjust_setpoint(-0.5f);
+}
+
+static void plus_cb(lv_event_t *e)
+{
+    thermo_adjust_setpoint(0.5f);
+}
+
+static void arc_cb(lv_event_t *e)
+{
+    thermo_set_setpoint(lv_arc_get_value(s_arc) / 2.0f);
+}
+
+static void mode_cb(lv_event_t *e)
+{
+    thermo_state_t st;
+    thermo_get(&st);
+    thermo_set_mode(st.mode == THERMO_MODE_HEAT ? THERMO_MODE_OFF : THERMO_MODE_HEAT);
+}
+
+static void apps_cb(lv_event_t *e)
+{
+    ui_go_launcher();
+}
+
+static void update_main(void)
+{
+    thermo_state_t st;
+    thermo_get(&st);
+
+    if (timekeep_valid()) {
+        time_t now = time(NULL);
+        struct tm lt;
+        localtime_r(&now, &lt);
+        char d[32];
+        strftime(d, sizeof(d), "%a %d %b", &lt);
+        lv_label_set_text_fmt(s_time, "%02d:%02d", lt.tm_hour, lt.tm_min);
+        lv_label_set_text(s_date, d);
+    } else {
+        lv_label_set_text(s_time, "--:--");
+        lv_label_set_text(s_date, "clock not set");
+    }
+
+    lv_obj_set_style_text_color(s_room, lv_color_hex(st.sensor_age_s >= 6 ? 0x607D8B : 0xE6EDF3), 0);
+    if (st.sensor_ok) {
+        lv_label_set_text_fmt(s_room, "%.1f°", st.room_c);
+        lv_label_set_text_fmt(s_hum, "%.0f %% humidity", st.humidity);
+    } else {
+        lv_label_set_text(s_room, "--.-°");
+        lv_label_set_text(s_hum, "#E57373 sensor error#");
+    }
+
+    lv_label_set_text_fmt(s_set, "%.1f °C", st.setpoint);
+    if (!lv_obj_has_state(s_arc, LV_STATE_PRESSED)) {
+        lv_arc_set_value(s_arc, (int)lroundf(st.setpoint * 2));
+    }
+    bool heat = st.mode == THERMO_MODE_HEAT;
+    lv_label_set_text(s_mode_lbl, heat ? LV_SYMBOL_POWER " Heat" : LV_SYMBOL_POWER " Off");
+    lv_obj_set_style_bg_color(s_mode_btn, lv_color_hex(heat ? 0xD84315 : 0x455A64), 0);
+    lv_obj_set_style_arc_color(s_arc, lv_color_hex(heat ? 0xFF7043 : 0x607D8B), LV_PART_INDICATOR);
+
+    char boiler[64];
+    if (st.boiler_online) {
+        snprintf(boiler, sizeof(boiler), "%sflow %.0f °C, %.0f %%", st.boiler_sim ? "sim. boiler: " : "boiler: ",
+                 st.flow_c, st.modulation);
+    } else {
+        snprintf(boiler, sizeof(boiler), "%s", st.boiler_sim ? "sim. boiler offline" : "no boiler connected");
+    }
+    if (!st.sensor_ok) {
+        lv_label_set_text(s_info, "#E57373 " LV_SYMBOL_WARNING " Room sensor not answering - heating off#");
+    } else if (st.sensor_age_s >= 6) {
+        lv_label_set_text_fmt(s_info, "#FFB74D " LV_SYMBOL_WARNING " Room sensor not answering for %d s - heating off in %d s#",
+                              st.sensor_age_s, THERMO_SENSOR_STALE_S - st.sensor_age_s);
+    } else if (st.demand) {
+        lv_label_set_text_fmt(s_info, "#FF7043 Heating# to %.0f °C  /  %s", st.flow_setpoint, boiler);
+    } else {
+        lv_label_set_text_fmt(s_info, "Idle%s  /  %s", heat ? "" : " (frost protection 7 °C)", boiler);
+    }
+}
+
+static void build_main(lv_obj_t *p)
+{
+    s_time = lv_label_create(p);
+    lv_obj_set_style_text_font(s_time, &lv_font_montserrat_48, 0);
+    lv_obj_set_pos(s_time, 20, 8);
+    s_date = lv_label_create(p);
+    lv_obj_set_style_text_color(s_date, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_pos(s_date, 24, 66);
+
+    lv_obj_t *apps = ui_button(p, LV_SYMBOL_BARS " Apps", lv_color_hex(0x37474F), apps_cb, NULL);
+    lv_obj_set_size(apps, 120, 56);
+    lv_obj_align(apps, LV_ALIGN_TOP_RIGHT, -16, 16);
+
+    s_arc = lv_arc_create(p);
+    lv_obj_set_size(s_arc, 380, 380);
+    lv_obj_align(s_arc, LV_ALIGN_TOP_MID, 0, 104);
+    lv_arc_set_rotation(s_arc, 135);
+    lv_arc_set_bg_angles(s_arc, 0, 270);
+    lv_arc_set_range(s_arc, (int)(THERMO_SP_MIN * 2), (int)(THERMO_SP_MAX * 2));
+    lv_obj_set_style_arc_width(s_arc, 22, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_arc, 22, LV_PART_INDICATOR);
+    lv_obj_set_style_pad_all(s_arc, 8, LV_PART_KNOB);
+    lv_obj_add_event_cb(s_arc, arc_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_SCROLL_CHAIN);
+
+    lv_obj_t *rl = lv_label_create(s_arc);
+    lv_obj_set_style_text_color(rl, lv_color_hex(0x90A4AE), 0);
+    lv_label_set_text(rl, "Room");
+    lv_obj_align(rl, LV_ALIGN_CENTER, 0, -86);
+    s_room = lv_label_create(s_arc);
+    lv_obj_set_style_text_font(s_room, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_transform_scale(s_room, 400, 0);  // 48 px font shown ~75 px tall
+    lv_obj_set_style_transform_pivot_x(s_room, LV_PCT(50), 0);
+    lv_obj_set_style_transform_pivot_y(s_room, LV_PCT(50), 0);
+    lv_obj_align(s_room, LV_ALIGN_CENTER, 0, -22);
+    s_hum = lv_label_create(s_arc);
+    lv_label_set_recolor(s_hum, true);
+    lv_obj_set_style_text_color(s_hum, lv_color_hex(0x4FC3F7), 0);
+    lv_obj_align(s_hum, LV_ALIGN_CENTER, 0, 44);
+    lv_obj_t *sl = lv_label_create(s_arc);
+    lv_obj_set_style_text_color(sl, lv_color_hex(0x90A4AE), 0);
+    lv_label_set_text(sl, "Set to");
+    lv_obj_align(sl, LV_ALIGN_CENTER, 0, 92);
+    s_set = lv_label_create(s_arc);
+    lv_obj_set_style_text_font(s_set, &lv_font_montserrat_28, 0);
+    lv_obj_align(s_set, LV_ALIGN_CENTER, 0, 124);
+
+    lv_obj_t *minus = ui_button(p, LV_SYMBOL_MINUS, lv_color_hex(0x1565C0), minus_cb, NULL);
+    lv_obj_set_size(minus, 120, 80);
+    lv_obj_set_pos(minus, 20, 500);
+    lv_obj_set_style_text_font(lv_obj_get_child(minus, 0), &lv_font_montserrat_40, 0);
+    lv_obj_t *plus = ui_button(p, LV_SYMBOL_PLUS, lv_color_hex(0xD84315), plus_cb, NULL);
+    lv_obj_set_size(plus, 120, 80);
+    lv_obj_set_pos(plus, 340, 500);
+    lv_obj_set_style_text_font(lv_obj_get_child(plus, 0), &lv_font_montserrat_40, 0);
+    s_mode_btn = ui_button(p, "", lv_color_hex(0xD84315), mode_cb, NULL);
+    lv_obj_set_size(s_mode_btn, 172, 80);
+    lv_obj_set_pos(s_mode_btn, 154, 500);
+    s_mode_lbl = lv_obj_get_child(s_mode_btn, 0);
+    lv_obj_set_style_text_font(s_mode_lbl, &lv_font_montserrat_28, 0);
+
+    s_info = lv_label_create(p);
+    lv_label_set_recolor(s_info, true);
+    lv_obj_set_width(s_info, 440);
+    lv_label_set_long_mode(s_info, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s_info, 20, 600);
+}
+
+/* ------------------------------------------------------------ chart page */
+
+static void update_chart(void)
+{
+    int n = thermo_history(s_hist, THERMO_HISTORY_LEN);
+    float lo = 99, hi = -99, cur = NAN;
+    lv_chart_set_all_values(s_chart, s_ser_room, LV_CHART_POINT_NONE);
+    lv_chart_set_all_values(s_chart, s_ser_sp, LV_CHART_POINT_NONE);
+    // Newest sample at the right edge; one chart point per 10 min.
+    for (int k = 0; k < CHART_POINTS; k++) {
+        int i = n - 1 - (CHART_POINTS - 1 - k) * 10;
+        if (i < 0) {
+            continue;
+        }
+        if (s_hist[i].room_c10 != INT16_MIN) {
+            lv_chart_set_value_by_id(s_chart, s_ser_room, k, s_hist[i].room_c10);
+            float v = s_hist[i].room_c10 / 10.0f;
+            lo = fminf(lo, v);
+            hi = fmaxf(hi, v);
+            cur = v;
+        }
+        lv_chart_set_value_by_id(s_chart, s_ser_sp, k, s_hist[i].setpoint_c10);
+        float sp = s_hist[i].setpoint_c10 / 10.0f;
+        lo = fminf(lo, sp);
+        hi = fmaxf(hi, sp);
+    }
+    if (lo > hi) {
+        lo = 18;
+        hi = 24;
+    }
+    lv_chart_set_axis_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, (int)floorf(lo * 10) - 5, (int)ceilf(hi * 10) + 5);
+    lv_chart_refresh(s_chart);
+    if (isnan(cur)) {
+        lv_label_set_text_fmt(s_chart_info, "%d min recorded, no readings yet", n);
+    } else {
+        lv_label_set_text_fmt(s_chart_info, "Now %.1f °C  /  low %.1f  /  high %.1f\n%d min recorded since boot", cur, lo, hi,
+                              n);
+    }
+}
+
+static void build_chart(lv_obj_t *p)
+{
+    lv_obj_t *t = lv_label_create(p);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+    lv_label_set_text(t, "Last 24 hours");
+    lv_obj_set_pos(t, 20, 16);
+    lv_obj_t *lg = lv_label_create(p);
+    lv_label_set_recolor(lg, true);
+    lv_label_set_text(lg, "#4FC3F7 room#   #FFB74D setpoint#");
+    lv_obj_set_pos(lg, 22, 58);
+
+    s_chart = lv_chart_create(p);
+    lv_obj_set_size(s_chart, 440, 460);
+    lv_obj_set_pos(s_chart, 20, 96);
+    lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(s_chart, CHART_POINTS);
+    lv_chart_set_div_line_count(s_chart, 5, 4);
+    lv_obj_set_style_size(s_chart, 0, 0, LV_PART_INDICATOR);  // no point markers
+    lv_obj_set_style_line_width(s_chart, 3, LV_PART_ITEMS);
+    s_ser_room = lv_chart_add_series(s_chart, lv_color_hex(0x4FC3F7), LV_CHART_AXIS_PRIMARY_Y);
+    s_ser_sp = lv_chart_add_series(s_chart, lv_color_hex(0xFFB74D), LV_CHART_AXIS_PRIMARY_Y);
+
+    s_chart_info = lv_label_create(p);
+    lv_obj_set_style_text_color(s_chart_info, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_pos(s_chart_info, 22, 572);
+}
+
+static void build_placeholder(lv_obj_t *p, const char *title, const char *text)
+{
+    lv_obj_t *t = lv_label_create(p);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+    lv_label_set_text(t, title);
+    lv_obj_set_pos(t, 20, 16);
+    lv_obj_t *l = lv_label_create(p);
+    lv_obj_set_width(l, 440);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(l, lv_color_hex(0x90A4AE), 0);
+    lv_label_set_text(l, text);
+    lv_obj_set_pos(l, 20, 70);
+}
+
+/* --------------------------------------------------------------- general */
+
+static int active_page(void)
+{
+    lv_obj_t *act = lv_tileview_get_tile_active(s_tv);
+    return act ? lv_obj_get_index(act) : 0;
+}
+
+static void update_dots(void)
+{
+    int page = active_page();
+    for (int i = 0; i < 5; i++) {
+        bool on = page == i;
+        lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(on ? 0xE6EDF3 : 0x455A64), 0);
+    }
+}
+
+static void tile_cb(lv_event_t *e)
+{
+    update_dots();
+    if (active_page() == 1) {
+        update_chart();
+    }
+}
+
+static void timer_cb(lv_timer_t *t)
+{
+    if (lv_screen_active() != s_scr) {
+        return;
+    }
+    update_main();
+    static int n;
+    if (++n % 60 == 0 && active_page() == 1) {
+        update_chart();
+    }
+}
+
+static void screen_cb(lv_event_t *e)
+{
+    update_main();
+}
+
+void app_thermo_show_page(int page)
+{
+    lv_obj_update_layout(s_tv);
+    lv_tileview_set_tile_by_index(s_tv, page, 0, LV_ANIM_OFF);
+    update_dots();
+    if (page == 1) {
+        update_chart();
+    }
+}
+
+lv_obj_t *app_thermo_create(void)
+{
+    s_hist = heap_caps_malloc(sizeof(thermo_sample_t) * THERMO_HISTORY_LEN, MALLOC_CAP_SPIRAM);
+    lv_obj_t *content;
+    s_scr = ui_plain_screen(&content);
+    lv_obj_add_event_cb(s_scr, screen_cb, LV_EVENT_SCREEN_LOAD_START, NULL);
+
+    s_tv = lv_tileview_create(content);
+    lv_obj_set_size(s_tv, BOARD_LCD_H_RES, BOARD_LCD_V_RES - UI_STATUS_H);
+    lv_obj_set_style_bg_opa(s_tv, LV_OPA_TRANSP, 0);
+    lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(s_tv, tile_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    build_main(lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT));
+    build_chart(lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT | LV_DIR_RIGHT));
+    build_placeholder(lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_LEFT | LV_DIR_RIGHT), "Other sensors",
+                      "Coming later: temperatures from other rooms and Home Assistant sensors.");
+    build_placeholder(lv_tileview_add_tile(s_tv, 3, 0, LV_DIR_LEFT | LV_DIR_RIGHT), "Schedule",
+                      "Coming later: the weekly heating schedule, run locally on the device.");
+    build_placeholder(lv_tileview_add_tile(s_tv, 4, 0, LV_DIR_LEFT), "Thermostat settings",
+                      "Coming later. For now: Apps > Setup > Thermostat (sensor offset, hysteresis, boiler mode).");
+
+    // Page dots
+    for (int i = 0; i < 5; i++) {
+        s_dots[i] = lv_obj_create(content);
+        lv_obj_remove_style_all(s_dots[i]);
+        lv_obj_set_size(s_dots[i], 10, 10);
+        lv_obj_set_style_radius(s_dots[i], 5, 0);
+        lv_obj_set_style_bg_opa(s_dots[i], LV_OPA_COVER, 0);
+        lv_obj_set_pos(s_dots[i], 240 - 50 + i * 22, BOARD_LCD_V_RES - UI_STATUS_H - 24);
+    }
+    update_dots();
+    update_main();
+    lv_timer_create(timer_cb, 1000, NULL);
+    return s_scr;
+}

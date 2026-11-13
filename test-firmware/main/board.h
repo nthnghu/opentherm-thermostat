@@ -1,0 +1,40 @@
+#pragma once
+// Board support for the Guition JC4880P443C_I_W (ESP32-P4 + ESP32-C6).
+#include <stdbool.h>
+#include "esp_err.h"
+#include "esp_codec_dev.h"
+#include "esp_wifi_types.h"
+
+#define BOARD_LCD_H_RES 480
+#define BOARD_LCD_V_RES 800
+
+// Pins (community pin map, see the build plan doc)
+#define BOARD_I2C_SDA      7
+#define BOARD_I2C_SCL      8
+#define BOARD_LCD_RST      5
+#define BOARD_LCD_BL       23
+#define BOARD_I2S_MCLK     13
+#define BOARD_I2S_BCLK     12
+#define BOARD_I2S_WS       10
+#define BOARD_I2S_DOUT     9
+#define BOARD_I2S_DIN      48
+#define BOARD_PA_EN        11
+
+#define AUDIO_SAMPLE_RATE  16000
+
+// I2C bus, display, touch and LVGL. Must be called first.
+esp_err_t board_display_init(void);
+
+// ES8311 codec (speaker + mic), opened at AUDIO_SAMPLE_RATE, 16-bit mono.
+esp_err_t board_audio_init(void);
+esp_codec_dev_handle_t board_audio(void);
+
+// Starts Wi-Fi (through the ESP32-C6) and connects to the saved network, reconnecting on its own.
+esp_err_t board_wifi_start(void);
+// Blocking scan (a few seconds); returns the number of records written, or -1.
+int board_wifi_scan(wifi_ap_record_t *out, int max);
+// Saves the network to NVS and connects to it.
+esp_err_t board_wifi_connect(const char *ssid, const char *pass);
+bool board_wifi_connected(void);
+const char *board_wifi_status(void);
+const char *board_wifi_ip(void);  // "" when not connected

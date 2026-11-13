@@ -1,0 +1,3 @@
+dependencies:
+  espressif/esp_cam_sensor: "^2.7.0"
+  espressif/esp_sccb_intf: ">=0.0.5"

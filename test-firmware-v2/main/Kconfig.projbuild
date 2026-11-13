@@ -1,0 +1,24 @@
+menu "Test firmware"
+
+    config TF_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+
+    config TF_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+
+    config TF_HA_URL
+        string "Home Assistant base URL"
+        default "http://homeassistant.local:8123"
+        help
+            No trailing slash. http:// is simplest; https:// works with publicly
+            trusted certificates only.
+
+    config TF_HA_TOKEN
+        string "Home Assistant long-lived access token"
+        default ""
+        help
+            Create it in Home Assistant: your profile > Security > Long-lived access tokens.
+
+endmenu
