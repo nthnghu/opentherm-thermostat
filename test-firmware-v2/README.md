@@ -37,5 +37,8 @@ Then on the device: Apps → Setup → Diagnostics → Update Wi-Fi chip.
 
 ## Development helpers (USB serial only)
 
-- `GO launcher|thermo|ha|calc|blocks|setup|page N|panel N` switches screens.
-- `SNAP` dumps the frame buffer (480×800 RGB565); see the session's `snap.py`.
+- `GO launcher|thermo|ha|calc|blocks|setup|page N|panel N` switches screens (`tools/go.py PORT "panel 5"`).
+- `SNAP` dumps the frame buffer as a PNG (`tools/snap.py PORT out.png`).
+- `STAT` prints the thermostat state; `tools/serlog.py PORT SECONDS out.log` captures the log.
+
+Run them with the ESP-IDF Python (it has pyserial).
