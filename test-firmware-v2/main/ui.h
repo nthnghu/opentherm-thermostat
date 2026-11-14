@@ -23,6 +23,12 @@ void ui_go_thermostat(void);
 void ui_open_setup(void);
 // While true, the inactivity timer does not switch back to the thermostat (camera scan, keyboard).
 void ui_set_busy(bool busy);
+// Turns the backlight off until the next touch (or camera motion).
+void ui_screen_off_now(void);
+// Re-evaluates the day/night theme now (after the theme setting changed).
+void ui_theme_update(void);
+// Opens Setup with one section shown (index as in app_setup.c), or the Setup menu for -1.
+void ui_open_setup_section(int section);
 
 // Apps: each creates its screen once.
 lv_obj_t *app_thermo_create(void);

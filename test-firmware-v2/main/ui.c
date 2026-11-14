@@ -1,5 +1,6 @@
 // UI shell: status bar on the top layer, app launcher, inactivity return to the thermostat, dimming.
 #include "ui.h"
+#include "ui_theme.h"
 #include <time.h>
 #include <string.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include "timekeep.h"
 #include "selftest.h"
 #include "ha.h"
+#include "quickpanel.h"
 
 enum { APP_THERMO, APP_HA, APP_CALC, APP_BLOCKS, APP_SETUP, APP_COUNT };
 
@@ -21,6 +23,8 @@ static bool s_busy;
 static void load(lv_obj_t *scr, lv_screen_load_anim_t anim);
 static void back_cb(lv_event_t *e);
 static int s_bl = -1;
+static bool s_forced_off;     // "Screen off now" from the quick panel
+static uint32_t s_forced_at;  // lv_tick at that moment
 
 /* ---------------------------------------------------------------- widgets */
 
@@ -45,7 +49,7 @@ lv_obj_t *ui_overlay(lv_obj_t *parent)
     lv_obj_set_pos(o, 0, 0);
     lv_obj_set_style_radius(o, 0, 0);
     lv_obj_set_style_border_width(o, 0, 0);
-    lv_obj_set_style_bg_color(o, lv_color_hex(0x121212), 0);
+    lv_obj_set_style_bg_color(o, ui_c(0x121212), 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(o, 0, 0);
     lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
@@ -71,6 +75,7 @@ lv_obj_t *ui_plain_screen(lv_obj_t **content)
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(scr, 0, 0);
+    lv_obj_set_style_bg_color(scr, ui_c(UI_BG), 0);
     *content = plain_container(scr, UI_STATUS_H, BOARD_LCD_V_RES - UI_STATUS_H);
     return scr;
 }
@@ -102,16 +107,17 @@ lv_obj_t *ui_app_screen(const char *title, lv_obj_t **content)
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(scr, 0, 0);
+    lv_obj_set_style_bg_color(scr, ui_c(UI_BG), 0);
 
     lv_obj_t *header = lv_obj_create(scr);
     lv_obj_set_size(header, LV_PCT(100), UI_HEADER_H);
     lv_obj_set_pos(header, 0, UI_STATUS_H);
     lv_obj_set_style_radius(header, 0, 0);
     lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x1E2A38), 0);
+    lv_obj_set_style_bg_color(header, ui_c(0x1E2A38), 0);
     lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *back = ui_button(header, LV_SYMBOL_LEFT " Apps", lv_color_hex(0x37474F), back_cb, NULL);
+    lv_obj_t *back = ui_button(header, LV_SYMBOL_LEFT " Apps", ui_c(0x37474F), back_cb, NULL);
     lv_obj_set_size(back, 120, 48);
     lv_obj_align(back, LV_ALIGN_LEFT_MID, -6, 0);
 
@@ -162,15 +168,21 @@ static void open_app_cb(lv_event_t *e)
 
 static void status_cb(lv_timer_t *t)
 {
-    // Clock
+    // Clock. The Thermostat page shows its own large clock, so the status bar shows only a hint there.
+    unsigned long muted = (unsigned long)ui_hex(UI_MUTED);
+    bool thermo = lv_screen_active() == s_apps[APP_THERMO];
     if (timekeep_valid()) {
         time_t now = time(NULL);
         struct tm lt;
         localtime_r(&now, &lt);
-        lv_label_set_text_fmt(s_clock, "%02d:%02d%s", lt.tm_hour, lt.tm_min,
-                              timekeep_source() == TIME_SRC_MANUAL ? "  #90A4AE manual#" : "");
+        bool manual = timekeep_source() == TIME_SRC_MANUAL;
+        if (thermo) {
+            lv_label_set_text_fmt(s_clock, manual ? "#%06lX manual clock#" : "", muted);
+        } else {
+            lv_label_set_text_fmt(s_clock, manual ? "%02d:%02d  #%06lX manual#" : "%02d:%02d", lt.tm_hour, lt.tm_min, muted);
+        }
     } else {
-        lv_label_set_text(s_clock, "--:--  #90A4AE clock not set#");
+        lv_label_set_text_fmt(s_clock, thermo ? "#%06lX clock not set#" : "--:--  #%06lX clock not set#", muted);
     }
 
     thermo_state_t st;
@@ -187,16 +199,24 @@ static void status_cb(lv_timer_t *t)
     }
 
     ha_state_t hs = ha_state();
-    lv_obj_set_style_text_color(s_ha, lv_color_hex(hs == HA_STATE_OK ? 0x81C784 : hs == HA_STATE_ERROR ? 0xE57373 : 0x607D8B), 0);
+    lv_obj_set_style_text_color(s_ha, ui_c(hs == HA_STATE_OK ? UI_OK : hs == HA_STATE_ERROR ? UI_ERR : UI_FAINT), 0);
 
     int rssi = board_wifi_rssi();
     if (board_wifi_connected()) {
         lv_label_set_text_fmt(s_wifi, LV_SYMBOL_WIFI " %d", rssi);
-        lv_obj_set_style_text_color(s_wifi, lv_color_hex(rssi > -67 ? 0x81C784 : rssi > -78 ? 0xFFB74D : 0xE57373), 0);
+        lv_obj_set_style_text_color(s_wifi, ui_c(rssi > -67 ? UI_OK : rssi > -78 ? UI_WARN : UI_ERR), 0);
     } else {
         lv_label_set_text(s_wifi, LV_SYMBOL_WIFI " off");
-        lv_obj_set_style_text_color(s_wifi, lv_color_hex(0x607D8B), 0);
+        lv_obj_set_style_text_color(s_wifi, ui_c(UI_FAINT), 0);
     }
+}
+
+static void bar_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_active()) != LV_DIR_BOTTOM) {
+        return;
+    }
+    quickpanel_open();
 }
 
 static void create_status_bar(void)
@@ -206,17 +226,21 @@ static void create_status_bar(void)
     lv_obj_set_pos(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(0x0B1117), 0);
+    lv_obj_set_style_bg_color(bar, ui_c(UI_STATUSBAR), 0);
     lv_obj_set_style_pad_hor(bar, 12, 0);
     lv_obj_set_style_pad_ver(bar, 0, 0);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);  // tap or swipe down: quick panel
+    lv_obj_add_event_cb(bar, bar_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(bar, bar_cb, LV_EVENT_GESTURE, NULL);
 
     s_clock = lv_label_create(bar);
     lv_label_set_recolor(s_clock, true);
+    lv_obj_set_style_text_color(s_clock, ui_c(UI_TEXT), 0);  // the top layer doesn't inherit the theme's text colour
     lv_obj_align(s_clock, LV_ALIGN_LEFT_MID, 0, 0);
 
     s_heat = lv_label_create(bar);
-    lv_obj_set_style_text_color(s_heat, lv_color_hex(0xFF7043), 0);
+    lv_obj_set_style_text_color(s_heat, ui_c(UI_HEAT), 0);
     lv_label_set_text(s_heat, LV_SYMBOL_CHARGE " HEAT");
     lv_obj_align(s_heat, LV_ALIGN_CENTER, 10, 0);
 
@@ -226,7 +250,7 @@ static void create_status_bar(void)
     lv_label_set_text(s_ha, LV_SYMBOL_HOME);
     lv_obj_align(s_ha, LV_ALIGN_RIGHT_MID, -96, 0);
     s_warn = lv_label_create(bar);
-    lv_obj_set_style_text_color(s_warn, lv_color_hex(0xE57373), 0);
+    lv_obj_set_style_text_color(s_warn, ui_c(UI_ERR), 0);
     lv_label_set_text(s_warn, LV_SYMBOL_WARNING);
     lv_obj_align(s_warn, LV_ALIGN_RIGHT_MID, -136, 0);
 
@@ -266,9 +290,19 @@ static void idle_cb(lv_timer_t *t)
         ui_go_thermostat();
     }
 
+    ui_theme_update();
+
+    // "Screen off now" lasts until there is activity after it (touch or camera motion).
+    if (s_forced_off) {
+        uint32_t since = lv_tick_elaps(s_forced_at);
+        if (since > 1000 && lv_display_get_inactive_time(NULL) + 500 < since) {
+            s_forced_off = false;
+        }
+    }
+
     int level = in_window(c->night_on, c->night_start, c->night_end) ? c->night_level : c->bright;
-    bool off = c->off_after_s && idle_s >= c->off_after_s && !s_busy &&
-               !in_window(c->keep_on, c->keep_on_start, c->keep_on_end);
+    bool off = s_forced_off || (c->off_after_s && idle_s >= c->off_after_s && !s_busy &&
+                                !in_window(c->keep_on, c->keep_on_start, c->keep_on_end));
     bool dim = c->dim_after_s && idle_s >= c->dim_after_s && !s_busy;
     if (off) {
         level = 0;
@@ -290,6 +324,41 @@ static void idle_cb(lv_timer_t *t)
         lv_obj_delete(s_wake);
         s_wake = NULL;
     }
+}
+
+void ui_screen_off_now(void)
+{
+    s_forced_off = true;
+    s_forced_at = lv_tick_get();
+    idle_cb(NULL);
+}
+
+// Auto: HA's sun.sun when known, else the day window (needs a valid clock), else keep the current theme.
+void ui_theme_update(void)
+{
+    const settings_t *c = settings_get();
+    bool dark;
+    if (c->theme_mode == 1) {
+        dark = false;
+    } else if (c->theme_mode == 2) {
+        dark = true;
+    } else {
+        bool up;
+        if (ha_sun_is_up(&up)) {
+            dark = !up;
+        } else if (timekeep_valid()) {
+            dark = !in_window(true, c->day_start, c->day_end);
+        } else {
+            dark = ui_theme_is_dark();
+        }
+    }
+    ui_theme_apply(dark);
+}
+
+void ui_open_setup_section(int section)
+{
+    load(s_apps[APP_SETUP], LV_SCR_LOAD_ANIM_NONE);
+    app_setup_open_panel(section);
 }
 
 /* -------------------------------------------------------------- launcher */
@@ -321,7 +390,7 @@ static void create_launcher(void)
     for (int i = 0; i < APP_COUNT; i++) {
         lv_obj_t *b = lv_button_create(content);
         lv_obj_set_size(b, 210, 170);
-        lv_obj_set_style_bg_color(b, lv_color_hex(items[i].color), 0);
+        lv_obj_set_style_bg_color(b, ui_c(items[i].color), 0);
         lv_obj_set_style_radius(b, 16, 0);
         lv_obj_add_event_cb(b, open_app_cb, LV_EVENT_CLICKED, s_apps[i]);
         lv_obj_t *ic = lv_label_create(b);
@@ -342,6 +411,7 @@ void ui_shell_create(void)
     s_apps[APP_BLOCKS] = app_blocks_create();
     s_apps[APP_SETUP] = app_setup_create();
     create_launcher();
+    quickpanel_create();  // before the status bar, which stays on top of it
     create_status_bar();
     lv_timer_create(idle_cb, 1000, NULL);
     lv_screen_load(s_apps[APP_THERMO]);
@@ -352,6 +422,18 @@ void ui_debug_go(const char *what)
     static const char *names[APP_COUNT] = {"thermo", "ha", "calc", "blocks", "setup"};
     if (strcmp(what, "launcher") == 0) {
         lv_screen_load(s_launcher);
+        return;
+    }
+    if (strcmp(what, "quick") == 0) {
+        quickpanel_open();
+        return;
+    }
+    if (strncmp(what, "theme ", 6) == 0) {  // "theme auto|light|dark": sets the theme setting
+        static settings_t c;
+        settings_copy(&c);
+        c.theme_mode = strcmp(what + 6, "light") == 0 ? 1 : strcmp(what + 6, "dark") == 0 ? 2 : 0;
+        settings_save(&c);
+        ui_theme_update();
         return;
     }
     if (strncmp(what, "panel ", 6) == 0) {

@@ -18,6 +18,7 @@
 #include "board.h"
 #include "settings.h"
 #include "ui.h"
+#include "ui_theme.h"
 #include "ha.h"
 #include "camera.h"
 #include "timekeep.h"
@@ -49,13 +50,13 @@ static void send_cmd(cmd_t c)
 static lv_obj_t *label(lv_obj_t *parent, const char *text, int x, int y, int w, uint32_t color)
 {
     lv_obj_t *l = lv_label_create(parent);
-    lv_label_set_text(l, text);
+    ui_label_text(l, text);
     if (w > 0) {
         lv_obj_set_width(l, w);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     }
     if (color) {
-        lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+        lv_obj_set_style_text_color(l, ui_c(color), 0);
     }
     lv_obj_set_pos(l, x, y);
     return l;
@@ -63,7 +64,7 @@ static lv_obj_t *label(lv_obj_t *parent, const char *text, int x, int y, int w, 
 
 static lv_obj_t *button(lv_obj_t *parent, const char *text, uint32_t color, lv_event_cb_t cb, int x, int y, int w, int h)
 {
-    lv_obj_t *b = ui_button(parent, text, lv_color_hex(color), cb, NULL);
+    lv_obj_t *b = ui_button(parent, text, ui_c(color), cb, NULL);
     lv_obj_set_pos(b, x, y);
     lv_obj_set_size(b, w, h);
     return b;
@@ -128,12 +129,12 @@ static void panel_open_cb(lv_event_t *e)
 static lv_obj_t *panel(const char *title)
 {
     lv_obj_t *p = ui_overlay(s_content);
-    lv_obj_t *back = ui_button(p, LV_SYMBOL_LEFT " Back", lv_color_hex(0x37474F), panel_back_cb, p);
+    lv_obj_t *back = ui_button(p, LV_SYMBOL_LEFT " Back", ui_c(0x37474F), panel_back_cb, p);
     lv_obj_set_size(back, 110, 48);
     lv_obj_set_pos(back, 10, 8);
     lv_obj_t *t = lv_label_create(p);
     lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
-    lv_label_set_text(t, title);
+    ui_label_text(t, title);
     lv_obj_set_pos(t, 136, 16);
     return p;
 }
@@ -150,10 +151,10 @@ static void fill_list(int n)
 {
     lv_obj_clean(s_list);
     if (n < 0) {
-        lv_label_set_text(s_scan_lbl, "Scan failed - is the Wi-Fi chip OK? Tap Rescan.");
+        ui_label_text(s_scan_lbl, "Scan failed - is the Wi-Fi chip OK? Tap Rescan.");
         return;
     }
-    lv_label_set_text_fmt(s_scan_lbl, "%d networks found. Tap one.", n);
+    ui_label_fmt(s_scan_lbl, "%d networks found. Tap one.", n);
     for (int i = 0; i < n; i++) {
         const char *ssid = (const char *)s_aps[i].ssid;
         if (!ssid[0]) {
@@ -181,7 +182,7 @@ static void open_picker(void)
     lv_obj_move_foreground(s_picker);
     lv_obj_add_flag(s_pw_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clean(s_list);
-    lv_label_set_text(s_scan_lbl, "Scanning...");
+    ui_label_text(s_scan_lbl, "Scanning...");
     send_cmd(CMD_SCAN);
 }
 
@@ -193,7 +194,7 @@ static void choose_cb(lv_event_t *e)
 static void rescan_cb(lv_event_t *e)
 {
     lv_obj_clean(s_list);
-    lv_label_set_text(s_scan_lbl, "Scanning...");
+    ui_label_text(s_scan_lbl, "Scanning...");
     send_cmd(CMD_SCAN);
 }
 
@@ -207,7 +208,7 @@ static void wifi_item_cb(lv_event_t *e)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     strlcpy(s_chosen_ssid, (const char *)s_aps[i].ssid, sizeof(s_chosen_ssid));
-    lv_label_set_text_fmt(s_pw_title, "Password for \"%s\"", s_chosen_ssid);
+    ui_label_fmt(s_pw_title, "Password for \"%s\"", s_chosen_ssid);
     lv_textarea_set_text(s_pw_ta, "");
     lv_obj_remove_flag(s_pw_panel, LV_OBJ_FLAG_HIDDEN);
     lv_keyboard_set_textarea(s_pw_kb, s_pw_ta);
@@ -259,16 +260,16 @@ static lv_obj_t *build_wifi(void)
     s_picker = ui_overlay(s_content);
     lv_obj_t *pt = lv_label_create(s_picker);
     lv_obj_set_style_text_font(pt, &lv_font_montserrat_28, 0);
-    lv_label_set_text(pt, "Choose network");
+    ui_label_text(pt, "Choose network");
     lv_obj_set_pos(pt, 16, 14);
     s_scan_lbl = label(s_picker, "", 16, 56, 0, 0x90A4AE);
     s_list = lv_list_create(s_picker);
     lv_obj_set_size(s_list, 448, 520);
     lv_obj_set_pos(s_list, 16, 88);
-    lv_obj_t *rs = ui_button(s_picker, LV_SYMBOL_REFRESH " Rescan", lv_color_hex(0x1565C0), rescan_cb, NULL);
+    lv_obj_t *rs = ui_button(s_picker, LV_SYMBOL_REFRESH " Rescan", ui_c(0x1565C0), rescan_cb, NULL);
     lv_obj_set_size(rs, 216, 64);
     lv_obj_set_pos(rs, 16, 624);
-    lv_obj_t *cl = ui_button(s_picker, LV_SYMBOL_CLOSE " Close", lv_color_hex(0x37474F), close_picker_cb, NULL);
+    lv_obj_t *cl = ui_button(s_picker, LV_SYMBOL_CLOSE " Close", ui_c(0x37474F), close_picker_cb, NULL);
     lv_obj_set_size(cl, 216, 64);
     lv_obj_set_pos(cl, 248, 624);
 
@@ -313,7 +314,7 @@ static void ha_refresh(void)
     if (c->ha_token[0]) {
         ha_token_describe(c->ha_token, info, sizeof(info));
     }
-    lv_label_set_text_fmt(s_ha_status, "Token: %s\nLast test: %s", info, res[0] ? res : "not run yet");
+    ui_label_fmt(s_ha_status, "Token: %s\nLast test: %s", info, res[0] ? res : "not run yet");
 }
 
 static void ha_panel_cb(lv_event_t *e)
@@ -344,7 +345,7 @@ static void ha_save_url_cb(lv_event_t *e)
 
 static void ha_test_cb(lv_event_t *e)
 {
-    lv_label_set_text(s_ha_status, "Testing...");
+    ui_label_text(s_ha_status, "Testing...");
     send_cmd(CMD_TEST);
 }
 
@@ -365,19 +366,19 @@ static void qr_task(void *arg);
 static void scan_cb(lv_event_t *e)
 {
     if (!s_cam_buf) {
-        lv_label_set_text(s_ha_status, "#E57373 Camera buffer missing#");
+        ui_label_text(s_ha_status, "#E57373 Camera buffer missing#");
         return;
     }
     lv_obj_remove_flag(s_cam, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_cam);
-    lv_label_set_text(s_cam_msg, "Hold the token's QR code 15-30 cm in front of the camera.");
+    ui_label_text(s_cam_msg, "Hold the token's QR code 15-30 cm in front of the camera.");
     ui_set_busy(true);
     if (!s_scanning) {
         s_scanning = true;
         // quirc's region flood-fill recurses deeply on real images: give it a big stack of its own.
         if (xTaskCreatePinnedToCore(qr_task, "qrscan", 32768, NULL, 3, NULL, 0) != pdPASS) {
             s_scanning = false;
-            lv_label_set_text(s_cam_msg, "#E57373 Not enough memory to start the scanner#");
+            ui_label_text(s_cam_msg, "#E57373 Not enough memory to start the scanner#");
         }
     }
 }
@@ -409,7 +410,7 @@ static void qr_scan_loop(void)
     motion_set_paused(true);
     if (camera_init() != ESP_OK || camera_start() != ESP_OK) {
         lvgl_port_lock(0);
-        lv_label_set_text(s_cam_msg, "#E57373 Camera not available#");
+        ui_label_text(s_cam_msg, "#E57373 Camera not available#");
         lvgl_port_unlock();
         cam_stop();
         motion_set_paused(false);
@@ -438,29 +439,29 @@ static void qr_scan_loop(void)
                     ESP_LOGE(TAG, "saving the token failed: %s", esp_err_to_name(serr));
                 }
                 lvgl_port_lock(0);
-                lv_label_set_text(s_cam_msg, "#81C784 " LV_SYMBOL_OK " Token read and saved. Testing...#");
+                ui_label_text(s_cam_msg, "#81C784 " LV_SYMBOL_OK " Token read and saved. Testing...#");
                 lvgl_port_unlock();
                 char msg[128], info[96];
                 ha_token_describe(q.text, info, sizeof(info));
                 ESP_LOGI(TAG, "scanned token: %s", info);
                 bool ok = ha_test(msg, sizeof(msg));
                 lvgl_port_lock(0);
-                lv_label_set_text_fmt(s_cam_msg, "%s %s#\n#90A4AE Token: %s#", ok ? "#81C784 " LV_SYMBOL_OK : "#FFB74D " LV_SYMBOL_WARNING,
+                ui_label_fmt(s_cam_msg, "%s %s#\n#90A4AE Token: %s#", ok ? "#81C784 " LV_SYMBOL_OK : "#FFB74D " LV_SYMBOL_WARNING,
                                       msg, info);
                 lvgl_port_unlock();
                 break;
             }
             lvgl_port_lock(0);
-            lv_label_set_text_fmt(s_cam_msg, "That QR code is not an HA token:\n%.40s", q.text);
+            ui_label_fmt(s_cam_msg, "That QR code is not an HA token:\n%.40s", q.text);
             lvgl_port_unlock();
         } else if (q.rc == 0) {
             lvgl_port_lock(0);
-            lv_label_set_text(s_cam_msg, "QR code seen - hold it steady and a bit closer");
+            ui_label_text(s_cam_msg, "QR code seen - hold it steady and a bit closer");
             lvgl_port_unlock();
         }
         if (esp_timer_get_time() - t0 > 120LL * 1000000) {
             lvgl_port_lock(0);
-            lv_label_set_text(s_cam_msg, "Stopped after 2 minutes. Tap Scan again to retry.");
+            ui_label_text(s_cam_msg, "Stopped after 2 minutes. Tap Scan again to retry.");
             lvgl_port_unlock();
             break;
         }
@@ -502,7 +503,7 @@ static lv_obj_t *build_ha(void)
     s_cam = ui_overlay(s_content);
     lv_obj_t *t = lv_label_create(s_cam);
     lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
-    lv_label_set_text(t, "Scan HA token");
+    ui_label_text(t, "Scan HA token");
     lv_obj_set_pos(t, 16, 14);
     s_cam_buf = heap_caps_calloc(PREVIEW_W * PREVIEW_H, 2, MALLOC_CAP_SPIRAM);
     s_cam_canvas = lv_canvas_create(s_cam);
@@ -600,7 +601,7 @@ static void clock_tick_cb(lv_timer_t *t)
         localtime_r(&now, &lt);
         strftime(buf, sizeof(buf), "%Y-%m-%d  %H:%M:%S", &lt);
     }
-    lv_label_set_text_fmt(s_now_lbl, "%s  (%s)", buf, timekeep_source_name());
+    ui_label_fmt(s_now_lbl, "%s  (%s)", buf, timekeep_source_name());
 }
 
 static char *num_list(int from, int to, int width)
@@ -675,7 +676,7 @@ static void web_panel_cb(lv_event_t *e)
 {
     lv_textarea_set_text(s_web_user, settings_get()->web_user);
     lv_textarea_set_text(s_web_pw, "");
-    lv_label_set_text(s_web_msg, settings_web_configured() ? "Login is set. Enter a new password to change it."
+    ui_label_text(s_web_msg, settings_web_configured() ? "Login is set. Enter a new password to change it."
                                                            : "#FFB74D Not set: the web page is locked until you set a password.#");
 }
 
@@ -684,7 +685,7 @@ static void web_save_cb(lv_event_t *e)
     const char *user = lv_textarea_get_text(s_web_user);
     const char *pw = lv_textarea_get_text(s_web_pw);
     if (!user[0] || strlen(pw) < 8) {
-        lv_label_set_text(s_web_msg, "#E57373 Username and a password of at least 8 characters, please.#");
+        ui_label_text(s_web_msg, "#E57373 Username and a password of at least 8 characters, please.#");
         return;
     }
     settings_copy(&s_tmp);
@@ -692,7 +693,7 @@ static void web_save_cb(lv_event_t *e)
     settings_save(&s_tmp);
     lv_textarea_set_text(s_web_pw, "");
     kb_hide();
-    lv_label_set_text_fmt(s_web_msg, "#81C784 " LV_SYMBOL_OK " Saved. Log in on the web page as \"%s\".#", user);
+    ui_label_fmt(s_web_msg, "#81C784 " LV_SYMBOL_OK " Saved. Log in on the web page as \"%s\".#", user);
 }
 
 static lv_obj_t *build_web(void)
@@ -724,10 +725,10 @@ static void thermo_refresh(void)
 {
     thermo_state_t st;
     thermo_get(&st);
-    lv_label_set_text_fmt(s_ofs_lbl, "%+.1f °C", st.offset);
-    lv_label_set_text_fmt(s_hys_lbl, "%.2f °C", st.hysteresis);
+    ui_label_fmt(s_ofs_lbl, "%+.1f °C", st.offset);
+    ui_label_fmt(s_hys_lbl, "%.2f °C", st.hysteresis);
     lv_obj_set_state(s_sim_sw, LV_STATE_CHECKED, st.boiler_sim);
-    lv_label_set_text_fmt(s_ot_lbl,
+    ui_label_fmt(s_ot_lbl,
                           "Boiler: %s%s\nOpenTherm frames: %lu ok, %lu failed\nRoom reading: %s (%lu sensor errors)\n"
                           "Control loop runs: %lu",
                           st.boiler_sim ? "simulated" : "real", st.boiler_online ? ", answering" : ", not answering",
@@ -773,14 +774,14 @@ static void stepper(lv_obj_t *p, const char *name, const char *hint, int y, lv_o
 {
     label(p, name, 16, y, 0, 0);
     label(p, hint, 16, y + 28, 200, 0x607D8B);
-    lv_obj_t *m = ui_button(p, LV_SYMBOL_MINUS, lv_color_hex(0x1565C0), cb, (void *)(intptr_t)-step);
+    lv_obj_t *m = ui_button(p, LV_SYMBOL_MINUS, ui_c(0x1565C0), cb, (void *)(intptr_t)-step);
     lv_obj_set_size(m, 70, 56);
     lv_obj_set_pos(m, 224, y);
     *val = lv_label_create(p);
     lv_obj_set_width(*val, 100);
     lv_obj_set_style_text_align(*val, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(*val, 294, y + 16);
-    lv_obj_t *pl = ui_button(p, LV_SYMBOL_PLUS, lv_color_hex(0xD84315), cb, (void *)(intptr_t)step);
+    lv_obj_t *pl = ui_button(p, LV_SYMBOL_PLUS, ui_c(0xD84315), cb, (void *)(intptr_t)step);
     lv_obj_set_size(pl, 70, 56);
     lv_obj_set_pos(pl, 394, y);
 }
@@ -804,7 +805,7 @@ static lv_obj_t *build_thermo(void)
 /* ================================================================ Display */
 
 static lv_obj_t *s_br, *s_dim, *s_dim_dd, *s_off_dd, *s_home_dd, *s_keep_sw, *s_k_st, *s_k_en;
-static lv_obj_t *s_night_sw, *s_n_st, *s_n_en, *s_n_lvl, *s_mot_sw, *s_mot_dd, *s_mot_lbl;
+static lv_obj_t *s_night_sw, *s_n_st, *s_n_en, *s_n_lvl, *s_mot_sw, *s_mot_dd, *s_mot_lbl, *s_theme_dd, *s_d_st, *s_d_en;
 static const uint16_t DIM_S[] = {0, 15, 30, 60, 120, 300, 600};
 static const char DIM_OPTS[] = "Never\n15 s\n30 s\n1 min\n2 min\n5 min\n10 min";
 static const uint16_t OFF_S[] = {0, 60, 120, 300, 600, 1800, 3600};
@@ -839,6 +840,9 @@ static void display_panel_cb(lv_event_t *e)
     lv_slider_set_value(s_n_lvl, c->night_level, LV_ANIM_OFF);
     lv_obj_set_state(s_mot_sw, LV_STATE_CHECKED, c->motion_wake);
     lv_dropdown_set_selected(s_mot_dd, c->motion_sens);
+    lv_dropdown_set_selected(s_theme_dd, c->theme_mode);
+    lv_dropdown_set_selected(s_d_st, c->day_start / 30);
+    lv_dropdown_set_selected(s_d_en, c->day_end / 30);
 }
 
 static void display_save_cb(lv_event_t *e)
@@ -858,7 +862,11 @@ static void display_save_cb(lv_event_t *e)
     s_tmp.night_level = lv_slider_get_value(s_n_lvl);
     s_tmp.motion_wake = lv_obj_has_state(s_mot_sw, LV_STATE_CHECKED);
     s_tmp.motion_sens = lv_dropdown_get_selected(s_mot_dd);
+    s_tmp.theme_mode = lv_dropdown_get_selected(s_theme_dd);
+    s_tmp.day_start = lv_dropdown_get_selected(s_d_st) * 30;
+    s_tmp.day_end = lv_dropdown_get_selected(s_d_en) * 30;
     settings_save(&s_tmp);
+    ui_theme_update();
 }
 
 static void bright_preview_cb(lv_event_t *e)
@@ -876,7 +884,7 @@ static void motion_tick_cb(lv_timer_t *t)
     if (ago >= 0) {
         snprintf(last, sizeof(last), "%d s ago", ago);
     }
-    lv_label_set_text_fmt(s_mot_lbl, "Camera: %s. Last motion: %s (%lu total).", motion_state_name(), last,
+    ui_label_fmt(s_mot_lbl, "Camera: %s. Last motion: %s (%lu total).", motion_state_name(), last,
                           (unsigned long)motion_count());
 }
 
@@ -966,6 +974,16 @@ static lv_obj_t *build_display(void)
              "The camera adds a little heat: re-check the sensor offset after enabling.",
           16, 990, 448, 0x607D8B);
     label(p, "The first touch on a dimmed or dark screen only wakes it up.", 16, 1080, 448, 0x607D8B);
+
+    section(p, "Theme (day / night)", 1140);
+    s_theme_dd = dropdown(p, "Theme", "Auto\nLight\nDark", 230, 1170, 220);
+    label(p, "Day (light) from", 16, 1242, 0, 0x90A4AE);
+    s_d_st = dropdown(p, NULL, halfhours, 230, 1230, 220);
+    label(p, "until", 16, 1302, 0, 0x90A4AE);
+    s_d_en = dropdown(p, NULL, halfhours, 230, 1290, 220);
+    label(p, "Auto follows sunrise and sunset from Home Assistant (sun.sun); without HA it uses these hours. "
+             "Also in the quick panel: tap the status bar.",
+          16, 1350, 448, 0x607D8B);
     lv_timer_create(motion_tick_cb, 1000, NULL);
     return p;
 }
@@ -993,7 +1011,7 @@ static void diag_panel_cb(lv_event_t *e)
                   app->version, app->date, app->time, run ? run->label : "?", board_wifi_ip()[0] ? board_wifi_ip() : "-",
                   (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
                   (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), esp_timer_get_time() / 60000000);
-    lv_label_set_text(s_diag_lbl, buf);
+    ui_label_text(s_diag_lbl, buf);
 }
 
 static void restart_cb(lv_event_t *e)
@@ -1015,7 +1033,7 @@ static void c6_go_cb(lv_event_t *e)
     if (footer) {
         lv_obj_add_flag(footer, LV_OBJ_FLAG_HIDDEN);  // no way back once it runs
     }
-    lv_label_set_text(s_c6_msg, "Updating... keep the power on. The device restarts when done.");
+    ui_label_text(s_c6_msg, "Updating... keep the power on. The device restarts when done.");
     ui_set_busy(true);
     send_cmd(CMD_C6_UPDATE);
 }
@@ -1024,7 +1042,7 @@ static void c6_progress(int pct, void *user)
 {
     lvgl_port_lock(0);
     if (s_c6_msg) {
-        lv_label_set_text_fmt(s_c6_msg, "Updating the Wi-Fi chip: %d %%\nKeep the power on.", pct);
+        ui_label_fmt(s_c6_msg, "Updating the Wi-Fi chip: %d %%\nKeep the power on.", pct);
     }
     lvgl_port_unlock();
 }
@@ -1034,7 +1052,7 @@ static void c6_update_task_part(void)
     esp_err_t err = c6update_run(c6_progress, NULL);  // restarts on success
     lvgl_port_lock(0);
     if (s_c6_msg) {
-        lv_label_set_text_fmt(s_c6_msg, "Update failed: %s.\nThe Wi-Fi chip keeps its old firmware.", esp_err_to_name(err));
+        ui_label_fmt(s_c6_msg, "Update failed: %s.\nThe Wi-Fi chip keeps its old firmware.", esp_err_to_name(err));
         lv_obj_t *footer = lv_msgbox_get_footer(s_c6_box);
         if (footer) {
             lv_obj_remove_flag(footer, LV_OBJ_FLAG_HIDDEN);
@@ -1064,7 +1082,7 @@ static void c6_cb(lv_event_t *e)
              ESP_HOSTED_VERSION_MAJOR_1, ESP_HOSTED_VERSION_MINOR_1, ESP_HOSTED_VERSION_PATCH_1, (unsigned long)(len / 1024));
     s_c6_msg = lv_msgbox_add_text(s_c6_box, txt);
     lv_obj_t *go = lv_msgbox_add_footer_button(s_c6_box, "Update");
-    lv_obj_set_style_bg_color(go, lv_color_hex(0xC62828), 0);
+    lv_obj_set_style_bg_color(go, ui_c(0xC62828), 0);
     lv_obj_add_event_cb(go, c6_go_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(lv_msgbox_add_footer_button(s_c6_box, "Cancel"), c6_close_cb, LV_EVENT_CLICKED, NULL);
 }
@@ -1076,7 +1094,7 @@ static lv_obj_t *build_diag(void)
     lv_obj_t *box = lv_obj_create(p);
     lv_obj_set_size(box, 456, 468);
     lv_obj_set_pos(box, 12, 68);
-    lv_obj_set_style_bg_color(box, lv_color_hex(0x0D141B), 0);
+    lv_obj_set_style_bg_color(box, ui_c(0x0D141B), 0);
     s_diag_lbl = lv_label_create(box);
     lv_label_set_recolor(s_diag_lbl, true);
     lv_obj_set_width(s_diag_lbl, 420);
@@ -1093,7 +1111,7 @@ static void update_cb(lv_timer_t *t)
     if (!s_visible) {
         return;
     }
-    lv_label_set_text(s_wifi_status, board_wifi_status());
+    ui_label_text(s_wifi_status, board_wifi_status());
     const char *ip = board_wifi_ip();
     bool up = board_wifi_connected() && ip[0];
     if (strcmp(ip, s_qr_ip) != 0) {
@@ -1108,11 +1126,11 @@ static void update_cb(lv_timer_t *t)
         }
     }
     if (up) {
-        lv_label_set_text_fmt(s_qr_lbl, "Web setup\n#4FC3F7 http://%s/#\n%s", ip,
+        ui_label_fmt(s_qr_lbl, "Web setup\n#4FC3F7 http://%s/#\n%s", ip,
                               settings_web_configured() ? "Log in with your web password."
                                                         : "#FFB74D Set a login in Web access first.#");
     } else {
-        lv_label_set_text(s_qr_lbl, "Web setup\nConnect to Wi-Fi first; the QR code for the setup page appears here.");
+        ui_label_text(s_qr_lbl, "Web setup\nConnect to Wi-Fi first; the QR code for the setup page appears here.");
     }
 }
 
@@ -1200,7 +1218,7 @@ lv_obj_t *app_setup_create(void)
     for (size_t i = 0; i < sizeof(sections) / sizeof(sections[0]); i++) {
         lv_obj_t *p = sections[i].build();
         s_panels[i] = p;
-        lv_obj_t *b = ui_button(s_content, sections[i].text, lv_color_hex(0x263238), panel_open_cb, p);
+        lv_obj_t *b = ui_button(s_content, sections[i].text, ui_c(0x263238), panel_open_cb, p);
         lv_obj_set_size(b, 448, 62);
         lv_obj_set_pos(b, 16, 186 + i * 72);
         lv_obj_set_style_text_align(lv_obj_get_child(b, 0), LV_TEXT_ALIGN_LEFT, 0);

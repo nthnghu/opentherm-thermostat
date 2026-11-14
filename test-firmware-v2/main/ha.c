@@ -11,6 +11,7 @@
 #include <time.h>
 #include "mbedtls/base64.h"
 #include "cJSON.h"
+#include "esp_timer.h"
 
 static const char *TAG = "ha";
 
@@ -186,4 +187,37 @@ void ha_token_describe(const char *token, char *out, size_t size)
     } else {
         snprintf(out, size, "%u chars, payload unreadable", (unsigned)n);
     }
+}
+
+static volatile int64_t s_sun_us;  // when sun.sun was last read (0 = never)
+static volatile bool s_sun_up;
+
+void ha_sun_refresh(void)
+{
+    int status;
+    char *body = ha_get("/api/states/sun.sun", &status);
+    if (!body) {
+        return;
+    }
+    cJSON *j = cJSON_Parse(body);
+    free(body);
+    const char *state = cJSON_GetStringValue(cJSON_GetObjectItem(j, "state"));
+    if (state && (strcmp(state, "above_horizon") == 0 || strcmp(state, "below_horizon") == 0)) {
+        bool up = strcmp(state, "above_horizon") == 0;
+        if (up != s_sun_up || !s_sun_us) {
+            ESP_LOGI(TAG, "sun.sun: %s", state);
+        }
+        s_sun_up = up;
+        s_sun_us = esp_timer_get_time();
+    }
+    cJSON_Delete(j);
+}
+
+bool ha_sun_is_up(bool *up)
+{
+    if (!s_sun_us || esp_timer_get_time() - s_sun_us > 30LL * 60 * 1000000) {
+        return false;
+    }
+    *up = s_sun_up;
+    return true;
 }

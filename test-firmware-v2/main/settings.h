@@ -38,6 +38,9 @@ typedef struct {
     uint16_t keep_on_end;
     bool motion_wake;      // camera motion turns the screen on (and keeps it on)
     uint8_t motion_sens;   // 0 = low, 1 = medium, 2 = high
+    uint8_t theme_mode;    // 0 = auto (HA sun, else day window), 1 = light, 2 = dark
+    uint16_t day_start;    // light theme window when HA's sun is unknown (minutes after midnight)
+    uint16_t day_end;
 } settings_t;
 
 void settings_load(void);

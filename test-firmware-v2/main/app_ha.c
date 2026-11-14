@@ -11,11 +11,13 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_lvgl_port.h"
 #include "cJSON.h"
 #include "board.h"
 #include "ui.h"
+#include "ui_theme.h"
 #include "settings.h"
 #include "ha.h"
 #include "hadash.h"
@@ -122,7 +124,7 @@ static void update_title(void)
     lv_label_set_text(s_title, s_dash.pages[s_cur_page].name);
     for (uint32_t i = 0; i < lv_obj_get_child_count(s_dots_box); i++) {
         lv_obj_set_style_bg_color(lv_obj_get_child(s_dots_box, i),
-                                  lv_color_hex(i == (uint32_t)s_cur_page ? 0xE6EDF3 : 0x455A64), 0);
+                                  ui_c(i == (uint32_t)s_cur_page ? UI_TEXT : UI_DOT_OFF), 0);
     }
 }
 
@@ -137,7 +139,7 @@ static void refresh_values(int page)
         entity_val_t *v = cache_get(s_dash.pages[page].ids[k], false);
         lv_label_set_text(s_card_name[page][k], v && v->name[0] ? v->name : s_dash.pages[page].ids[k]);
         lv_label_set_text(s_card_val[page][k], v && v->value[0] ? v->value : "...");
-        lv_obj_set_style_text_color(s_card_val[page][k], lv_color_hex(v && v->ok ? 0x4FC3F7 : 0x90A4AE), 0);
+        lv_obj_set_style_text_color(s_card_val[page][k], ui_c(v && v->ok ? 0x4FC3F7 : 0x90A4AE), 0);
     }
     xSemaphoreGive(s_lock);
 }
@@ -171,7 +173,7 @@ static void build_dashboard(void)
             lv_obj_t *l = lv_label_create(tile);
             lv_obj_set_width(l, 440);
             lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-            lv_obj_set_style_text_color(l, lv_color_hex(0x90A4AE), 0);
+            lv_obj_set_style_text_color(l, ui_c(0x90A4AE), 0);
             lv_label_set_text(l, "No cards on this page yet. Tap \"Edit\" to add sensors from Home Assistant.");
         }
         for (int k = 0; k < pg->count; k++) {
@@ -179,14 +181,14 @@ static void build_dashboard(void)
             lv_obj_set_size(card, CARD_W, CARD_H);
             lv_obj_set_style_radius(card, 12, 0);
             lv_obj_set_style_pad_all(card, 12, 0);
-            lv_obj_set_style_bg_color(card, lv_color_hex(0x1E2A38), 0);
+            lv_obj_set_style_bg_color(card, ui_c(0x1E2A38), 0);
             lv_obj_set_style_border_width(card, 0, 0);
             lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
             lv_obj_t *name = lv_label_create(card);
             lv_obj_set_size(name, CARD_W - 24, 48);  // fixed height: at most 2 lines, then "..."
             lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-            lv_obj_set_style_text_color(name, lv_color_hex(0xB0BEC5), 0);
+            lv_obj_set_style_text_color(name, ui_c(0xB0BEC5), 0);
             lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 0);
             s_card_name[p][k] = name;
 
@@ -351,6 +353,14 @@ static void worker(void *arg)
         if (s_visible && ((bits & REQ_POLL) || bits == 0)) {
             poll_page();
         }
+        // HA's sun state drives the automatic day/night theme (every 5 min, also when this app is closed).
+        static int64_t last_sun;
+        int64_t now = esp_timer_get_time();
+        if (settings_get()->theme_mode == 0 && ha_state() == HA_STATE_OK && board_wifi_connected() &&
+            (last_sun == 0 || now - last_sun > 5LL * 60 * 1000000)) {
+            last_sun = now;
+            ha_sun_refresh();
+        }
     }
 }
 
@@ -382,8 +392,8 @@ static void editor_refresh(void)
         lv_obj_set_style_pad_ver(row, 4, 0);
         lv_obj_set_style_radius(row, 8, 0);
         lv_obj_set_style_border_width(row, k == s_ed_sel ? 3 : 0, 0);
-        lv_obj_set_style_border_color(row, lv_color_hex(0x4FC3F7), 0);
-        lv_obj_set_style_bg_color(row, lv_color_hex(k == s_ed_sel ? 0x263C52 : 0x1E2A38), 0);
+        lv_obj_set_style_border_color(row, ui_c(0x4FC3F7), 0);
+        lv_obj_set_style_bg_color(row, ui_c(k == s_ed_sel ? 0x263C52 : 0x1E2A38), 0);
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(row, row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)k);
         char name[64];
@@ -396,13 +406,13 @@ static void editor_refresh(void)
         lv_obj_t *id = lv_label_create(row);
         lv_obj_set_size(id, 400, 22);
         lv_label_set_long_mode(id, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_color(id, lv_color_hex(0x607D8B), 0);
+        lv_obj_set_style_text_color(id, ui_c(0x607D8B), 0);
         lv_label_set_text(id, pg->ids[k]);
         lv_obj_align(id, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     }
     if (pg->count == 0) {
         lv_obj_t *l = lv_label_create(s_ed_list);
-        lv_obj_set_style_text_color(l, lv_color_hex(0x90A4AE), 0);
+        lv_obj_set_style_text_color(l, ui_c(0x90A4AE), 0);
         lv_label_set_text(l, "No cards. Tap \"+ Add card\".");
     }
     bool sel = s_ed_sel >= 0;
@@ -641,7 +651,7 @@ static void ed_screen_cb(lv_event_t *e)
 
 static lv_obj_t *btn(lv_obj_t *p, const char *t, uint32_t c, lv_event_cb_t cb, void *u, int x, int y, int w, int h)
 {
-    lv_obj_t *b = ui_button(p, t, lv_color_hex(c), cb, u);
+    lv_obj_t *b = ui_button(p, t, ui_c(c), cb, u);
     lv_obj_set_pos(b, x, y);
     lv_obj_set_size(b, w, h);
     return b;
@@ -669,13 +679,13 @@ static void build_editor(void)
     lv_obj_set_pos(s_ed_list, 12, 132);
     lv_obj_set_style_pad_all(s_ed_list, 6, 0);
     lv_obj_set_style_pad_row(s_ed_list, 6, 0);
-    lv_obj_set_style_bg_color(s_ed_list, lv_color_hex(0x0D141B), 0);
+    lv_obj_set_style_bg_color(s_ed_list, ui_c(0x0D141B), 0);
     lv_obj_set_flex_flow(s_ed_list, LV_FLEX_FLOW_COLUMN);
 
     s_ed_msg = lv_label_create(c);
     lv_obj_set_width(s_ed_msg, 456);
     lv_label_set_long_mode(s_ed_msg, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_color(s_ed_msg, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(s_ed_msg, ui_c(0x90A4AE), 0);
     lv_obj_set_pos(s_ed_msg, 14, 524);
 
     static const char *tools[5] = {LV_SYMBOL_UP, LV_SYMBOL_DOWN, LV_SYMBOL_LEFT " Pg", "Pg " LV_SYMBOL_RIGHT, LV_SYMBOL_TRASH};
@@ -695,7 +705,7 @@ static void build_editor(void)
     lv_obj_add_event_cb(s_search, search_cb, LV_EVENT_VALUE_CHANGED, NULL);
     btn(s_picker, "Done", 0x37474F, picker_done_cb, NULL, 352, 8, 116, 52);
     s_pstatus = lv_label_create(s_picker);
-    lv_obj_set_style_text_color(s_pstatus, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(s_pstatus, ui_c(0x90A4AE), 0);
     lv_obj_set_pos(s_pstatus, 14, 68);
     s_plist = lv_list_create(s_picker);
     lv_obj_set_size(s_plist, 456, UI_CONTENT_H - 96 - 260);
@@ -742,7 +752,7 @@ lv_obj_t *app_ha_create(void)
     s_status = lv_label_create(content);
     lv_obj_set_size(s_status, 250, 22);
     lv_label_set_long_mode(s_status, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_color(s_status, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(s_status, ui_c(0x90A4AE), 0);
     lv_label_set_text(s_status, "");
     lv_obj_set_pos(s_status, 16, 38);
     btn(content, LV_SYMBOL_REFRESH, 0x1565C0, refresh_cb, NULL, 270, 6, 70, 52);

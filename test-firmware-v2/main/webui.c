@@ -286,6 +286,14 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
           "<option value=1 %s>Medium</option><option value=2 %s>High</option></select>",
           c->motion_wake ? "checked" : "", c->motion_sens == 0 ? "selected" : "", c->motion_sens == 1 ? "selected" : "",
           c->motion_sens == 2 ? "selected" : "");
+    sendf(req,
+          "<label>Theme</label><select name=theme><option value=0 %s>Auto (HA sun, else the hours below)</option>"
+          "<option value=1 %s>Light</option><option value=2 %s>Dark</option></select>",
+          c->theme_mode == 0 ? "selected" : "", c->theme_mode == 1 ? "selected" : "", c->theme_mode == 2 ? "selected" : "");
+    sendf(req,
+          "<label>Light theme from (HH:MM)</label><input name=d_st type=time value='%02u:%02u'>"
+          "<label>until (HH:MM)</label><input name=d_en type=time value='%02u:%02u'>",
+          c->day_start / 60, c->day_start % 60, c->day_end / 60, c->day_end % 60);
     SEND(req, "<button>Save display</button></form>");
 
     // Web login
@@ -512,6 +520,15 @@ static esp_err_t post_save(httpd_req_t *req)
             c->keep_on_end = (a % 24) * 60 + b % 60;
         }
         c->motion_wake = form_get(body, "motion", v, 512) && v[0] == '1';
+        if (form_get(body, "theme", v, 512)) {
+            c->theme_mode = (uint8_t)fminf(fmaxf(atoi(v), 0), 2);
+        }
+        if (form_get(body, "d_st", v, 512) && sscanf(v, "%d:%d", &a, &b) == 2) {
+            c->day_start = (a % 24) * 60 + b % 60;
+        }
+        if (form_get(body, "d_en", v, 512) && sscanf(v, "%d:%d", &a, &b) == 2) {
+            c->day_end = (a % 24) * 60 + b % 60;
+        }
         if (form_get(body, "sens", v, 512)) {
             c->motion_sens = (uint8_t)fminf(fmaxf(atoi(v), 0), 2);
         }

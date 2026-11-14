@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS "main.c" "board.c" "settings.c" "sht4x.c" "opentherm.c" "ot_sim.c" "thermostat.c" "timekeep.c"
-         "camera.c" "ha.c" "selftest.c" "webui.c" "ui.c" "debug.c" "c6update.c" "hadash.c" "motion.c"
+         "camera.c" "ha.c" "selftest.c" "webui.c" "ui.c" "debug.c" "c6update.c" "hadash.c" "motion.c" "ui_theme.c" "quickpanel.c"
          "app_thermo.c" "app_ha.c" "app_calc.c" "app_blocks.c" "app_setup.c"
     INCLUDE_DIRS "."
     REQUIRES esp_lcd esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_ledc esp_driver_gptimer

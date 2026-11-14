@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "board.h"
 #include "ui.h"
+#include "ui_theme.h"
 #include "thermostat.h"
 #include "timekeep.h"
 
@@ -65,13 +66,13 @@ static void update_main(void)
         lv_label_set_text(s_date, "clock not set");
     }
 
-    lv_obj_set_style_text_color(s_room, lv_color_hex(st.sensor_age_s >= 6 ? 0x607D8B : 0xE6EDF3), 0);
+    lv_obj_set_style_text_color(s_room, ui_c(st.sensor_age_s >= 6 ? 0x607D8B : 0xE6EDF3), 0);
     if (st.sensor_ok) {
         lv_label_set_text_fmt(s_room, "%.1f°", st.room_c);
         lv_label_set_text_fmt(s_hum, "%.0f %% humidity", st.humidity);
     } else {
         lv_label_set_text(s_room, "--.-°");
-        lv_label_set_text(s_hum, "#E57373 sensor error#");
+        lv_label_set_text_fmt(s_hum, "#%06lX sensor error#", (unsigned long)ui_hex(UI_ERR));
     }
 
     lv_label_set_text_fmt(s_set, "%.1f °C", st.setpoint);
@@ -80,8 +81,8 @@ static void update_main(void)
     }
     bool heat = st.mode == THERMO_MODE_HEAT;
     lv_label_set_text(s_mode_lbl, heat ? LV_SYMBOL_POWER " Heat" : LV_SYMBOL_POWER " Off");
-    lv_obj_set_style_bg_color(s_mode_btn, lv_color_hex(heat ? 0xD84315 : 0x455A64), 0);
-    lv_obj_set_style_arc_color(s_arc, lv_color_hex(heat ? 0xFF7043 : 0x607D8B), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_mode_btn, ui_c(heat ? 0xD84315 : 0x455A64), 0);
+    lv_obj_set_style_arc_color(s_arc, ui_c(heat ? 0xFF7043 : 0x607D8B), LV_PART_INDICATOR);
 
     char boiler[64];
     if (st.boiler_online) {
@@ -91,12 +92,14 @@ static void update_main(void)
         snprintf(boiler, sizeof(boiler), "%s", st.boiler_sim ? "sim. boiler offline" : "no boiler connected");
     }
     if (!st.sensor_ok) {
-        lv_label_set_text(s_info, "#E57373 " LV_SYMBOL_WARNING " Room sensor not answering - heating off#");
+        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering - heating off#",
+                              (unsigned long)ui_hex(UI_ERR));
     } else if (st.sensor_age_s >= 6) {
-        lv_label_set_text_fmt(s_info, "#FFB74D " LV_SYMBOL_WARNING " Room sensor not answering for %d s - heating off in %d s#",
+        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering for %d s - heating off in %d s#",
+                              (unsigned long)ui_hex(UI_WARN),
                               st.sensor_age_s, THERMO_SENSOR_STALE_S - st.sensor_age_s);
     } else if (st.demand) {
-        lv_label_set_text_fmt(s_info, "#FF7043 Heating# to %.0f °C  /  %s", st.flow_setpoint, boiler);
+        lv_label_set_text_fmt(s_info, "#%06lX Heating# to %.0f °C  /  %s", (unsigned long)ui_hex(UI_HEAT), st.flow_setpoint, boiler);
     } else {
         lv_label_set_text_fmt(s_info, "Idle%s  /  %s", heat ? "" : " (frost protection 7 °C)", boiler);
     }
@@ -108,10 +111,10 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_style_text_font(s_time, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(s_time, 20, 8);
     s_date = lv_label_create(p);
-    lv_obj_set_style_text_color(s_date, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(s_date, ui_c(0x90A4AE), 0);
     lv_obj_set_pos(s_date, 24, 66);
 
-    lv_obj_t *apps = ui_button(p, LV_SYMBOL_BARS " Apps", lv_color_hex(0x37474F), apps_cb, NULL);
+    lv_obj_t *apps = ui_button(p, LV_SYMBOL_BARS " Apps", ui_c(0x37474F), apps_cb, NULL);
     lv_obj_set_size(apps, 120, 56);
     lv_obj_align(apps, LV_ALIGN_TOP_RIGHT, -16, 16);
 
@@ -128,7 +131,7 @@ static void build_main(lv_obj_t *p)
     lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_SCROLL_CHAIN);
 
     lv_obj_t *rl = lv_label_create(s_arc);
-    lv_obj_set_style_text_color(rl, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(rl, ui_c(0x90A4AE), 0);
     lv_label_set_text(rl, "Room");
     lv_obj_align(rl, LV_ALIGN_CENTER, 0, -86);
     s_room = lv_label_create(s_arc);
@@ -139,25 +142,25 @@ static void build_main(lv_obj_t *p)
     lv_obj_align(s_room, LV_ALIGN_CENTER, 0, -22);
     s_hum = lv_label_create(s_arc);
     lv_label_set_recolor(s_hum, true);
-    lv_obj_set_style_text_color(s_hum, lv_color_hex(0x4FC3F7), 0);
+    lv_obj_set_style_text_color(s_hum, ui_c(0x4FC3F7), 0);
     lv_obj_align(s_hum, LV_ALIGN_CENTER, 0, 44);
     lv_obj_t *sl = lv_label_create(s_arc);
-    lv_obj_set_style_text_color(sl, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(sl, ui_c(0x90A4AE), 0);
     lv_label_set_text(sl, "Set to");
     lv_obj_align(sl, LV_ALIGN_CENTER, 0, 92);
     s_set = lv_label_create(s_arc);
     lv_obj_set_style_text_font(s_set, &lv_font_montserrat_28, 0);
     lv_obj_align(s_set, LV_ALIGN_CENTER, 0, 124);
 
-    lv_obj_t *minus = ui_button(p, LV_SYMBOL_MINUS, lv_color_hex(0x1565C0), minus_cb, NULL);
+    lv_obj_t *minus = ui_button(p, LV_SYMBOL_MINUS, ui_c(0x1565C0), minus_cb, NULL);
     lv_obj_set_size(minus, 120, 80);
     lv_obj_set_pos(minus, 20, 500);
     lv_obj_set_style_text_font(lv_obj_get_child(minus, 0), &lv_font_montserrat_40, 0);
-    lv_obj_t *plus = ui_button(p, LV_SYMBOL_PLUS, lv_color_hex(0xD84315), plus_cb, NULL);
+    lv_obj_t *plus = ui_button(p, LV_SYMBOL_PLUS, ui_c(0xD84315), plus_cb, NULL);
     lv_obj_set_size(plus, 120, 80);
     lv_obj_set_pos(plus, 340, 500);
     lv_obj_set_style_text_font(lv_obj_get_child(plus, 0), &lv_font_montserrat_40, 0);
-    s_mode_btn = ui_button(p, "", lv_color_hex(0xD84315), mode_cb, NULL);
+    s_mode_btn = ui_button(p, "", ui_c(0xD84315), mode_cb, NULL);
     lv_obj_set_size(s_mode_btn, 172, 80);
     lv_obj_set_pos(s_mode_btn, 154, 500);
     s_mode_lbl = lv_obj_get_child(s_mode_btn, 0);
@@ -230,11 +233,11 @@ static void build_chart(lv_obj_t *p)
     lv_chart_set_div_line_count(s_chart, 5, 4);
     lv_obj_set_style_size(s_chart, 0, 0, LV_PART_INDICATOR);  // no point markers
     lv_obj_set_style_line_width(s_chart, 3, LV_PART_ITEMS);
-    s_ser_room = lv_chart_add_series(s_chart, lv_color_hex(0x4FC3F7), LV_CHART_AXIS_PRIMARY_Y);
-    s_ser_sp = lv_chart_add_series(s_chart, lv_color_hex(0xFFB74D), LV_CHART_AXIS_PRIMARY_Y);
+    s_ser_room = lv_chart_add_series(s_chart, ui_c(0x4FC3F7), LV_CHART_AXIS_PRIMARY_Y);
+    s_ser_sp = lv_chart_add_series(s_chart, ui_c(0xFFB74D), LV_CHART_AXIS_PRIMARY_Y);
 
     s_chart_info = lv_label_create(p);
-    lv_obj_set_style_text_color(s_chart_info, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(s_chart_info, ui_c(0x90A4AE), 0);
     lv_obj_set_pos(s_chart_info, 22, 572);
 }
 
@@ -247,7 +250,7 @@ static void build_placeholder(lv_obj_t *p, const char *title, const char *text)
     lv_obj_t *l = lv_label_create(p);
     lv_obj_set_width(l, 440);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(l, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(l, ui_c(0x90A4AE), 0);
     lv_label_set_text(l, text);
     lv_obj_set_pos(l, 20, 70);
 }
@@ -265,7 +268,7 @@ static void update_dots(void)
     int page = active_page();
     for (int i = 0; i < 5; i++) {
         bool on = page == i;
-        lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(on ? 0xE6EDF3 : 0x455A64), 0);
+        lv_obj_set_style_bg_color(s_dots[i], ui_c(on ? UI_TEXT : UI_DOT_OFF), 0);
     }
 }
 

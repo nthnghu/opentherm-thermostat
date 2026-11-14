@@ -6,6 +6,7 @@
 #include "esp_lvgl_port.h"
 #include "board.h"
 #include "ui.h"
+#include "ui_theme.h"
 #include "settings.h"
 #include "sht4x.h"
 #include "opentherm.h"
@@ -47,10 +48,7 @@ void app_main(void)
     board_backlight(settings_get()->bright);
 
     lvgl_port_lock(0);
-    lv_display_t *disp = lv_display_get_default();
-    lv_theme_t *th = lv_theme_default_init(disp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_DEEP_ORANGE),
-                                           true, &lv_font_montserrat_20);
-    lv_display_set_theme(disp, th);
+    ui_theme_init();  // dark until the day/night logic runs
     lvgl_port_unlock();
 
     // The thermostat starts before anything slow, so it runs even while the hardware check waits.

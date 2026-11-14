@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include "ui.h"
+#include "ui_theme.h"
 
 static lv_obj_t *s_expr_lbl, *s_res_lbl;
 static char s_expr[64];
@@ -161,7 +162,7 @@ static void key_cb(lv_event_t *e)
             show();
             lv_label_set_text(s_res_lbl, "");
         } else {
-            lv_label_set_text(s_res_lbl, "#E57373 Error#");
+            lv_label_set_text_fmt(s_res_lbl, "#%06lX Error#", (unsigned long)ui_hex(UI_ERR));
         }
         return;
     } else if (strcmp(k, "+/-") == 0) {
@@ -217,7 +218,7 @@ lv_obj_t *app_calc_create(void)
     lv_obj_t *disp = lv_obj_create(content);
     lv_obj_set_size(disp, 448, 150);
     lv_obj_set_pos(disp, 16, 12);
-    lv_obj_set_style_bg_color(disp, lv_color_hex(0x0D141B), 0);
+    lv_obj_set_style_bg_color(disp, ui_c(0x0D141B), 0);
     lv_obj_remove_flag(disp, LV_OBJ_FLAG_SCROLLABLE);
     s_expr_lbl = lv_label_create(disp);
     lv_obj_set_style_text_font(s_expr_lbl, &lv_font_montserrat_40, 0);
@@ -228,7 +229,7 @@ lv_obj_t *app_calc_create(void)
     s_res_lbl = lv_label_create(disp);
     lv_label_set_recolor(s_res_lbl, true);
     lv_obj_set_style_text_font(s_res_lbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_res_lbl, lv_color_hex(0x90A4AE), 0);
+    lv_obj_set_style_text_color(s_res_lbl, ui_c(0x90A4AE), 0);
     lv_obj_align(s_res_lbl, LV_ALIGN_BOTTOM_RIGHT, 0, -4);
 
     static const char *map[] = {
