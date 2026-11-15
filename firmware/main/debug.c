@@ -20,6 +20,7 @@
 #include "schedule.h"
 #include "alerts.h"
 #include "mqtt_ha.h"
+#include "nvs.h"
 #include <time.h>
 
 static void debug_task(void *arg)
@@ -175,6 +176,39 @@ static void debug_task(void *arg)
                 printf("PROG %d %s %s\n", i, days[i], buf);
             }
             printf("PROG prog_on=%d eco_setback_k=%.1f\n", sc.prog_on, sc.eco_setback_k);
+            continue;
+        }
+        if (strcmp(line, "MQTT") == 0) {
+            // MQTT settings (never the password) and NVS usage
+            settings_t *c = malloc(sizeof(settings_t));
+            if (c) {
+                settings_copy(c);
+                char mst[96];
+                mqtt_ha_status(mst, sizeof(mst));
+                printf("MQTT on=%d uri=%s user=%s pass=%s loc=%s dev=%s state=%s\n", c->mqtt_on, c->mqtt_uri,
+                       c->mqtt_user[0] ? "set" : "empty", c->mqtt_pass[0] ? "set" : "empty", c->mqtt_loc, c->mqtt_dev,
+                       mst);
+                free(c);
+            }
+            nvs_stats_t ns;
+            if (nvs_get_stats(NULL, &ns) == ESP_OK) {
+                printf("MQTT nvs used=%u free=%u total=%u\n", (unsigned)ns.used_entries, (unsigned)ns.free_entries,
+                       (unsigned)ns.total_entries);
+            }
+            continue;
+        }
+        if (strcmp(line, "MQTT on") == 0 || strcmp(line, "MQTT off") == 0) {
+            settings_t *c = malloc(sizeof(settings_t));
+            if (c) {
+                settings_copy(c);
+                c->mqtt_on = line[6] == 'n';
+                bool ok = settings_save(c) == ESP_OK;
+                free(c);
+                if (ok) {
+                    mqtt_ha_restart();
+                }
+                printf("MQTT %s\n", ok ? "saved" : "save failed");
+            }
             continue;
         }
         if (strcmp(line, "MQTT dump") == 0) {

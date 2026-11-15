@@ -183,7 +183,10 @@ In HA the device "Thermostat" appears with:
 - one problem sensor per alert;
 - a "Hot water boost" button.
 
-The thermostat never depends on MQTT. Serial `MQTT dump` prints the state JSON and a discovery payload.
+The thermostat never depends on MQTT. Serial helpers:
+- `MQTT` shows the settings (never the password), the connection state and NVS usage;
+- `MQTT on|off` switches the client;
+- `MQTT dump` prints the state JSON and a discovery payload.
 
 ### Host tests
 

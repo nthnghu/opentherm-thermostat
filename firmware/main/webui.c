@@ -767,8 +767,10 @@ static esp_err_t post_save(httpd_req_t *req)
         if (c->mqtt_on && strncmp(c->mqtt_uri, "mqtt://", 7) != 0) {
             msg = "Only mqtt:// (plain TCP) is supported";
             ok = false;
+        } else if (settings_save(c) != ESP_OK) {
+            msg = "Could not save the MQTT settings (storage full?)";
+            ok = false;
         } else {
-            settings_save(c);
             mqtt_ha_restart();
             msg = c->mqtt_on ? "MQTT saved, connecting (state shown below after a reload)" : "MQTT off";
         }
