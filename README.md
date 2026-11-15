@@ -16,6 +16,7 @@ OpenTherm side runs against a built-in simulated boiler until the real boiler is
 | [`firmware/`](firmware/) | Firmware (ESP-IDF 5.5 + LVGL 9). See its [README](firmware/README.md). |
 | [`c6-coprocessor/`](c6-coprocessor/) | ESP-Hosted 3.1.0 coprocessor firmware for the on-board ESP32-C6 (Wi-Fi). |
 | [`test-firmware/`](test-firmware/) | First hardware test firmware (display, touch, audio, Wi-Fi). Kept for reference. |
+| [`docs/research/`](docs/research/) | Phase 1 control research and study guide: OpenTherm, the Victrix Tera, control strategies, interactive simulators. |
 
 ## Firmware v2 features
 

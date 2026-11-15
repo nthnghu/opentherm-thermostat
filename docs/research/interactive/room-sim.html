@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boiler Control Simulator</title>
+<style>
+:root{--bg:#f6f7f9;--surface:#fff;--text:#1c2330;--muted:#5d6878;--border:#d8dde5;--grid:#e8ebf0;--accent:#2f6fde;--heat:#e0662b;--ret:#2e9d9d;--ok:#2e9d5b;--warn:#b98000;--bad:#cf3b3b;--band:rgba(224,102,43,.13)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11151b;--surface:#1a2029;--text:#e4e8ee;--muted:#9aa5b4;--border:#2d3542;--grid:#262e3a;--accent:#6b9cf5;--heat:#f08a55;--ret:#4cc2c2;--ok:#55c487;--warn:#e0b440;--bad:#f06a6a;--band:rgba(240,138,85,.16)}}
+:root[data-theme="dark"]{--bg:#11151b;--surface:#1a2029;--text:#e4e8ee;--muted:#9aa5b4;--border:#2d3542;--grid:#262e3a;--accent:#6b9cf5;--heat:#f08a55;--ret:#4cc2c2;--ok:#55c487;--warn:#e0b440;--bad:#f06a6a;--band:rgba(240,138,85,.16)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:24px 0 8px}
+p{margin:6px 0}.muted{color:var(--muted)}
+a{color:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.card h3{font-size:.95rem;margin:0 0 6px}
+label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font-size:.88rem;margin:6px 0;align-items:center}
+label input[type=range]{grid-column:1/3;width:100%}
+label output{font-variant-numeric:tabular-nums;color:var(--muted)}
+select{font:inherit;padding:4px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}
+.tabs button{font:inherit;font-size:.9rem;padding:6px 12px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer}
+.tabs button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+canvas{width:100%;display:block}
+.chart{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px;margin-top:10px}
+.chart .t{font-size:.85rem;color:var(--muted);margin:0 4px 4px;display:flex;gap:14px;flex-wrap:wrap}
+.sw{display:inline-block;width:12px;height:3px;vertical-align:middle;margin-right:4px;border-radius:2px}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.88rem;font-variant-numeric:tabular-nums}
+th,td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+tr.sel td{background:var(--band)}
+.good{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.note{font-size:.85rem;color:var(--muted);border-left:3px solid var(--border);padding-left:10px;margin-top:16px}
+details{margin-top:12px}summary{cursor:pointer;font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<h1>Boiler control simulator</h1>
+<p class="muted">A deliberately simple house model with radiators and a Victrix-Tera-like boiler (4.3 kW minimum output, flow-setpoint control, cut-out at setpoint + 5 K, anti-cycle timer). The four thermostat strategies run on the same weather, so you can compare comfort, burner starts and gas use. Everything runs locally in your browser.</p>
+
+<div class="grid" id="controls">
+ <div class="card"><h3>House</h3>
+  <label>Design heat loss <output id="o_loss"></output><input type="range" id="loss" min="4" max="20" step="0.5" value="10"></label>
+  <label>Design outdoor temp <output id="o_tdes"></output><input type="range" id="tdes" min="-20" max="-5" step="1" value="-13"></label>
+  <label>Building time constant τ <output id="o_tau"></output><input type="range" id="tau" min="10" max="120" step="5" value="40"></label>
+  <label>Radiator rating (sum at ΔT50) <output id="o_r50"></output><input type="range" id="r50" min="6" max="30" step="0.5" value="16"></label>
+  <label>System water volume <output id="o_vol"></output><input type="range" id="vol" min="20" max="300" step="10" value="80"></label>
+ </div>
+ <div class="card"><h3>Weather and setpoint</h3>
+  <label>Mean outdoor temp <output id="o_tout"></output><input type="range" id="tout" min="-15" max="15" step="0.5" value="5"></label>
+  <label>Day/night swing (±) <output id="o_swing"></output><input type="range" id="swing" min="0" max="8" step="0.5" value="4"></label>
+  <label>Room setpoint <output id="o_sp"></output><input type="range" id="sp" min="17" max="24" step="0.5" value="21"></label>
+  <label>Night setback 22–06 h <output id="o_sb"></output><input type="range" id="sb" min="0" max="4" step="0.5" value="0"></label>
+ </div>
+ <div class="card"><h3>Boiler</h3>
+  <label>Minimum output <output id="o_pmin"></output><input type="range" id="pmin" min="2" max="8" step="0.1" value="4.3"></label>
+  <label>Max CH output <output id="o_pmax"></output><input type="range" id="pmax" min="8" max="24" step="0.5" value="20"></label>
+  <label>Anti-cycle timer t4 <output id="o_t4"></output><input type="range" id="t4" min="0" max="600" step="30" value="180"></label>
+  <label>Cut-out above setpoint <output id="o_cut"></output><input type="range" id="cut" min="2" max="10" step="1" value="5"></label>
+ </div>
+ <div class="card"><h3>Thermostat</h3>
+  <label>On/off: fixed flow setpoint <output id="o_fix"></output><input type="range" id="fix" min="40" max="80" step="1" value="65"></label>
+  <label>PI gain Kp (°C flow per K) <output id="o_kp"></output><input type="range" id="kp" min="2" max="30" step="1" value="12"></label>
+  <label>PI integral time Ti <output id="o_ti"></output><input type="range" id="ti" min="0.5" max="6" step="0.25" value="2.5"></label>
+  <label>Max flow setpoint <output id="o_tmax"></output><input type="range" id="tmax" min="40" max="75" step="1" value="60"></label>
+  <label>Heating-curve coefficient <output id="o_coef"></output><input type="range" id="coef" min="0.5" max="4" step="0.1" value="2"></label>
+ </div>
+</div>
+
+<div class="tabs" role="group" aria-label="Strategy shown in charts" id="tabs"></div>
+
+<div class="chart"><div class="t"><span><span class="sw" style="background:var(--accent)"></span>Room</span><span><span class="sw" style="background:var(--muted)"></span>Setpoint</span><span><span class="sw" style="background:var(--text);opacity:.5"></span>Outdoor ÷ 4 + 15 (shape only)</span></div><canvas id="c1" height="190"></canvas></div>
+<div class="chart"><div class="t"><span><span class="sw" style="background:var(--heat)"></span>Flow</span><span><span class="sw" style="background:var(--ret)"></span>Return</span><span><span class="sw" style="background:var(--text)"></span>Sent flow setpoint (ID 1)</span><span><span class="sw" style="background:var(--bad)"></span>55 °C dew point</span><span><span class="sw" style="background:var(--band);height:10px"></span>Burner on</span></div><canvas id="c2" height="220"></canvas></div>
+<div class="chart"><div class="t"><span><span class="sw" style="background:var(--heat)"></span>Burner output kW</span><span><span class="sw" style="background:var(--muted)"></span>House heat loss kW</span><span><span class="sw" style="background:var(--bad)"></span>Boiler minimum</span></div><canvas id="c3" height="150"></canvas></div>
+
+<h2>Comparison over 48 h (after a 12 h warm-up)</h2>
+<div class="tablewrap"><table id="kpi"></table></div>
+
+<p class="note">The model is for learning, not prediction. It has a single-node house (1R1C), one lumped water volume, radiators following Q = Q₅₀·(ΔT/50)^1.3, a boiler that modulates to keep flow at the setpoint and cuts out at setpoint + margin, a t5-style 180 s ramp, and efficiency from return temperature (see <a href="condensing.html">condensing.html</a>). The start/stop penalty uses the UCL lab figures (−1.5 % at 180 s burns … −11.8 % at 10 s). There is no solar gain, no DHW, no ignition burst and no hydraulic bypass. Real numbers come from logging the real boiler (chapter 09).</p>
+
+<details><summary>What each strategy does</summary>
+<p><b>A · On/off:</b> CH enable when the room is 0.25 K below setpoint, off 0.25 K above. Flow setpoint fixed (default 65 °C). This is how a classic relay thermostat drives a boiler.</p>
+<p><b>B · PI load compensation:</b> every 60 s, flow setpoint = 35 °C + Kp·error + integral, clamped to [boiler t0 = 25 °C, max]. No low-load handling, so it is a "plain PID on ID 1".</p>
+<p><b>C · PI + anti-cycling:</b> the same PI, but when the requested flow is below what the boiler produces at minimum fire, it switches to duty cycling: burns of at least 10 min in periods of at least 20 min (≤3 starts/h). During a burn it holds the setpoint at flow − 3 °C, so the boiler sits at minimum fire instead of hitting its cut-out. This is the Phase 1a recommendation (after SAT's PWM idea).</p>
+<p><b>D · Weather curve + PI trim + anti-cycling:</b> the SAT heating curve from the outdoor temperature, plus a small PI trim (Kp/3, integral ±10 K), plus the same anti-cycling. This is the Phase 1b recommendation, once an outdoor reading is available.</p>
+</details>
+</main>
+
+<script>
+// MODEL START
+const UCL=[[10,11.8],[30,6.8],[60,4.1],[120,2.3],[180,1.5],[3600,0]];
+function cyclePenalty(sec){ // percentage points of efficiency lost for a burn of this length
+  if(sec<=UCL[0][0])return UCL[0][1];
+  for(let i=1;i<UCL.length;i++){if(sec<=UCL[i][0]){const[a,pa]=UCL[i-1],[b,pb]=UCL[i];const f=(Math.log(sec)-Math.log(a))/(Math.log(b)-Math.log(a));return pa+(pb-pa)*f;}}
+  return 0;}
+function etaNCV(ret){ // illustrative NCV efficiency vs return temperature, fitted to Tera datasheet points
+  const sens=97.2+0.03*(80-Math.min(80,ret));
+  const gain=ret<57?10.5*(1-Math.exp(-(57-ret)/20)):0;
+  return Math.min(110.5,sens+gain);}
+function satCurve(tout,sp,coef){return 27.2+coef/4*(4*(sp-20)+0.03*(tout-20)**2-0.4*(tout-20));}
+function simulate(p,strategy){
+  const dt=10, warm=12*3600, total=60*3600;
+  const UA=p.loss/(p.sp0design-p.tdes);            // kW/K
+  const Ch=p.tau*3600*UA;                          // kJ/K
+  const Cw=p.vol*4.186+25;                         // kJ/K incl. boiler/HEX metal
+  const mcp=0.25*4.186;                            // kW/K, fixed pump flow 0.25 kg/s
+  const qrad=(tw,tr)=>tw>tr?p.r50*Math.pow((tw-tr)/50,1.3):0;
+  const spAt=t=>{const h=(t/3600)%24;return p.sp-((h>=22||h<6)?p.sb:0);};
+  const toutAt=t=>{const h=(t/3600)%24;return p.tout+p.swing*Math.cos((h-15)/24*2*Math.PI);};
+  let tr=spAt(0), tw=30, firing=false, P=0, acUntil=0, ignT=0, starts=0;
+  let chEn=false, tset=10, I=0, onoff=false, duty={phase:'off',until:0,onEnd:0};
+  const t0=25, t5=180, kb=0.04;
+  const ser={t:[],tr:[],sp:[],to:[],flow:[],ret:[],tset:[],P:[],load:[],fire:[]};
+  let trSum=0, gas=0, heat=0, burnStart=0, burnGas=0, burns=[], penaltyGas=0, firingTime=0, condTime=0, retSum=0, dh=0, sq=0, n=0;
+  const opv=()=>{const tw0=tr+50*Math.pow(p.pmin/p.r50,1/1.3);return tw0+p.pmin/(2*mcp);};
+  const kp=p.kp, ki=p.kp/(p.ti*3600);
+  function pi(e,base,kpx,kix,lim,lo,hi){
+    const u0=base+kpx*e+I;
+    if(!((u0>=hi&&e>0)||(u0<=lo&&e<0)))I=Math.max(-lim,Math.min(lim,I+kix*e*60));
+    return base+kpx*e+I;}
+  function dutyCtl(t,r,flow){
+    const o=opv();
+    if(r>=o+1||(duty.phase==='mod'&&r>=o-1)){duty.phase='mod';chEn=true;tset=Math.min(r,p.tmax);
+      if(firing&&t-ignT>60&&P<=p.pmin+0.01)tset=Math.max(tset,flow-3);return;}
+    const d=Math.pow(Math.max(0,Math.min(1,(r-tr)/(o-tr))),1.3);
+    if(duty.phase==='mod')duty={phase:'off',until:t,onEnd:0};
+    if(t>=duty.until){
+      if(d<0.08){duty={phase:'off',until:t+600,onEnd:0};}
+      else{const on=Math.max(600,d*1200);const cyc=Math.min(3600,on/d);duty={phase:'on',until:t+cyc,onEnd:t+on};}}
+    if(duty.phase==='on'&&t<duty.onEnd){chEn=true;tset=(firing&&t-ignT>60)?Math.max(t0,Math.min(p.tmax,flow-3)):Math.min(p.tmax,o);}
+    else{chEn=false;tset=10;}}
+  for(let t=0;t<total;t+=dt){
+    const to=toutAt(t), sp=spAt(t);
+    const flowNow=tw+(firing?P/(2*mcp):0);
+    // thermostat (every 30/60 s)
+    if(t%60===0){
+      const e=sp-tr;
+      if(strategy==='A'){ if(tr<sp-0.25)onoff=true; else if(tr>sp+0.25)onoff=false; chEn=onoff; tset=onoff?p.fix:10; }
+      else if(strategy==='B'){ const u=pi(e,35,kp,ki,25,t0,p.tmax); if(u<t0){chEn=false;tset=10;} else {chEn=true;tset=Math.min(u,p.tmax);} }
+      else if(strategy==='C'){ const u=pi(e,35,kp,ki,25,0,p.tmax); dutyCtl(t,u,flowNow); }
+      else { const base=satCurve(to,sp,p.coef); const u=pi(e,base,kp/3,kp/3/(p.ti*3600),10,0,p.tmax); dutyCtl(t,u,flowNow); }
+    }
+    // boiler
+    const eff=chEn&&tset>10.5?Math.max(tset,t0):0;
+    if(firing){
+      if(!eff||flowNow>eff+p.cut){firing=false;acUntil=t+p.t4;P=0;const dur=t-burnStart;
+        if(t>=warm){burns.push(dur);penaltyGas+=burnGas*cyclePenalty(dur)/100;} }
+      else{const cap=p.pmin+(p.pmax-p.pmin)*Math.min(1,(t-ignT)/t5);P=Math.max(p.pmin,Math.min(cap,P+kb*(eff-flowNow)*dt));}
+    } else if(eff&&t>=acUntil&&flowNow<eff){firing=true;ignT=t;P=p.pmin;burnStart=t;burnGas=0;if(t>=warm)starts++;}
+    const q=qrad(tw,tr);
+    const flow=tw+(firing?P/(2*mcp):0), ret=tw-q/(2*mcp);
+    tw+=((firing?P:0)-q)*dt/Cw;
+    tr+=(q-UA*(tr-to))*dt/Ch;
+    if(t>=warm){
+      if(firing){const g=P/(etaNCV(ret)/100)*dt/3600;gas+=g;burnGas+=g;heat+=P*dt/3600;firingTime+=dt;retSum+=ret*dt;if(ret<55)condTime+=dt;}
+      const dev=tr-sp;sq+=dev*dev;n++;trSum+=tr;if(dev<-0.5)dh+=(-0.5-dev)*dt/3600;
+      if(t%120===0){ser.t.push((t-warm)/3600);ser.tr.push(tr);ser.sp.push(sp);ser.to.push(to);ser.flow.push(flow);ser.ret.push(ret);ser.tset.push(chEn?tset:null);ser.P.push(firing?P:0);ser.load.push(UA*(sp-to));ser.fire.push(firing?1:0);}
+    }
+  }
+  if(firing){burns.push(total-burnStart);}
+  const sorted=burns.slice().sort((a,b)=>a-b);
+  const med=sorted.length?sorted[Math.floor(sorted.length/2)]:0;
+  return {ser,k:{gas:gas+penaltyGas,heat,starts,perH:starts/48,med:med/60,short:burns.length?burns.filter(b=>b<600).length/burns.length*100:0,
+    ret:firingTime?retSum/firingTime:NaN,cond:firingTime?condTime/firingTime*100:NaN,rms:Math.sqrt(sq/n),dh,mean:trSum/n,pen:penaltyGas,opv:opv()}};
+}
+// MODEL END
+
+const ids=['loss','tdes','tau','r50','vol','tout','swing','sp','sb','pmin','pmax','t4','cut','fix','kp','ti','tmax','coef'];
+const units={loss:' kW',tdes:' °C',tau:' h',r50:' kW',vol:' L',tout:' °C',swing:' K',sp:' °C',sb:' K',pmin:' kW',pmax:' kW',t4:' s',cut:' K',fix:' °C',kp:'',ti:' h',tmax:' °C',coef:''};
+const names={A:'A · On/off',B:'B · PI',C:'C · PI + anti-cycling',D:'D · Curve + PI + anti-cycling'};
+let shown='C', results={};
+const tabs=document.getElementById('tabs');
+for(const s of 'ABCD'){const b=document.createElement('button');b.textContent=names[s];b.onclick=()=>{shown=s;draw();renderTable();};b.dataset.s=s;tabs.appendChild(b);}
+function params(){const p={};for(const i of ids){p[i]=parseFloat(document.getElementById(i).value);document.getElementById('o_'+i).textContent=p[i]+units[i];}p.sp0design=21;return p;}
+let timer=null;
+function run(){const p=params();for(const s of 'ABCD')results[s]=simulate(p,s);draw();renderTable();}
+for(const i of ids)document.getElementById(i).addEventListener('input',()=>{params();clearTimeout(timer);timer=setTimeout(run,120);});
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+function chart(cv,opts){
+  const dpr=window.devicePixelRatio||1, w=cv.clientWidth, h=+cv.getAttribute('height');
+  cv.width=w*dpr;cv.height=h*dpr;cv.style.height=h+'px';const g=cv.getContext('2d');g.scale(dpr,dpr);
+  const L=38,R=8,T=6,B=20,W=w-L-R,H=h-T-B, x=v=>L+v/48*W, y=v=>T+H-(v-opts.min)/(opts.max-opts.min)*H;
+  g.font='11px system-ui';g.fillStyle=css('--muted');g.strokeStyle=css('--grid');g.lineWidth=1;
+  for(let v=opts.min;v<=opts.max+1e-9;v+=opts.step){g.beginPath();g.moveTo(L,y(v));g.lineTo(L+W,y(v));g.stroke();g.fillText(String(Math.round(v*10)/10),2,y(v)+4);}
+  for(let hr=0;hr<=48;hr+=6){g.fillText(hr+'h',x(hr)-8,h-4);}
+  if(opts.band){g.fillStyle=css('--band');const s=opts.band;for(let i=0;i<s.t.length;i++)if(s.fire[i])g.fillRect(x(s.t[i]),T,Math.max(1,W/s.t.length+0.5),H);}
+  for(const ln of opts.lines){g.strokeStyle=ln.color;g.globalAlpha=ln.alpha||1;g.lineWidth=ln.w||1.6;g.setLineDash(ln.dash||[]);g.beginPath();let pen=false;
+    for(let i=0;i<ln.xs.length;i++){const v=ln.ys[i];if(v==null||isNaN(v)){pen=false;continue;}const yy=y(Math.max(opts.min,Math.min(opts.max,v)));if(!pen){g.moveTo(x(ln.xs[i]),yy);pen=true;}else g.lineTo(x(ln.xs[i]),yy);}g.stroke();}
+  g.globalAlpha=1;g.setLineDash([]);}
+function draw(){
+  for(const b of tabs.children)b.setAttribute('aria-pressed',b.dataset.s===shown);
+  const r=results[shown];if(!r)return;const s=r.ser;
+  const lo=Math.floor(Math.min(...s.tr,...s.sp)-0.5), hi=Math.ceil(Math.max(...s.tr,...s.sp)+0.5);
+  chart(document.getElementById('c1'),{min:lo,max:hi,step:hi-lo>4?1:0.5,lines:[
+    {xs:s.t,ys:s.sp,color:css('--muted'),dash:[4,3]},{xs:s.t,ys:s.tr,color:css('--accent'),w:2},
+    {xs:s.t,ys:s.to.map(v=>v/4+15),color:css('--text'),alpha:.35}]});
+  chart(document.getElementById('c2'),{min:10,max:80,step:10,band:s,lines:[
+    {xs:s.t,ys:s.t.map(()=>55),color:css('--bad'),dash:[2,3],w:1},
+    {xs:s.t,ys:s.flow,color:css('--heat')},{xs:s.t,ys:s.ret,color:css('--ret')},{xs:s.t,ys:s.tset,color:css('--text'),w:1.2,dash:[5,3]}]});
+  const pm=Math.max(6,Math.ceil(Math.max(...s.P,...s.load)/2)*2);
+  const p=params();
+  chart(document.getElementById('c3'),{min:0,max:pm,step:pm>12?4:2,lines:[
+    {xs:s.t,ys:s.t.map(()=>p.pmin),color:css('--bad'),dash:[2,3],w:1},{xs:s.t,ys:s.load,color:css('--muted'),dash:[5,3]},{xs:s.t,ys:s.P,color:css('--heat'),w:1.4}]});}
+function renderTable(){
+  const rows=[['Strategy','Gas kWh','Starts','Starts/h','Median burn','Burns <10 min','Mean return','Return <55 °C','Mean room','Room RMS dev.','Cold K·h','Cycling loss kWh']];
+  const best=Math.min(...'ABCD'.split('').map(s=>results[s].k.gas));
+  let html='<tr>'+rows[0].map(h=>'<th>'+h+'</th>').join('')+'</tr>';
+  for(const s of 'ABCD'){const k=results[s].k;
+    const cls=(v,good,bad)=>v<=good?'good':v>=bad?'bad':'warn';
+    html+=`<tr class="${s===shown?'sel':''}"><td>${names[s]}</td><td>${k.gas.toFixed(0)}${k.gas===best?' ★':''}</td><td>${k.starts}</td><td class="${cls(k.perH,3,6)}">${k.perH.toFixed(1)}</td><td class="${k.med>=10?'good':k.med<3?'bad':'warn'}">${k.med.toFixed(1)} min</td><td class="${cls(k.short,20,60)}">${k.short.toFixed(0)} %</td><td>${isNaN(k.ret)?'–':k.ret.toFixed(1)+' °C'}</td><td>${isNaN(k.cond)?'–':k.cond.toFixed(0)+' %'}</td><td>${k.mean.toFixed(2)} °C</td><td class="${cls(k.rms,0.3,0.8)}">${k.rms.toFixed(2)} K</td><td>${k.dh.toFixed(1)}</td><td>${k.pen.toFixed(1)}</td></tr>`;}
+  document.getElementById('kpi').innerHTML=html;}
+window.addEventListener('resize',()=>{clearTimeout(timer);timer=setTimeout(draw,100);});
+run();
+</script>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Condensing Efficiency Explorer</title>
+<style>
+:root{--bg:#f6f7f9;--surface:#fff;--text:#1c2330;--muted:#5d6878;--border:#d8dde5;--grid:#e8ebf0;--accent:#2f6fde;--heat:#e0662b;--ret:#2e9d9d;--ok:#2e9d5b;--bad:#cf3b3b;--zone:rgba(46,157,91,.10)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11151b;--surface:#1a2029;--text:#e4e8ee;--muted:#9aa5b4;--border:#2d3542;--grid:#262e3a;--accent:#6b9cf5;--heat:#f08a55;--ret:#4cc2c2;--ok:#55c487;--bad:#f06a6a;--zone:rgba(85,196,135,.12)}}
+:root[data-theme="dark"]{--bg:#11151b;--surface:#1a2029;--text:#e4e8ee;--muted:#9aa5b4;--border:#2d3542;--grid:#262e3a;--accent:#6b9cf5;--heat:#f08a55;--ret:#4cc2c2;--ok:#55c487;--bad:#f06a6a;--zone:rgba(85,196,135,.12)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:22px 0 8px}
+.muted{color:var(--muted)}a{color:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.card h3{font-size:.95rem;margin:0 0 6px}
+label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font-size:.88rem;margin:6px 0}
+label input{grid-column:1/3;width:100%}
+output{font-variant-numeric:tabular-nums;color:var(--muted)}
+.big{font-size:1.6rem;font-weight:650;font-variant-numeric:tabular-nums}
+.stat{display:flex;flex-wrap:wrap;gap:18px}.stat div{min-width:120px}.stat small{display:block;color:var(--muted);font-size:.8rem}
+canvas{width:100%;display:block}
+.chart{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px;margin-top:12px}
+.good{color:var(--ok)}.bad{color:var(--bad)}
+.note{font-size:.85rem;color:var(--muted);border-left:3px solid var(--border);padding-left:10px;margin-top:16px}
+</style>
+</head>
+<body>
+<main>
+<h1>Condensing efficiency explorer</h1>
+<p class="muted">A condensing boiler recovers the latent heat of the water vapour in its flue gas, but only when the water returning to its heat exchanger is cooler than the flue-gas dew point (about 55 °C for natural gas). Move the sliders to see how flow temperature and ΔT set the return temperature, and what that does to efficiency and to your gas bill.</p>
+
+<div class="grid">
+ <div class="card"><h3>Operating point</h3>
+  <label>Flow temperature <output id="o_flow"></output><input type="range" id="flow" min="30" max="85" value="70"></label>
+  <label>Flow − return ΔT (pump setting A3) <output id="o_dt"></output><input type="range" id="dt" min="5" max="25" value="15"></label>
+  <div class="stat" style="margin-top:10px">
+   <div><small>Return</small><span class="big" id="ret"></span></div>
+   <div><small>Efficiency (NCV)</small><span class="big" id="eta"></span></div>
+   <div><small>State</small><span class="big" id="state" style="font-size:1.1rem"></span></div>
+  </div>
+ </div>
+ <div class="card"><h3>What it costs per year</h3>
+  <label>Heat delivered per year <output id="o_heat"></output><input type="range" id="heat" min="5000" max="40000" step="500" value="15000"></label>
+  <label>Compare with a return of <output id="o_cmp"></output><input type="range" id="cmp" min="20" max="75" value="35"></label>
+  <div class="stat" style="margin-top:10px">
+   <div><small>Gas at your setting</small><span class="big" id="g1"></span></div>
+   <div><small>Gas at the comparison</small><span class="big" id="g2"></span></div>
+   <div><small>Difference</small><span class="big" id="gd"></span></div>
+  </div>
+  <p class="muted" style="font-size:.82rem">Gas in kWh (NCV). 1 m³ of natural gas ≈ 9.5–10 kWh. Assumes the whole season runs at that return, which no real system does; see the simulator for a dynamic picture.</p>
+ </div>
+</div>
+
+<div class="chart"><canvas id="c" height="300"></canvas></div>
+
+<h2>How to read this</h2>
+<p><b>Above about 57 °C return</b>, only sensible heat is recovered and efficiency barely moves: the Victrix Tera 24 Plus datasheet gives 97.8 % NCV at 80/60. <b>Below the dew point</b>, water vapour starts condensing on the heat exchanger and gives up its latent heat. The gain grows the cooler the return gets, reaching about 106–108 % at 50/30 and 40/30. The theoretical ceiling for natural gas is about 111 % NCV, the ratio of gross to net calorific value.</p>
+<p>Efficiencies above 100 % appear only because boiler efficiencies are quoted on the net (lower) calorific value, which ignores the latent heat. On a gross basis the same boiler peaks at about 97–98 %.</p>
+<p>Return temperature comes from three things: the flow temperature the controller asks for, the ΔT across the radiators (pump speed and radiator size), and anything that lets hot flow bypass the radiators (bypass valves, low-loss headers). That is why the study guide spends so much time on flow-temperature control <em>and</em> on hydraulics.</p>
+<p class="note">The curve is an illustrative fit to the Tera's datasheet points (97.8 % at 80/60, about 106 % at 50/30, about 108 % at 40/30) and the 55.6 °C dew point. It depends on return temperature only; real efficiency also depends on load, excess air and mean water temperature. See chapter <a href="../01-heating-basics.md">01</a> and <a href="../full-report.md">the full report §4.1</a> for sources.</p>
+</main>
+<script>
+function etaNCV(ret){const sens=97.2+0.03*(80-Math.min(80,ret));const gain=ret<57?10.5*(1-Math.exp(-(57-ret)/20)):0;return Math.min(110.5,sens+gain);}
+const $=id=>document.getElementById(id);
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+function draw(ret,cmp){
+  const cv=$('c'),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=300;cv.width=w*dpr;cv.height=h*dpr;cv.style.height=h+'px';
+  const g=cv.getContext('2d');g.scale(dpr,dpr);
+  const L=44,R=10,T=12,B=34,W=w-L-R,H=h-T-B,x0=20,x1=85,y0=95,y1=111;
+  const x=v=>L+(v-x0)/(x1-x0)*W,y=v=>T+H-(v-y0)/(y1-y0)*H;
+  g.fillStyle=css('--zone');g.fillRect(x(x0),T,x(55.6)-x(x0),H);
+  g.font='11px system-ui';g.strokeStyle=css('--grid');g.fillStyle=css('--muted');g.lineWidth=1;
+  for(let v=y0;v<=y1;v+=2){g.beginPath();g.moveTo(L,y(v));g.lineTo(L+W,y(v));g.stroke();g.fillText(v+' %',4,y(v)+4);}
+  for(let v=x0;v<=x1;v+=5){g.fillText(v+'°',x(v)-8,h-18);}
+  g.fillText('Return water temperature →',L+W/2-70,h-3);
+  g.fillStyle=css('--ok');g.fillText('condensing zone',x(x0)+6,T+14);
+  g.strokeStyle=css('--bad');g.setLineDash([3,3]);g.beginPath();g.moveTo(x(55.6),T);g.lineTo(x(55.6),T+H);g.stroke();g.setLineDash([]);
+  g.fillStyle=css('--bad');g.fillText('dew point ≈ 55.6 °C',x(55.6)+4,T+H-6);
+  g.strokeStyle=css('--muted');g.setLineDash([5,4]);g.beginPath();g.moveTo(L,y(111));g.lineTo(L+W,y(111));g.stroke();g.setLineDash([]);
+  g.fillStyle=css('--muted');g.fillText('≈111 % theoretical max (GCV/NCV)',L+W-210,y(111)+12);
+  g.strokeStyle=css('--accent');g.lineWidth=2.2;g.beginPath();for(let v=x0;v<=x1;v+=0.5){const yy=y(etaNCV(v));v===x0?g.moveTo(x(v),yy):g.lineTo(x(v),yy);}g.stroke();
+  const pts=[[60,97.8,'80/60'],[30,106.1,'50/30'],[30,108.2,'40/30']];
+  g.fillStyle=css('--text');for(const[r,e,l]of pts){g.beginPath();g.arc(x(r),y(e),3.5,0,7);g.fill();g.fillText('Tera '+l,x(r)+6,y(e)-6);}
+  const mark=(r,c)=>{g.fillStyle=c;g.beginPath();g.arc(x(r),y(etaNCV(r)),7,0,7);g.fill();};
+  mark(cmp,css('--ret'));mark(ret,css('--heat'));
+}
+function upd(){
+  const flow=+$('flow').value,dt=+$('dt').value,ret=Math.max(20,flow-dt),cmp=+$('cmp').value,heat=+$('heat').value;
+  $('o_flow').textContent=flow+' °C';$('o_dt').textContent=dt+' K';$('o_heat').textContent=heat.toLocaleString()+' kWh';$('o_cmp').textContent=cmp+' °C';
+  const e=etaNCV(ret),ec=etaNCV(cmp);
+  $('ret').textContent=ret.toFixed(0)+' °C';$('eta').textContent=e.toFixed(1)+' %';
+  $('state').innerHTML=ret<55.6?'<span class="good">condensing</span>':'<span class="bad">not condensing</span>';
+  const g1=heat/(e/100),g2=heat/(ec/100);
+  $('g1').textContent=Math.round(g1).toLocaleString();$('g2').textContent=Math.round(g2).toLocaleString();
+  const d=g1-g2;$('gd').innerHTML=(d>0?'<span class="bad">+':'<span class="good">')+Math.round(d).toLocaleString()+' ('+(d/g2*100).toFixed(1)+' %)</span>';
+  draw(ret,cmp);}
+for(const i of ['flow','dt','heat','cmp'])$(i).addEventListener('input',upd);
+window.addEventListener('resize',upd);upd();
+</script>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenTherm Frame Lab</title>
+<style>
+:root{--bg:#f6f7f9;--surface:#fff;--text:#1c2330;--muted:#5d6878;--border:#d8dde5;--accent:#2f6fde;--ok:#2e9d5b;--bad:#cf3b3b;--f1:#e0662b;--f2:#8a5cd6;--f3:#9aa3ae;--f4:#2f6fde;--f5:#2e9d9d}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11151b;--surface:#1a2029;--text:#e4e8ee;--muted:#9aa5b4;--border:#2d3542;--accent:#6b9cf5;--ok:#55c487;--bad:#f06a6a;--f1:#f08a55;--f2:#b08cf0;--f3:#6c7684;--f4:#6b9cf5;--f5:#4cc2c2}}
+:root[data-theme="dark"]{--bg:#11151b;--surface:#1a2029;--text:#e4e8ee;--muted:#9aa5b4;--border:#2d3542;--accent:#6b9cf5;--ok:#55c487;--bad:#f06a6a;--f1:#f08a55;--f2:#b08cf0;--f3:#6c7684;--f4:#6b9cf5;--f5:#4cc2c2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:22px 0 8px}
+.muted{color:var(--muted)}a{color:var(--accent)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:12px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+.row>label{display:flex;flex-direction:column;font-size:.85rem;color:var(--muted);gap:3px}
+select,input[type=text],input[type=number]{font:inherit;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);min-width:0}
+input[type=text]{font-family:ui-monospace,Menlo,monospace}
+.bits{display:flex;flex-wrap:wrap;gap:2px;font-family:ui-monospace,Menlo,monospace;font-size:.95rem;margin-top:10px}
+.bit{width:22px;text-align:center;border-radius:4px;padding:3px 0;color:#fff}
+.gap{width:8px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.82rem;margin-top:8px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px;background:var(--c)}
+.flags{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 14px;margin-top:8px;font-size:.88rem}
+.flags label{display:flex;gap:6px;align-items:center}
+.out{font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;margin-top:10px}
+.dec{margin-top:8px;font-size:.92rem}
+.dec td{padding:3px 10px 3px 0;vertical-align:top}.dec td:first-child{color:var(--muted);white-space:nowrap}
+svg{width:100%;height:auto;display:block;margin-top:10px}
+.good{color:var(--ok)}.bad{color:var(--bad)}
+.note{font-size:.85rem;color:var(--muted);border-left:3px solid var(--border);padding-left:10px;margin-top:16px}
+.ex button{font:inherit;font-size:.85rem;padding:4px 10px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;margin:2px}
+</style>
+</head>
+<body>
+<main>
+<h1>OpenTherm frame lab</h1>
+<p class="muted">Every OpenTherm conversation is one 32-bit frame from the thermostat (master) and one 32-bit frame back from the boiler (slave). Build a frame, see its bits, parity and Manchester waveform, or paste a hex frame from a log to decode it.</p>
+
+<div class="card">
+ <h2 style="margin-top:0">Build a frame</h2>
+ <div class="ex">Examples:
+  <button data-ex="0,0,0x0300">Status, CH+DHW on</button>
+  <button data-ex="0,0,0x03CA">Status, Immergas 0xCA</button>
+  <button data-ex="1,1,45">Write CH setpoint 45 °C</button>
+  <button data-ex="1,1,10">Write "off" setpoint 10 °C</button>
+  <button data-ex="4,25,52.5">Boiler reply: flow 52.5 °C</button>
+  <button data-ex="7,19,0">Reply: unknown ID 19</button>
+ </div>
+ <div class="row" style="margin-top:10px">
+  <label>Message type<select id="mt"></select></label>
+  <label>Data-ID<select id="id"></select></label>
+  <label id="vwrap">Value<input type="text" id="val" value="0x0300" size="12"></label>
+ </div>
+ <div id="flagbox"></div>
+ <div class="bits" id="bits"></div>
+ <div class="legend"><span style="--c:var(--f1)">Parity</span><span style="--c:var(--f2)">Message type</span><span style="--c:var(--f3)">Spare</span><span style="--c:var(--f4)">Data-ID</span><span style="--c:var(--f5)">Data value (HB | LB)</span></div>
+ <div class="out" id="hex"></div>
+ <table class="dec" id="explain"></table>
+ <svg id="wave" viewBox="0 0 1000 120" preserveAspectRatio="none" aria-label="Manchester waveform"></svg>
+ <p class="muted" style="font-size:.82rem">Waveform: start bit + 32 bits + stop bit = 34 bit times = 34 ms. Each bit has a transition in the middle: a '1' goes active→idle, a '0' idle→active (Manchester / bi-phase-L). For the master, "active" is the high line voltage (15–18 V); for the boiler, it is the high loop current (17–23 mA).</p>
+</div>
+
+<div class="card">
+ <h2 style="margin-top:0">Decode a frame</h2>
+ <div class="row"><label>32-bit frame (hex)<input type="text" id="dec" value="0x40193480" size="14"></label></div>
+ <table class="dec" id="decout"></table>
+</div>
+
+<p class="note">Based on the OpenTherm Protocol Specification v2.2 (§4.2 frame format, §5 Data-IDs) and the v4.x bit names used by OTGW and the Ihor Melnyk library. The 0xCA status low byte is an Immergas-specific quirk found by the community (chapter <a href="../03-victrix-tera-24-plus.md">03</a>). See <a href="../02-opentherm.md">chapter 02</a>.</p>
+</main>
+<script>
+const MT=['READ-DATA','WRITE-DATA','INVALID-DATA','reserved','READ-ACK','WRITE-ACK','DATA-INVALID','UNKNOWN-DATAID'];
+const IDS={0:['Status','flag8/flag8'],1:['Control setpoint TSet (CH flow)','f8.8'],2:['Master config / MemberID','flag8/u8'],3:['Slave config / MemberID','flag8/u8'],
+4:['Remote command','u8/u8'],5:['Application-specific faults / OEM code','flag8/u8'],6:['Remote parameter flags','flag8/flag8'],8:['TsetCH2','f8.8'],
+9:['Remote override room setpoint','f8.8'],14:['Max relative modulation','f8.8'],15:['Max capacity kW / min modulation %','u8/u8'],16:['Room setpoint','f8.8'],
+17:['Relative modulation level','f8.8'],18:['CH water pressure (bar)','f8.8'],19:['DHW flow rate (l/min)','f8.8'],24:['Room temperature','f8.8'],
+25:['Boiler flow water temperature','f8.8'],26:['DHW temperature','f8.8'],27:['Outside temperature','f8.8'],28:['Return water temperature','f8.8'],
+31:['Flow temperature CH2','f8.8'],33:['Exhaust temperature','s16'],48:['DHW setpoint bounds (max/min)','s8/s8'],49:['Max CH setpoint bounds (max/min)','s8/s8'],
+56:['DHW setpoint','f8.8'],57:['Max CH water setpoint','f8.8'],115:['OEM diagnostic code','u16'],116:['Burner starts','u16'],117:['CH pump starts','u16'],
+118:['DHW pump/valve starts','u16'],119:['DHW burner starts','u16'],120:['Burner operation hours','u16'],121:['CH pump operation hours','u16'],
+122:['DHW pump/valve operation hours','u16'],123:['DHW burner operation hours','u16'],124:['OpenTherm version master','f8.8'],125:['OpenTherm version slave','f8.8'],
+126:['Master product type/version','u8/u8'],127:['Slave product type/version','u8/u8']};
+const MHB=['CH enable','DHW enable','Cooling enable','OTC active','CH2 enable','Summer/winter mode (v4)','DHW blocking (v4)','reserved'];
+const SLB=['Fault','CH active','DHW active','Flame on','Cooling active','CH2 active','Diagnostic','Electricity production (v4)'];
+const $=i=>document.getElementById(i);
+for(let i=0;i<8;i++)if(i!==3)$('mt').add(new Option(i+' · '+MT[i],i));
+for(const k of Object.keys(IDS))$('id').add(new Option(k+' · '+IDS[k][0],k));
+function f88(v){let r=Math.round(v*256);if(r<0)r+=65536;return r&0xFFFF;}
+function fromf88(r){if(r&0x8000)r-=65536;return r/256;}
+function parseNum(s){s=String(s).trim();if(/^0x/i.test(s))return parseInt(s,16);return parseFloat(s);}
+function valueFor(id,s){const t=IDS[id]?IDS[id][1]:'u16';const n=parseNum(s);if(isNaN(n))return 0;
+  if(/^0x/i.test(String(s).trim()))return n&0xFFFF;
+  if(t==='f8.8')return f88(n);if(t==='s16')return (n<0?n+65536:n)&0xFFFF;return n&0xFFFF;}
+function parity(x){let c=0;for(let i=0;i<31;i++)c+=(x>>>i)&1;return c&1;}
+function build(mt,id,v){let f=((mt&7)<<28)|((id&255)<<16)|(v&0xFFFF);f>>>=0;if(parity(f))f=(f|0x80000000)>>>0;return f;}
+function describeValue(id,v,mt){
+  const t=IDS[id]?IDS[id][1]:'u16',hb=v>>8,lb=v&255;
+  if(+id===0){const master=mt<4;
+    const a=MHB.filter((_,i)=>hb>>i&1), b=SLB.filter((_,i)=>lb>>i&1);
+    return 'HB (master flags): '+(a.join(', ')||'none')+'<br>LB: '+(master?(lb?'0x'+lb.toString(16).toUpperCase().padStart(2,'0')+(lb===0xCA?' (Immergas quirk; spec says 0)':' (spec says 0 in a request)'):'0'):'slave flags: '+(b.join(', ')||'none'));}
+  if(t==='f8.8')return fromf88(v).toFixed(2)+(id==17||id==14?' %':(id==18?' bar':(id==19?' l/min':(id>=124?'':' °C'))));
+  if(t==='s16')return (v&0x8000?v-65536:v)+(id==33?' °C':'');
+  if(t.includes('/')){const sb=x=>t.startsWith('s8')&&x>127?x-256:x;return 'HB '+sb(hb)+' | LB '+sb(lb);}
+  return String(v);}
+function bitsHtml(f){let h='';const col=i=>i===31?'--f1':i>=28?'--f2':i>=24?'--f3':i>=16?'--f4':'--f5';
+  for(let i=31;i>=0;i--){h+=`<span class="bit" style="background:var(${col(i)})">${f>>>i&1}</span>`;if(i===31||i===28||i===24||i===16||i===8)h+='<span class="gap"></span>';}return h;}
+function wave(f){const bits=[1];for(let i=31;i>=0;i--)bits.push(f>>>i&1);bits.push(1);
+  const W=1000/34,hi=20,lo=95;let d='M0 '+lo;
+  bits.forEach((b,i)=>{const x=i*W,first=b?hi:lo,second=b?lo:hi;d+=` L${x} ${first} L${x+W/2} ${first} L${x+W/2} ${second} L${x+W} ${second}`;});
+  let lab='';bits.forEach((b,i)=>{lab+=`<text x="${i*W+W/2}" y="114" font-size="11" text-anchor="middle" fill="currentColor" opacity=".6">${i===0||i===33?'s':b}</text>`;});
+  $('wave').innerHTML=`<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2.5" vector-effect="non-scaling-stroke"/>${lab}`;}
+function flagUI(){const id=+$('id').value,mt=+$('mt').value;
+  if(id!==0){$('flagbox').innerHTML='';return;}
+  const v=valueFor(0,$('val').value),hb=v>>8,lb=v&255,master=mt<4;
+  let h='<div class="flags">';MHB.forEach((n,i)=>h+=`<label><input type="checkbox" data-b="${i+8}" ${hb>>i&1?'checked':''}>${n}</label>`);
+  if(!master)SLB.forEach((n,i)=>h+=`<label><input type="checkbox" data-b="${i}" ${lb>>i&1?'checked':''}>${n}</label>`);
+  h+='</div>';$('flagbox').innerHTML=h;
+  $('flagbox').querySelectorAll('input').forEach(c=>c.onchange=()=>{let v=valueFor(0,$('val').value);const b=+c.dataset.b;v=c.checked?v|(1<<b):v&~(1<<b);$('val').value='0x'+v.toString(16).toUpperCase().padStart(4,'0');render(false);});}
+function render(rebuildFlags=true){
+  const mt=+$('mt').value,id=+$('id').value,v=valueFor(id,$('val').value),f=build(mt,id,v);
+  if(rebuildFlags)flagUI();
+  $('bits').innerHTML=bitsHtml(f);
+  $('hex').textContent='0x'+f.toString(16).toUpperCase().padStart(8,'0');
+  $('explain').innerHTML=`<tr><td>Parity</td><td>${f>>>31} (makes the total number of 1-bits even)</td></tr><tr><td>Type</td><td>${MT[mt]} ${mt<4?'(master → boiler)':'(boiler → master)'}</td></tr><tr><td>Data-ID</td><td>${id} · ${IDS[id]?IDS[id][0]+' ['+IDS[id][1]+']':'unknown'}</td></tr><tr><td>Value</td><td>0x${v.toString(16).toUpperCase().padStart(4,'0')} → ${describeValue(id,v,mt)}</td></tr>`;
+  wave(f);}
+function decode(){const s=$('dec').value.trim();const f=parseInt(s.replace(/^0x/i,''),16)>>>0;
+  if(isNaN(f)||!/^(0x)?[0-9a-f]{1,8}$/i.test(s)){$('decout').innerHTML='<tr><td></td><td class="bad">Enter up to 8 hex digits</td></tr>';return;}
+  let c=0;for(let i=0;i<32;i++)c+=f>>>i&1;
+  const mt=f>>>28&7,id=f>>>16&255,v=f&0xFFFF,spare=f>>>24&15;
+  $('decout').innerHTML=`<tr><td>Parity</td><td class="${c%2?'bad':'good'}">${c%2?'ERROR: odd number of 1-bits, frame would be rejected':'OK (even)'}</td></tr>
+  <tr><td>Type</td><td>${MT[mt]}</td></tr><tr><td>Spare</td><td class="${spare?'bad':''}">${spare}${spare?' (should be 0)':''}</td></tr>
+  <tr><td>Data-ID</td><td>${id} · ${IDS[id]?IDS[id][0]:'not in this table'}</td></tr><tr><td>Value</td><td>0x${v.toString(16).toUpperCase().padStart(4,'0')} → ${describeValue(id,v,mt)}</td></tr>`;}
+$('mt').onchange=render;$('id').onchange=render;$('val').oninput=()=>render(true);$('dec').oninput=decode;
+document.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{const[m,i,v]=b.dataset.ex.split(',');$('mt').value=m;$('id').value=i;$('val').value=v;render();});
+render();decode();
+</script>
+</body>
+</html>
