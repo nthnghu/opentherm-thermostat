@@ -91,17 +91,34 @@ static void update_main(void)
     } else {
         snprintf(boiler, sizeof(boiler), "%s", st.boiler_sim ? "sim. boiler offline" : "no boiler connected");
     }
-    if (!st.sensor_ok) {
-        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering - heating off#",
-                              (unsigned long)ui_hex(UI_ERR));
-    } else if (st.sensor_age_s >= 6) {
-        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering for %d s - heating off in %d s#",
-                              (unsigned long)ui_hex(UI_WARN),
-                              st.sensor_age_s, THERMO_SENSOR_STALE_S - st.sensor_age_s);
-    } else if (st.demand) {
-        lv_label_set_text_fmt(s_info, "#%06lX Heating# to %.0f °C  /  %s", (unsigned long)ui_hex(UI_HEAT), st.flow_setpoint, boiler);
+    ctrl_config_t cfg;
+    thermo_get_ctrl_config(&cfg);
+    char loss[64];
+    if (cfg.loss_mode == CTRL_LOSS_FIXED) {
+        snprintf(loss, sizeof(loss), "fallback heating %.0f °C, %u %%", cfg.loss_flow_c, cfg.loss_duty_pct);
     } else {
-        lv_label_set_text_fmt(s_info, "Idle%s  /  %s", heat ? "" : " (frost protection 7 °C)", boiler);
+        snprintf(loss, sizeof(loss), "%s", cfg.loss_mode == CTRL_LOSS_HEAT_OFF ? "heating off" : "last setting kept");
+    }
+    if (!st.sensor_ok) {
+        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering - %s#",
+                              (unsigned long)ui_hex(UI_ERR), loss);
+    } else if (st.sensor_age_s >= 6) {
+        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering for %d s - %s in %d s#",
+                              (unsigned long)ui_hex(UI_WARN), st.sensor_age_s, loss,
+                              THERMO_SENSOR_STALE_S - st.sensor_age_s);
+    } else if (st.demand) {
+        const char *why = st.ctrl_state == CTRL_ST_HOLD      ? " (min-fire hold)"
+                          : st.ctrl_state == CTRL_ST_DUTY_ON ? " (long burn, low load)"
+                          : st.ctrl_state == CTRL_ST_FROST   ? " (frost protection)"
+                                                             : "";
+        lv_label_set_text_fmt(s_info, "#%06lX Heating# to %.0f °C%s  /  %s", (unsigned long)ui_hex(UI_HEAT),
+                              st.flow_setpoint, why, boiler);
+    } else if (st.ctrl_state == CTRL_ST_DUTY_OFF && heat) {
+        lv_label_set_text_fmt(s_info, "Pausing (low load: fewer, longer burns)  /  %s", boiler);
+    } else if (!heat && cfg.frost_on) {
+        lv_label_set_text_fmt(s_info, "Idle (frost protection below %.0f °C)  /  %s", cfg.frost_room_c, boiler);
+    } else {
+        lv_label_set_text_fmt(s_info, "Idle  /  %s", boiler);
     }
 }
 

@@ -83,6 +83,34 @@ Web (login required):
 - `/api/ot`: bus state and support map (JSON).
 - `/api/otlog.csv[?n=N]`: the frame capture. Decode frames with `docs/research/interactive/opentherm-frame.html`.
 
+## Control law (Phase 1a, `control.c`)
+
+The control law is pure C and host-tested.
+
+- **Strategy 1, PI load compensation** (default):
+  - flow = 35 °C + Kp·e + I, updated every 60 s and slew-limited;
+  - the integral freezes during DHW, duty pauses and saturation, and while the boiler is unreachable.
+- **Low-load manager:**
+  - below the minimum-fire flow it plans long burns (at least 10 min) with at most 3 CH starts per hour;
+  - during a burn at minimum fire it holds the setpoint at flow − 3 °C.
+- **Strategy 0, on/off baseline:** a fixed flow with hysteresis. Use it for the 2-week baseline.
+- **Safety:**
+  - room sensor lost, with three modes: `0` feature off, `1` heating off, `2` fixed flow with a duty limit (default 42 °C, 40 %);
+  - frost floor in any mode (6 °C);
+  - underfloor floor (mixer + 5 K), off by default.
+
+Every feature has its own setting, saved in NVS (`thermo/ctrl`, versioned):
+- `CFG` lists the settings with help text;
+- `CFG <name> <value>` sets one (range-checked, saved after 5 s);
+- `CFG defaults` restores the factory values;
+- `/api/config` returns them as JSON.
+
+On the screen, the status line shows the controller state: min-fire hold, long burn, pausing, frost, or sensor fallback.
+
+Bench helpers:
+- `MODE heat|off` and `SP <°C>`;
+- `STAT` prints a `CTRL` line: state, setpoint, requested flow, P, I, duty, starts in the last hour.
+
 ### Host tests
 
 The pure-C parts build and run on the Mac, without ESP-IDF:

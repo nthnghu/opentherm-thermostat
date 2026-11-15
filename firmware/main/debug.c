@@ -1,7 +1,8 @@
 // Development helper on the USB serial port only (not reachable over the network):
-// "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
+// "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "CFG [name value]" lists/sets the control settings; "MODE heat|off", "SP <C>" for bench tests; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/usb_serial_jtag.h"
@@ -44,6 +45,9 @@ static void debug_task(void *arg)
             thermo_get(&st);
             printf("STAT sensor_ok=%d raw=%.2f smooth=%.3f shown=%.1f hum=%.1f errors=%lu sp=%.1f demand=%d loops=%lu\n",
                    st.sensor_ok, st.room_raw, st.room_c, st.room_shown, st.humidity, (unsigned long)st.sensor_errors, st.setpoint, st.demand, (unsigned long)st.loops);
+            printf("CTRL state=%s tset=%.1f req=%.1f p=%.2f i=%.2f duty=%.2f starts_h=%u flame=%d dhw=%d flow=%.1f ret=%.1f mod=%.0f\n",
+                   ctrl_state_name(st.ctrl_state), st.flow_setpoint, st.req_c, st.pi_p, st.pi_i, st.duty,
+                   st.starts_last_h, st.flame, st.dhw_active, st.flow_c, st.return_c, st.modulation);
             motion_debug_t m;
             motion_debug(&m);
             printf("MOT on=%d state=%s mean=%d contrast=%d changed=%d/576 delta=%d.%02d frames=%d grab_fail=%d "
@@ -62,6 +66,44 @@ static void debug_task(void *arg)
             }
             otbus_command(line[3] ? line + 4 : "", out, sizeof(out));
             printf("SIM %s\n", out);
+            continue;
+        }
+        if (strcmp(line, "MODE heat") == 0 || strcmp(line, "MODE off") == 0) {
+            thermo_set_mode(line[5] == 'h' ? THERMO_MODE_HEAT : THERMO_MODE_OFF);
+            printf("MODE %s\n", line + 5);
+            continue;
+        }
+        if (strncmp(line, "SP ", 3) == 0) {
+            thermo_set_setpoint(strtof(line + 3, NULL));
+            thermo_state_t st;
+            thermo_get(&st);
+            printf("SP %.1f\n", st.setpoint);
+            continue;
+        }
+        if (strncmp(line, "CFG", 3) == 0 && (line[3] == 0 || line[3] == ' ')) {
+            // CFG = list, CFG <name> <value> = set (saved after 5 s), CFG defaults = factory values
+            ctrl_config_t c;
+            thermo_get_ctrl_config(&c);
+            char name[32] = "", value[24] = "";
+            int n = sscanf(line + 3, "%31s %23s", name, value);
+            if (n == 1 && strcmp(name, "defaults") == 0) {
+                ctrl_default_config(&c);
+                thermo_set_ctrl_config(&c);
+                printf("CFG defaults restored\n");
+            } else if (n == 2) {
+                if (ctrl_config_set(&c, name, value)) {
+                    thermo_set_ctrl_config(&c);
+                    printf("CFG %s = %s ok\n", name, value);
+                } else {
+                    printf("CFG %s = %s refused (unknown name or out of range)\n", name, value);
+                }
+            } else {
+                char v[24];
+                for (int i = 0; i < ctrl_config_count(); i++) {
+                    ctrl_config_get(&c, i, v, sizeof(v));
+                    printf("CFG %-16s %-8s %s\n", ctrl_config_name(i), v, ctrl_config_help(i));
+                }
+            }
             continue;
         }
         if (strcmp(line, "OTSTAT") == 0) {

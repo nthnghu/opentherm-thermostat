@@ -378,9 +378,14 @@ static esp_err_t get_status(httpd_req_t *req)
           st.mode == THERMO_MODE_HEAT ? "heat" : "off", st.demand ? "true" : "false", st.flow_setpoint);
     sendf(req,
           "\"boiler_sim\":%s,\"boiler_online\":%s,\"flame\":%s,\"flow\":%.1f,\"mod\":%.1f,\"offset\":%.1f,"
-          "\"hysteresis\":%.2f,\"time_source\":\"%s\",\"history\":[",
+          "\"hysteresis\":%.2f,\"time_source\":\"%s\",",
           st.boiler_sim ? "true" : "false", st.boiler_online ? "true" : "false", st.flame ? "true" : "false", st.flow_c,
           st.modulation, st.offset, st.hysteresis, timekeep_source_name());
+    sendf(req,
+          "\"control\":{\"state\":\"%s\",\"requested\":%.1f,\"p\":%.2f,\"i\":%.2f,\"duty\":%.2f,"
+          "\"starts_last_hour\":%u,\"return\":%.1f,\"dhw_active\":%s},\"history\":[",
+          ctrl_state_name(st.ctrl_state), st.req_c, st.pi_p, st.pi_i, st.duty, st.starts_last_h, st.return_c,
+          st.dhw_active ? "true" : "false");
     // History, thinned to one point per 10 min: [room, setpoint, demand]
     thermo_sample_t *h = heap_caps_malloc(sizeof(thermo_sample_t) * THERMO_HISTORY_LEN, MALLOC_CAP_SPIRAM);
     int n = h ? thermo_history(h, THERMO_HISTORY_LEN) : 0;
@@ -398,6 +403,25 @@ static esp_err_t get_status(httpd_req_t *req)
     }
     free(h);
     SEND(req, "]}");
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// Control settings as JSON ({name: value, ...}); the same names as the serial CFG command.
+static esp_err_t get_config(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    ctrl_config_t c;
+    thermo_get_ctrl_config(&c);
+    httpd_resp_set_type(req, "application/json");
+    char v[24];
+    sendf(req, "{\"version\":%u", c.version);
+    for (int i = 0; i < ctrl_config_count(); i++) {
+        ctrl_config_get(&c, i, v, sizeof(v));
+        sendf(req, ",\"%s\":%s", ctrl_config_name(i), v);
+    }
+    SEND(req, "}");
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
@@ -752,6 +776,7 @@ esp_err_t webui_start(void)
         {.uri = "/", .method = HTTP_GET, .handler = get_root},
         {.uri = "/api/status", .method = HTTP_GET, .handler = get_status},
         {.uri = "/api/ot", .method = HTTP_GET, .handler = get_ot},
+        {.uri = "/api/config", .method = HTTP_GET, .handler = get_config},
         {.uri = "/api/otlog.csv", .method = HTTP_GET, .handler = get_otlog},
         {.uri = "/save/*", .method = HTTP_POST, .handler = post_save},
         {.uri = "/ota", .method = HTTP_POST, .handler = post_ota},
