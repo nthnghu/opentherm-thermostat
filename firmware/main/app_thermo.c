@@ -91,6 +91,33 @@ static void update_main(void)
     } else {
         snprintf(boiler, sizeof(boiler), "%s", st.boiler_sim ? "sim. boiler offline" : "no boiler connected");
     }
+    // Schedule hint: "Eco 19.0 °C until 05:30  /  "
+    char plan[64] = "";
+    if (st.sched_src == SCHED_SRC_BOOST) {
+        snprintf(plan, sizeof(plan), "Boost %.1f °C, %d min left  /  ", st.target_c, (st.boost_left_s + 59) / 60);
+    } else if (st.sched_src == SCHED_SRC_AWAY) {
+        if (st.away_until) {
+            time_t u = (time_t)st.away_until;
+            struct tm t;
+            localtime_r(&u, &t);
+            snprintf(plan, sizeof(plan), "Away %.0f °C until %02d.%02d %02d:%02d  /  ", st.target_c, t.tm_mon + 1,
+                     t.tm_mday, t.tm_hour, t.tm_min);
+        } else {
+            snprintf(plan, sizeof(plan), "Away %.0f °C  /  ", st.target_c);
+        }
+    } else if (st.sched_src == SCHED_SRC_SUMMER) {
+        snprintf(plan, sizeof(plan), "Summer: heating off  /  ");
+    } else if (st.sched_src == SCHED_SRC_ECO || st.sched_src == SCHED_SRC_COMFORT) {
+        const char *lvl = st.sched_src == SCHED_SRC_ECO ? "Eco" : "Comfort";
+        if (st.next_change_min >= 0) {
+            time_t u = time(NULL) + st.next_change_min * 60;
+            struct tm t;
+            localtime_r(&u, &t);
+            snprintf(plan, sizeof(plan), "%s %.1f °C until %02d:%02d  /  ", lvl, st.target_c, t.tm_hour, t.tm_min);
+        } else {
+            snprintf(plan, sizeof(plan), "%s %.1f °C  /  ", lvl, st.target_c);
+        }
+    }
     ctrl_config_t cfg;
     thermo_get_ctrl_config(&cfg);
     char loss[64];
@@ -111,14 +138,14 @@ static void update_main(void)
                           : st.ctrl_state == CTRL_ST_DUTY_ON ? " (long burn, low load)"
                           : st.ctrl_state == CTRL_ST_FROST   ? " (frost protection)"
                                                              : "";
-        lv_label_set_text_fmt(s_info, "#%06lX Heating# to %.0f °C%s  /  %s", (unsigned long)ui_hex(UI_HEAT),
-                              st.flow_setpoint, why, boiler);
+        lv_label_set_text_fmt(s_info, "#%06lX Heating# to %.0f °C%s  /  %s%s", (unsigned long)ui_hex(UI_HEAT),
+                              st.flow_setpoint, why, plan, boiler);
     } else if (st.ctrl_state == CTRL_ST_DUTY_OFF && heat) {
-        lv_label_set_text_fmt(s_info, "Pausing (low load: fewer, longer burns)  /  %s", boiler);
+        lv_label_set_text_fmt(s_info, "Pausing (low load: fewer, longer burns)  /  %s%s", plan, boiler);
     } else if (!heat && cfg.frost_on) {
         lv_label_set_text_fmt(s_info, "Idle (frost protection below %.0f °C)  /  %s", cfg.frost_room_c, boiler);
     } else {
-        lv_label_set_text_fmt(s_info, "Idle  /  %s", boiler);
+        lv_label_set_text_fmt(s_info, "Idle  /  %s%s", heat ? plan : "", boiler);
     }
 }
 

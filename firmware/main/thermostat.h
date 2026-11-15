@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "control.h"
+#include "schedule.h"
 
 #define THERMO_SP_MIN   5.0f
 #define THERMO_SP_MAX   30.0f
@@ -22,7 +23,8 @@ typedef struct {
     float humidity_shown;   // whole percent with a dead band
     uint32_t sensor_errors;
     // Control
-    float setpoint;
+    float setpoint;         // the user's setpoint = Comfort
+    float target_c;         // what the control law works towards (schedule, boost, away; schedule.h)
     thermo_mode_t mode;
     bool demand;            // heat requested from the boiler
     float flow_setpoint;    // °C requested (OT ID 1)
@@ -41,6 +43,26 @@ typedef struct {
     float return_c;
     float modulation;
     uint32_t ot_ok, ot_errors;
+    // Schedule and hot water (schedule.c)
+    uint8_t sched_src;      // sched_src_t
+    int next_change_min;    // -1 = none
+    uint8_t next_level;     // sched_level_t
+    int boost_left_s;
+    bool away;
+    int64_t away_until;     // 0 = until cancelled
+    bool summer;
+    bool outside_valid, outside_mean_valid;
+    float outside_c, outside_mean_c;
+    bool dhw_enable;
+    uint8_t dhw_reason;     // sched_dhw_reason_t
+    int dhw_boost_left_s;
+    float dhw_set;          // ID 56 value being written (0 = panel value)
+    uint8_t id56;           // otb_dhwset_t
+    bool tank_valid;
+    float tank_c;
+    bool pasteur_running;
+    uint8_t pasteur_result; // sched_pasteur_result_t
+    int64_t pasteur_last;
     // Settings
     float offset;           // °C added to the sensor reading
     float hysteresis;       // °C either side of the setpoint (on/off strategy; = ctrl onoff_hyst_k)
@@ -71,6 +93,15 @@ void thermo_set_sim_room(bool on);
 // Control settings (control.h); saved to NVS a few seconds after a change.
 void thermo_get_ctrl_config(ctrl_config_t *out);
 void thermo_set_ctrl_config(const ctrl_config_t *c);
+
+// Schedule settings (schedule.h); saved like the control settings.
+void thermo_get_sched_config(sched_config_t *out);
+void thermo_set_sched_config(const sched_config_t *c);
+// User actions; false when the feature is switched off.
+bool thermo_boost(bool on);
+bool thermo_dhw_boost(bool on);
+bool thermo_away(bool on, int64_t until);  // until = epoch, 0 = until cancelled (saved across restarts)
+bool thermo_pasteurise(bool on);
 
 // Copies up to max samples, oldest first; returns the count.
 int thermo_history(thermo_sample_t *out, int max);

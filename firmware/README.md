@@ -111,6 +111,35 @@ Bench helpers:
 - `MODE heat|off` and `SP <°C>`;
 - `STAT` prints a `CTRL` line: state, setpoint, requested flow, P, I, duty, starts in the last hour.
 
+## Schedule and hot water (Phase 1, `schedule.c`)
+
+`schedule.c` is pure C and host-tested. It sits above the control law: it decides the room target, whether heating may run, and the hot water request. With every switch off it behaves like 0.2: constant setpoint, DHW always enabled, ID 56 never written.
+
+| Feature | Switch | What it does |
+|---|---|---|
+| Weekly program | `prog_on` (off by default) | Comfort = your setpoint, Eco = Comfort − `eco_setback_k`. Up to 6 switch points a day. Without a valid clock: constant Comfort |
+| Boost | `boost_on` | Comfort + `boost_k` for `boost_min`. Wins over Eco, away and summer |
+| Away / holiday | `away_on` | `away_c` until a date or until cancelled (kept across restarts). Optionally hot water off (`away_dhw_off`) |
+| Summer | `summer_on` (off by default) | Heating off while the 24 h outdoor mean is ≥ `summer_c`, back on below `summer_c − summer_hyst_k`. Needs an outdoor temperature (boiler ID 27 now, HA in Phase 1b). The frost floor still works |
+| Hot water mode | `dhw_mode` | 0 = always enabled, 1 = up to 3 daily windows (`dhw_winN_start/end`), 2 = off. Without a clock the windows mode enables DHW |
+| Tank guard | `guard_on` | Enables DHW outside the windows while the tank (ID 26) is below `guard_c`, until `guard_c + guard_hyst_k`. Also works while away |
+| Piggy-back | `piggy_on` (off by default) | Enables DHW for `piggy_min` right after a heating burn (windows mode) |
+| Hot water boost | `dhw_boost_min` (0 = off) | Enables DHW now, for that long |
+| Tank setpoint | `dhw_set_on` (off by default) | Writes `dhw_set_c` to ID 56 |
+| Pasteurisation | `pasteur_on` (off by default) | Weekly (`pasteur_day`, `pasteur_min`): ID 56 = `pasteur_c` until the tank holds `pasteur_c − 2` for `pasteur_hold_min` (gives up after `pasteur_timeout_min`), then the old setpoint is written back and ID 56 is left to the panel again |
+
+**ID 56 check (`otb_core.c`):** every ID 56 write is read back in the next cycle. The result is `ok`, `ignored` (ACKed, but the boiler kept its own value, as an Immergas with P7 = 2 is expected to do) or `rejected`. Pasteurisation stops at once with `id56-ignored` when the boiler ignores the write; then it has to be done with the boiler's own routine. With the simulator: `SIM dhwwrite 0|1`.
+
+Serial commands:
+- `CFG` lists and sets these settings too (same names);
+- `PROG` shows the week, `PROG <day 0..6> 06:00=c 08:00=e 17:00=c 22:30=e` sets one day (0 = Monday);
+- `BOOST on|off`, `DHWBOOST on|off`, `AWAY on|off|<hours>`, `PASTEUR on|off`;
+- `STAT` prints a `SCHED` line: source, target, next change, boost, away, summer, outdoor mean, DHW reason, ID 56 check, tank, last pasteurisation.
+
+Web: `/api/status` has `schedule` and `dhw` objects; `/api/config` also returns these settings and the week as `prog`.
+
+The screen's status line shows the plan, for example "Eco 19.0 °C until 05:30", "Boost 22.0 °C, 45 min left", "Away 15 °C until 11.20 18:00" or "Summer: heating off".
+
 ### Host tests
 
 The pure-C parts build and run on the Mac, without ESP-IDF:

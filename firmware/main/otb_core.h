@@ -24,7 +24,16 @@ typedef struct {
     bool ch_enable;
     bool dhw_enable;
     float tset;          // flow setpoint while CH is enabled
+    float dhw_set;       // tank setpoint to write (ID 56), 0 = never write (leave the panel value)
 } otb_cmd_t;
+
+// ID 56 write check: after each write the value is read back.
+typedef enum {
+    OTB_DHWSET_UNKNOWN = 0,  // not written yet
+    OTB_DHWSET_OK,           // the read-back matched the written value
+    OTB_DHWSET_IGNORED,      // acknowledged, but the boiler kept its own value (e.g. Immergas P7 = 2)
+    OTB_DHWSET_REJECTED,     // the write was refused (UNKNOWN-DATAID / DATA-INVALID)
+} otb_dhwset_t;
 
 typedef struct {
     bool status_ca;      // Immergas: ID 0 request low byte 0xCA
@@ -57,6 +66,8 @@ typedef struct {
     uint16_t counters[8];         // IDs 116..123
     float tset_sent;              // last ID 1 value written
     bool tset_acked;              // the last ID 1 write was acknowledged with the same value
+    float dhw_set_written;        // last ID 56 value written (0 = none)
+    uint8_t dhw_set_verify;       // otb_dhwset_t
     // Statistics
     uint32_t cycles, frames, ok, timeouts, bad, unknown_id, data_invalid, link_losses, retries;
     uint16_t last_latency_ms, max_latency_ms;
@@ -84,6 +95,8 @@ typedef struct {
     int64_t last_reprobe_ms;
     float last_57_sent;
     int64_t last_57_ms;
+    int64_t dhw_write_ms;   // last ID 56 write (NEVER = not since the (re)connect)
+    bool dhw_readback_due;
 } otb_core_t;
 
 void otb_init(otb_core_t *c);

@@ -7,6 +7,7 @@
 #define NEG_FOR_UNSUPPORTED 3
 #define REPROBE_MS (3600LL * 1000)
 #define MIRROR_57_REFRESH_MS (60LL * 1000)
+#define DHWSET_RETRY_MS (600LL * 1000)  // rewrite ID 56 when the boiler shows another value (or ignored it)
 #define CONFIRM_MS (5LL * 1000)  // re-ask soon after a negative answer, to settle support quickly
 
 static const struct {
@@ -37,6 +38,7 @@ static const struct {
     {OT_ID_TEXHAUST, false, 300},
     {OT_ID_DHW_FLOW, false, 300},
     {OT_ID_MAXTSET, true, 0},  // the ID 57 mirror, scheduled separately
+    {OT_ID_TDHW_SET, true, 0}, // ID 56 write (only with cmd.dhw_set), scheduled separately
     // Counters, hourly
     {OT_ID_BURNER_STARTS, false, 3600},
     {OT_ID_CH_PUMP_STARTS, false, 3600},
@@ -66,6 +68,7 @@ void otb_init(otb_core_t *c)
     c->last_reprobe_ms = NEVER;
     c->last_57_ms = NEVER;
     c->last_57_sent = -100;
+    c->dhw_write_ms = NEVER;
 }
 
 float otb_tset_for(const otb_core_t *c)
@@ -89,6 +92,8 @@ static void on_connect(otb_core_t *c, int64_t now)
         c->neg[i] = 0;
     }
     c->last_57_ms = NEVER;
+    c->dhw_write_ms = NEVER;  // a power-cycled boiler may be back on its panel value
+    c->dhw_readback_due = false;
     c->last_reprobe_ms = now;
 }
 
@@ -185,6 +190,7 @@ static uint16_t write_value(const otb_core_t *c, uint8_t id)
     case OT_ID_MASTER_CONFIG: return 0x0000;  // no master flags, member ID 0
     case OT_ID_MASTER_OT_VERSION: return ot_to_f88(2.2f);
     case OT_ID_MAXTSET: return ot_to_f88(otb_tset_for(c));
+    case OT_ID_TDHW_SET: return ot_to_f88(c->cmd.dhw_set);
     default: return 0;
     }
 }
@@ -197,7 +203,37 @@ static bool slot_eligible(const otb_core_t *c, const otb_slot_t *s)
     if (s->id == OT_ID_FAULT) {
         return (c->st.slave_flags & OT_S_FAULT) != 0;
     }
-    return s->id != OT_ID_MAXTSET;  // the mirror is chosen separately
+    return s->id != OT_ID_MAXTSET && !(s->write && s->id == OT_ID_TDHW_SET);  // chosen separately
+}
+
+static otb_slot_t *find_slot(otb_core_t *c, uint8_t id, bool write)
+{
+    for (int i = 0; i < c->nslots; i++) {
+        if (c->slots[i].id == id && c->slots[i].write == write) {
+            return &c->slots[i];
+        }
+    }
+    return NULL;
+}
+
+// ID 56: write when the wanted value changed, after a (re)connect, or (every 10 min) when the boiler shows
+// another value; read it back in the next cycle.
+static otb_slot_t *pick_dhwset(otb_core_t *c, int64_t now)
+{
+    if (c->cmd.dhw_set <= 0 || c->support[OT_ID_TDHW_SET] == OTB_ID_UNSUPPORTED) {
+        return NULL;
+    }
+    if (c->dhw_readback_due) {
+        return find_slot(c, OT_ID_TDHW_SET, false);
+    }
+    float want = c->cmd.dhw_set;
+    bool changed = fabsf(want - c->st.dhw_set_written) >= 0.5f;
+    bool differs = (c->st.valid & OTB_V_DHW_SET) && fabsf(want - c->st.dhw_set_c) >= 0.5f;
+    if (c->dhw_write_ms == NEVER || changed ||
+        ((differs || c->st.dhw_set_verify == OTB_DHWSET_REJECTED) && now - c->dhw_write_ms >= DHWSET_RETRY_MS)) {
+        return find_slot(c, OT_ID_TDHW_SET, true);
+    }
+    return NULL;
 }
 
 static otb_slot_t *pick_slot(otb_core_t *c, int64_t now)
@@ -212,6 +248,10 @@ static otb_slot_t *pick_slot(otb_core_t *c, int64_t now)
                 }
             }
         }
+    }
+    otb_slot_t *d = pick_dhwset(c, now);
+    if (d) {
+        return d;
     }
     // 2. Never-sent slots in table order, then the most overdue one.
     otb_slot_t *best = NULL;
@@ -309,16 +349,32 @@ void otb_cycle(otb_core_t *c, int64_t now, otb_xfer_fn xfer, void *ctx)
         c->last_57_ms = now;
         c->last_57_sent = otb_tset_for(c);
     }
+    bool dhw_write = s->write && s->id == OT_ID_TDHW_SET;
+    if (dhw_write) {
+        c->dhw_write_ms = now;
+        st->dhw_set_written = c->cmd.dhw_set;
+    }
     if (r != OTB_XFER_OK) {
         note_negative(c, s->id);
-        return;
+        return;  // a lost write is retried (dhw_set_written vs the read-back), a lost read-back stays due
     }
     uint8_t t = ot_type(resp);
     if (t == OT_READ_ACK || t == OT_WRITE_ACK) {
         c->support[s->id] = OTB_ID_SUPPORTED;
         c->neg[s->id] = 0;
-        parse(c, s->id, ot_data(resp));
+        if (dhw_write) {
+            c->dhw_readback_due = true;  // the ACK echoes our value; only a read shows what the boiler kept
+        } else {
+            parse(c, s->id, ot_data(resp));
+        }
+        if (!s->write && s->id == OT_ID_TDHW_SET && c->dhw_readback_due) {
+            c->dhw_readback_due = false;
+            st->dhw_set_verify = fabsf(st->dhw_set_c - st->dhw_set_written) < 0.5f ? OTB_DHWSET_OK : OTB_DHWSET_IGNORED;
+        }
     } else {
+        if (dhw_write) {
+            st->dhw_set_verify = OTB_DHWSET_REJECTED;
+        }
         if (t == OT_UNKNOWN_DATA_ID) {
             st->unknown_id++;
         } else if (t == OT_DATA_INVALID) {

@@ -3,8 +3,8 @@
 SRC_DIR := ../../main
 CFLAGS  := -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -I$(SRC_DIR)
 LIBS    := -lm
-CORE    := $(SRC_DIR)/ot_frame.c $(SRC_DIR)/plant_sim.c $(SRC_DIR)/ot_sim.c $(SRC_DIR)/otb_core.c $(SRC_DIR)/control.c
-TESTS   := test_ot test_control
+CORE    := $(SRC_DIR)/ot_frame.c $(SRC_DIR)/plant_sim.c $(SRC_DIR)/ot_sim.c $(SRC_DIR)/otb_core.c $(SRC_DIR)/control.c $(SRC_DIR)/schedule.c
+TESTS   := test_ot test_control test_sched
 
 all: run
 

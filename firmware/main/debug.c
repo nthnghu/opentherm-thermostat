@@ -1,5 +1,5 @@
 // Development helper on the USB serial port only (not reachable over the network):
-// "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "CFG [name value]" lists/sets the control settings; "MODE heat|off", "SP <C>" for bench tests; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
+// "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "CFG [name value]" lists/sets the control and schedule settings; "PROG [day text]" the weekly program; "BOOST|DHWBOOST|PASTEUR on|off", "AWAY <hours>|on|off"; "MODE heat|off", "SP <C>" for bench tests; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,10 +17,12 @@
 #include "settings.h"
 #include "ot_bus.h"
 #include "ot_frame.h"
+#include "schedule.h"
+#include <time.h>
 
 static void debug_task(void *arg)
 {
-    char line[80];
+    char line[128];
     size_t n = 0;
     for (;;) {
         char c;
@@ -48,6 +50,13 @@ static void debug_task(void *arg)
             printf("CTRL state=%s tset=%.1f req=%.1f p=%.2f i=%.2f duty=%.2f starts_h=%u flame=%d dhw=%d flow=%.1f ret=%.1f mod=%.0f\n",
                    ctrl_state_name(st.ctrl_state), st.flow_setpoint, st.req_c, st.pi_p, st.pi_i, st.duty,
                    st.starts_last_h, st.flame, st.dhw_active, st.flow_c, st.return_c, st.modulation);
+            printf("SCHED src=%s target=%.1f next=%d/%s boost=%d away=%d until=%lld summer=%d out=%d/%.1f mean=%d/%.1f "
+                   "dhw=%d/%s dhwboost=%d set=%.1f id56=%d tank=%d/%.1f pasteur=%d last=%s@%lld\n",
+                   sched_src_name(st.sched_src), st.target_c, st.next_change_min, st.next_level ? "c" : "e",
+                   st.boost_left_s, st.away, (long long)st.away_until, st.summer, st.outside_valid, st.outside_c,
+                   st.outside_mean_valid, st.outside_mean_c, st.dhw_enable, sched_dhw_reason_name(st.dhw_reason),
+                   st.dhw_boost_left_s, st.dhw_set, st.id56, st.tank_valid, st.tank_c, st.pasteur_running,
+                   sched_pasteur_name(st.pasteur_result), (long long)st.pasteur_last);
             motion_debug_t m;
             motion_debug(&m);
             printf("MOT on=%d state=%s mean=%d contrast=%d changed=%d/576 delta=%d.%02d frames=%d grab_fail=%d "
@@ -81,18 +90,25 @@ static void debug_task(void *arg)
             continue;
         }
         if (strncmp(line, "CFG", 3) == 0 && (line[3] == 0 || line[3] == ' ')) {
-            // CFG = list, CFG <name> <value> = set (saved after 5 s), CFG defaults = factory values
+            // CFG = list, CFG <name> <value> = set (saved after 5 s), CFG defaults = factory values (both tables)
             ctrl_config_t c;
+            sched_config_t sc;
             thermo_get_ctrl_config(&c);
+            thermo_get_sched_config(&sc);
             char name[32] = "", value[24] = "";
             int n = sscanf(line + 3, "%31s %23s", name, value);
             if (n == 1 && strcmp(name, "defaults") == 0) {
                 ctrl_default_config(&c);
                 thermo_set_ctrl_config(&c);
+                sched_default_config(&sc);
+                thermo_set_sched_config(&sc);
                 printf("CFG defaults restored\n");
             } else if (n == 2) {
                 if (ctrl_config_set(&c, name, value)) {
                     thermo_set_ctrl_config(&c);
+                    printf("CFG %s = %s ok\n", name, value);
+                } else if (sched_config_set(&sc, name, value)) {
+                    thermo_set_sched_config(&sc);
                     printf("CFG %s = %s ok\n", name, value);
                 } else {
                     printf("CFG %s = %s refused (unknown name or out of range)\n", name, value);
@@ -101,9 +117,64 @@ static void debug_task(void *arg)
                 char v[24];
                 for (int i = 0; i < ctrl_config_count(); i++) {
                     ctrl_config_get(&c, i, v, sizeof(v));
-                    printf("CFG %-16s %-8s %s\n", ctrl_config_name(i), v, ctrl_config_help(i));
+                    printf("CFG %-19s %-8s %s\n", ctrl_config_name(i), v, ctrl_config_help(i));
+                }
+                for (int i = 0; i < sched_config_count(); i++) {
+                    sched_config_get(&sc, i, v, sizeof(v));
+                    printf("CFG %-19s %-8s %s\n", sched_config_name(i), v, sched_config_help(i));
                 }
             }
+            continue;
+        }
+        if (strncmp(line, "PROG", 4) == 0 && (line[4] == 0 || line[4] == ' ')) {
+            // PROG = show the week; PROG <0..6> <HH:MM=c|e ...> = set one day (0 = Monday, empty = no points)
+            static const char *days[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+            sched_config_t sc;
+            thermo_get_sched_config(&sc);
+            int d = -1, off = 0;
+            if (line[4] && sscanf(line + 5, "%d%n", &d, &off) == 1) {
+                const char *text = line + 5 + off;
+                while (*text == ' ') {
+                    text++;
+                }
+                if (sched_prog_parse(&sc, d, text)) {
+                    thermo_set_sched_config(&sc);
+                } else {
+                    printf("PROG refused (day 0..6, up to %d points HH:MM=c|e)\n", SCHED_POINTS);
+                }
+            }
+            char buf[100];
+            for (int i = 0; i < 7; i++) {
+                sched_prog_format(&sc, i, buf, sizeof(buf));
+                printf("PROG %d %s %s\n", i, days[i], buf);
+            }
+            printf("PROG prog_on=%d eco_setback_k=%.1f\n", sc.prog_on, sc.eco_setback_k);
+            continue;
+        }
+        if (strcmp(line, "BOOST on") == 0 || strcmp(line, "BOOST off") == 0) {
+            printf("BOOST %s\n", thermo_boost(line[7] == 'n') ? "ok" : "refused (boost_on 0)");
+            continue;
+        }
+        if (strcmp(line, "DHWBOOST on") == 0 || strcmp(line, "DHWBOOST off") == 0) {
+            printf("DHWBOOST %s\n", thermo_dhw_boost(line[10] == 'n') ? "ok" : "refused (dhw_boost_min 0 or dhw_mode 2)");
+            continue;
+        }
+        if (strcmp(line, "PASTEUR on") == 0 || strcmp(line, "PASTEUR off") == 0) {
+            printf("PASTEUR %s\n", thermo_pasteurise(line[9] == 'n') ? "ok" : "refused (pasteur_on 0 or dhw_mode 2)");
+            continue;
+        }
+        if (strncmp(line, "AWAY ", 5) == 0) {
+            // AWAY on = until cancelled, AWAY <hours> = until then, AWAY off
+            bool ok;
+            if (strcmp(line + 5, "off") == 0) {
+                ok = thermo_away(false, 0);
+            } else if (strcmp(line + 5, "on") == 0) {
+                ok = thermo_away(true, 0);
+            } else {
+                float hrs = strtof(line + 5, NULL);
+                ok = hrs > 0 && thermo_away(true, (int64_t)time(NULL) + (int64_t)(hrs * 3600));
+            }
+            printf("AWAY %s\n", ok ? "ok" : "refused (away_on 0 or bad hours)");
             continue;
         }
         if (strcmp(line, "OTSTAT") == 0) {

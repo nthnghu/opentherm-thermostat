@@ -383,9 +383,26 @@ static esp_err_t get_status(httpd_req_t *req)
           st.modulation, st.offset, st.hysteresis, timekeep_source_name());
     sendf(req,
           "\"control\":{\"state\":\"%s\",\"requested\":%.1f,\"p\":%.2f,\"i\":%.2f,\"duty\":%.2f,"
-          "\"starts_last_hour\":%u,\"return\":%.1f,\"dhw_active\":%s},\"history\":[",
+          "\"starts_last_hour\":%u,\"return\":%.1f,\"dhw_active\":%s},",
           ctrl_state_name(st.ctrl_state), st.req_c, st.pi_p, st.pi_i, st.duty, st.starts_last_h, st.return_c,
           st.dhw_active ? "true" : "false");
+    char mean[16] = "null";
+    if (st.outside_mean_valid) {
+        snprintf(mean, sizeof(mean), "%.1f", st.outside_mean_c);
+    }
+    sendf(req,
+          "\"schedule\":{\"source\":\"%s\",\"target\":%.1f,\"next_change_min\":%d,\"next_level\":\"%s\","
+          "\"boost_left_s\":%d,\"away\":%s,\"away_until\":%lld,\"summer\":%s,\"outside_mean\":%s},",
+          sched_src_name(st.sched_src), st.target_c, st.next_change_min, st.next_level ? "comfort" : "eco",
+          st.boost_left_s, st.away ? "true" : "false", (long long)st.away_until, st.summer ? "true" : "false",
+          mean);
+    sendf(req,
+          "\"dhw\":{\"enable\":%s,\"reason\":\"%s\",\"boost_left_s\":%d,\"set_written\":%.1f,\"id56\":%u,"
+          "\"tank\":%.1f,\"tank_valid\":%s,\"pasteur_running\":%s,\"pasteur_result\":\"%s\",\"pasteur_last\":%lld},"
+          "\"history\":[",
+          st.dhw_enable ? "true" : "false", sched_dhw_reason_name(st.dhw_reason), st.dhw_boost_left_s, st.dhw_set,
+          st.id56, st.tank_c, st.tank_valid ? "true" : "false", st.pasteur_running ? "true" : "false",
+          sched_pasteur_name(st.pasteur_result), (long long)st.pasteur_last);
     // History, thinned to one point per 10 min: [room, setpoint, demand]
     thermo_sample_t *h = heap_caps_malloc(sizeof(thermo_sample_t) * THERMO_HISTORY_LEN, MALLOC_CAP_SPIRAM);
     int n = h ? thermo_history(h, THERMO_HISTORY_LEN) : 0;
@@ -421,7 +438,22 @@ static esp_err_t get_config(httpd_req_t *req)
         ctrl_config_get(&c, i, v, sizeof(v));
         sendf(req, ",\"%s\":%s", ctrl_config_name(i), v);
     }
-    SEND(req, "}");
+    // Schedule settings (times as "HH:MM" strings, "-" = unused) and the weekly program
+    sched_config_t sc;
+    thermo_get_sched_config(&sc);
+    sendf(req, ",\"sched_version\":%u", sc.version);
+    for (int i = 0; i < sched_config_count(); i++) {
+        sched_config_get(&sc, i, v, sizeof(v));
+        bool text = strchr(v, ':') || strcmp(v, "-") == 0;
+        sendf(req, text ? ",\"%s\":\"%s\"" : ",\"%s\":%s", sched_config_name(i), v);
+    }
+    SEND(req, ",\"prog\":[");
+    char day[100];
+    for (int d = 0; d < 7; d++) {
+        sched_prog_format(&sc, d, day, sizeof(day));
+        sendf(req, "%s\"%s\"", d ? "," : "", day);
+    }
+    SEND(req, "]}");
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 

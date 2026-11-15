@@ -37,6 +37,9 @@ static ctrl_t s_ctrl;            // used by the thermostat task only
 static ctrl_config_t s_cfg;       // current configuration (under s_lock)
 static bool s_cfg_changed;
 static bool s_cfg_dirty;
+static sched_t s_sched;           // under s_lock (the user actions change it from other tasks)
+static sched_config_t s_scfg;
+static bool s_scfg_dirty;
 static thermo_sample_t *s_hist;   // PSRAM ring
 static int s_hist_head, s_hist_count;
 
@@ -81,6 +84,38 @@ static void save_ctrl_config(void)
     ESP_LOGI(TAG, "control settings saved");
 }
 
+static void load_sched_config(void)
+{
+    sched_default_config(&s_scfg);
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
+        sched_config_t c;
+        size_t len = sizeof(c);
+        if (nvs_get_blob(h, "sched", &c, &len) == ESP_OK && len == sizeof(c) && c.version == SCHED_CONFIG_VERSION) {
+            s_scfg = c;
+        } else {
+            ESP_LOGI(TAG, "schedule settings: defaults");
+        }
+        nvs_close(h);
+    }
+    sched_sanitize(&s_scfg);
+}
+
+static void save_sched_config(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    LOCK();
+    sched_config_t c = s_scfg;
+    UNLOCK();
+    nvs_set_blob(h, "sched", &c, sizeof(c));
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "schedule settings saved");
+}
+
 static void load(void)
 {
     s_st.setpoint = 21.0f;
@@ -108,6 +143,11 @@ static void load(void)
         if (nvs_get_u8(h, "simroom", &b) == ESP_OK) {
             s_st.sim_room = b;
         }
+        int64_t until;
+        if (nvs_get_u8(h, "away", &b) == ESP_OK && b && nvs_get_i64(h, "awayuntil", &until) == ESP_OK) {
+            s_st.away = true;
+            s_st.away_until = until;
+        }
         nvs_close(h);
     }
 }
@@ -126,6 +166,8 @@ static void save(void)
     nvs_set_i32(h, "ofs", (int32_t)lroundf(c.offset * 10));
     nvs_set_u8(h, "sim", c.boiler_sim);
     nvs_set_u8(h, "simroom", c.sim_room);
+    nvs_set_u8(h, "away", c.away);
+    nvs_set_i64(h, "awayuntil", c.away_until);
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "settings saved (sp %.1f, mode %d)", c.setpoint, c.mode);
@@ -133,6 +175,12 @@ static void save(void)
 
 static void mark_dirty(void)
 {
+    s_dirty_since_us = esp_timer_get_time();
+}
+
+static void mark_scfg_dirty(void)
+{
+    s_scfg_dirty = true;
     s_dirty_since_us = esp_timer_get_time();
 }
 
@@ -159,6 +207,11 @@ static void boiler_read(otb_status_t *b)
     s_st.modulation = b->modulation;
     s_st.ot_ok = b->ok;
     s_st.ot_errors = b->timeouts + b->bad;
+    s_st.tank_valid = b->valid & OTB_V_TDHW;
+    s_st.tank_c = b->tank_c;
+    s_st.outside_valid = b->valid & OTB_V_TOUT;  // boiler outdoor probe; HA outdoor comes with Phase 1b
+    s_st.outside_c = b->outside_c;
+    s_st.id56 = b->dhw_set_verify;
     UNLOCK();
 }
 
@@ -171,7 +224,8 @@ static void history_add(void)
         .t = timekeep_valid() ? time(NULL) : 0,
         .room_c10 = s_st.sensor_ok ? (int16_t)lroundf(s_st.room_c * 10) : INT16_MIN,
         .humidity = (uint8_t)lroundf(s_st.humidity),
-        .setpoint_c10 = (int16_t)lroundf((s_st.mode == THERMO_MODE_HEAT ? s_st.setpoint : s_cfg.frost_room_c) * 10),
+        .setpoint_c10 = (int16_t)lroundf(
+            (s_st.mode == THERMO_MODE_HEAT && s_st.sched_src != SCHED_SRC_SUMMER ? s_st.target_c : s_cfg.frost_room_c) * 10),
         .demand = s_st.demand,
     };
     s_hist[s_hist_head] = s;
@@ -195,6 +249,18 @@ int thermo_history(thermo_sample_t *out, int max)
 }
 
 /* ------------------------------------------------------------------ task */
+
+// Local calendar day as days since 1970-01-01 (for once-a-week tracking).
+static int32_t local_day(const struct tm *t)
+{
+    int y = t->tm_year + 1900, m = t->tm_mon + 1, d = t->tm_mday;
+    y -= m <= 2;
+    int era = (y >= 0 ? y : y - 399) / 400;
+    int yoe = y - era * 400;
+    int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
 
 static void thermo_task(void *arg)
 {
@@ -259,15 +325,59 @@ static void thermo_task(void *arg)
         // 2. Control (control.c), on the boiler state the bus task last saw
         otb_status_t b;
         boiler_read(&b);
+        bool clock_ok = timekeep_valid();
+        time_t wall = time(NULL);
+        struct tm lt = {0};
+        localtime_r(&wall, &lt);
         LOCK();
         if (s_cfg_changed) {
             s_cfg_changed = false;
             ctrl_set_config(&s_ctrl, &s_cfg);
         }
+        bool away_before = s_sched.away;
+        sched_in_t si = {
+            .now_s = now / 1e6,
+            .clock_ok = clock_ok,
+            .wday = (lt.tm_wday + 6) % 7,
+            .min_of_day = lt.tm_hour * 60 + lt.tm_min,
+            .day = local_day(&lt),
+            .epoch = (int64_t)wall,
+            .comfort_c = s_st.setpoint,
+            .tank_valid = (b.valid & OTB_V_TDHW) != 0,
+            .tank_c = b.tank_c,
+            .outside_valid = (b.valid & OTB_V_TOUT) != 0,
+            .outside_c = b.outside_c,
+            .flame = (b.slave_flags & OT_S_FLAME) != 0,
+            .dhw_active = (b.slave_flags & OT_S_DHW_ACTIVE) != 0,
+            .dhw_set_valid = (b.valid & OTB_V_DHW_SET) != 0,
+            .dhw_set_read = b.dhw_set_c,
+            .id56 = b.dhw_set_verify,
+        };
+        const sched_out_t *so = sched_step(&s_sched, &si);
+        if (s_sched.away != away_before) {
+            mark_dirty();  // holiday ended: keep the saved state in step
+        }
+        s_st.target_c = so->target_c;
+        s_st.sched_src = so->src;
+        s_st.next_change_min = so->next_change_min;
+        s_st.next_level = so->next_level;
+        s_st.boost_left_s = so->boost_left_s;
+        s_st.away = so->away;
+        s_st.away_until = so->away_until;
+        s_st.summer = so->summer;
+        s_st.outside_mean_valid = so->outside_mean_valid;
+        s_st.outside_mean_c = so->outside_mean_c;
+        s_st.dhw_enable = so->dhw_enable;
+        s_st.dhw_reason = so->dhw_reason;
+        s_st.dhw_boost_left_s = so->dhw_boost_left_s;
+        s_st.dhw_set = so->dhw_set;
+        s_st.pasteur_running = so->pasteur_running;
+        s_st.pasteur_result = so->pasteur_result;
+        s_st.pasteur_last = so->pasteur_last;
         ctrl_in_t in = {
             .now_s = now / 1e6,
-            .heat_mode = s_st.mode == THERMO_MODE_HEAT,
-            .target_c = s_st.setpoint,
+            .heat_mode = s_st.mode == THERMO_MODE_HEAT && so->ch_allowed,
+            .target_c = so->target_c,
             .room_ok = s_st.sensor_ok,
             .room_c = s_st.room_c,
             .boiler_ok = b.link == OTB_LINK_UP,
@@ -289,7 +399,8 @@ static void thermo_task(void *arg)
         s_st.starts_last_h = o->starts_last_h;
         bool sim = s_st.boiler_sim;
         s_st.loops++;
-        otb_cmd_t cmd = {.ch_enable = o->ch_enable, .dhw_enable = true, .tset = o->tset};
+        otb_cmd_t cmd = {.ch_enable = o->ch_enable, .dhw_enable = so->dhw_enable, .tset = o->tset,
+                         .dhw_set = so->dhw_set};
         UNLOCK();
 
         // 3. Boiler
@@ -308,6 +419,10 @@ static void thermo_task(void *arg)
                 s_cfg_dirty = false;
                 save_ctrl_config();
             }
+            if (s_scfg_dirty) {
+                s_scfg_dirty = false;
+                save_sched_config();
+            }
         }
 
         // Fixed 1 s cadence; if a boiler timeout made us late, don't try to catch up.
@@ -323,8 +438,14 @@ void thermo_start(void)
     s_hist = heap_caps_calloc(THERMO_HISTORY_LEN, sizeof(thermo_sample_t), MALLOC_CAP_SPIRAM);
     load();
     load_ctrl_config();
+    load_sched_config();
     s_st.hysteresis = s_cfg.onoff_hyst_k;
     ctrl_init(&s_ctrl, &s_cfg);
+    sched_init(&s_sched, &s_scfg);
+    if (s_st.away && !sched_away(&s_sched, true, s_st.away_until)) {
+        s_st.away = false;  // feature switched off since
+    }
+    s_st.target_c = s_st.setpoint;
     ESP_LOGI(TAG, "start: setpoint %.1f, mode %s, offset %.1f, boiler %s", s_st.setpoint,
              s_st.mode ? "heat" : "off", s_st.offset, s_st.boiler_sim ? "simulated" : "real");
     // Highest application priority, pinned to core 1 (the UI runs on core 0).
@@ -420,4 +541,66 @@ void thermo_set_boiler_sim(bool sim)
     s_st.boiler_online = false;
     UNLOCK();
     mark_dirty();
+}
+
+void thermo_get_sched_config(sched_config_t *out)
+{
+    LOCK();
+    *out = s_scfg;
+    UNLOCK();
+}
+
+void thermo_set_sched_config(const sched_config_t *c)
+{
+    sched_config_t n = *c;
+    sched_sanitize(&n);
+    LOCK();
+    s_scfg = n;
+    sched_set_config(&s_sched, &n);  // at once, so a user action right after sees the new switches
+    UNLOCK();
+    mark_scfg_dirty();
+}
+
+static double now_s(void)
+{
+    return esp_timer_get_time() / 1e6;
+}
+
+bool thermo_boost(bool on)
+{
+    LOCK();
+    bool ok = sched_boost(&s_sched, now_s(), on);
+    UNLOCK();
+    return ok;
+}
+
+bool thermo_dhw_boost(bool on)
+{
+    LOCK();
+    bool ok = sched_dhw_boost(&s_sched, now_s(), on);
+    UNLOCK();
+    return ok;
+}
+
+bool thermo_away(bool on, int64_t until)
+{
+    LOCK();
+    bool ok = sched_away(&s_sched, on, until);
+    if (ok) {
+        s_st.away = on;
+        s_st.away_until = on ? until : 0;
+    }
+    UNLOCK();
+    if (ok) {
+        mark_dirty();
+    }
+    return ok;
+}
+
+bool thermo_pasteurise(bool on)
+{
+    LOCK();
+    bool ok = sched_pasteur_now(&s_sched, on);
+    UNLOCK();
+    return ok;
 }
