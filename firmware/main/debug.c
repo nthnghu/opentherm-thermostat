@@ -18,6 +18,8 @@
 #include "ot_bus.h"
 #include "ot_frame.h"
 #include "schedule.h"
+#include "alerts.h"
+#include "mqtt_ha.h"
 #include <time.h>
 
 static void debug_task(void *arg)
@@ -57,6 +59,19 @@ static void debug_task(void *arg)
                    st.outside_mean_valid, st.outside_mean_c, st.dhw_enable, sched_dhw_reason_name(st.dhw_reason),
                    st.dhw_boost_left_s, st.dhw_set, st.id56, st.tank_valid, st.tank_c, st.pasteur_running,
                    sched_pasteur_name(st.pasteur_result), (long long)st.pasteur_last);
+            dl_kpi_t k1, k24;
+            thermo_get_kpi(&k1, &k24);
+            printf("KPI 1h starts=%u | 24h(%.1fh) starts/h=%.2f burns=%u median=%.1fmin short=%.0f%% cond=%.0f%% "
+                   "mod=%.1f%% atmin=%.0f%% comfort=%.2fKh gas=%.2fkWh burner=%.2fh | total gas=%.3fkWh starts=%lu/%lu "
+                   "log=%d\n",
+                   k1.ch_starts, k24.hours, k24.ch_starts_h, k24.ch_burns, k24.median_burn_min, k24.short_pct,
+                   k24.cond_pct, k24.mean_mod, k24.min_mod_pct, k24.comfort_kh, k24.gas_kwh, k24.burner_h,
+                   st.gas_kwh_total, (unsigned long)st.ch_starts_total, (unsigned long)st.dhw_starts_total,
+                   thermo_log_count());
+            char mst[96];
+            mqtt_ha_status(mst, sizeof(mst));
+            printf("ALERT count=%u bits=%04x text=%s | MQTT %s\n", st.alert_count, st.alerts,
+                   st.alert_text[0] ? st.alert_text : "none", mst);
             motion_debug_t m;
             motion_debug(&m);
             printf("MOT on=%d state=%s mean=%d contrast=%d changed=%d/576 delta=%d.%02d frames=%d grab_fail=%d "
@@ -93,8 +108,10 @@ static void debug_task(void *arg)
             // CFG = list, CFG <name> <value> = set (saved after 5 s), CFG defaults = factory values (both tables)
             ctrl_config_t c;
             sched_config_t sc;
+            alert_config_t ac;
             thermo_get_ctrl_config(&c);
             thermo_get_sched_config(&sc);
+            thermo_get_alert_config(&ac);
             char name[32] = "", value[24] = "";
             int n = sscanf(line + 3, "%31s %23s", name, value);
             if (n == 1 && strcmp(name, "defaults") == 0) {
@@ -102,6 +119,8 @@ static void debug_task(void *arg)
                 thermo_set_ctrl_config(&c);
                 sched_default_config(&sc);
                 thermo_set_sched_config(&sc);
+                alert_default_config(&ac);
+                thermo_set_alert_config(&ac);
                 printf("CFG defaults restored\n");
             } else if (n == 2) {
                 if (ctrl_config_set(&c, name, value)) {
@@ -109,6 +128,9 @@ static void debug_task(void *arg)
                     printf("CFG %s = %s ok\n", name, value);
                 } else if (sched_config_set(&sc, name, value)) {
                     thermo_set_sched_config(&sc);
+                    printf("CFG %s = %s ok\n", name, value);
+                } else if (alert_config_set(&ac, name, value)) {
+                    thermo_set_alert_config(&ac);
                     printf("CFG %s = %s ok\n", name, value);
                 } else {
                     printf("CFG %s = %s refused (unknown name or out of range)\n", name, value);
@@ -122,6 +144,10 @@ static void debug_task(void *arg)
                 for (int i = 0; i < sched_config_count(); i++) {
                     sched_config_get(&sc, i, v, sizeof(v));
                     printf("CFG %-19s %-8s %s\n", sched_config_name(i), v, sched_config_help(i));
+                }
+                for (int i = 0; i < alert_config_count(); i++) {
+                    alert_config_get(&ac, i, v, sizeof(v));
+                    printf("CFG %-19s %-8s %s\n", alert_config_name(i), v, alert_config_help(i));
                 }
             }
             continue;
@@ -149,6 +175,10 @@ static void debug_task(void *arg)
                 printf("PROG %d %s %s\n", i, days[i], buf);
             }
             printf("PROG prog_on=%d eco_setback_k=%.1f\n", sc.prog_on, sc.eco_setback_k);
+            continue;
+        }
+        if (strcmp(line, "MQTT dump") == 0) {
+            mqtt_ha_dump();
             continue;
         }
         if (strcmp(line, "BOOST on") == 0 || strcmp(line, "BOOST off") == 0) {

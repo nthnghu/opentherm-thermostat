@@ -22,6 +22,7 @@
 #include "ha.h"
 #include "ot_bus.h"
 #include "ot_frame.h"
+#include "mqtt_ha.h"
 
 static const char *TAG = "web";
 static httpd_handle_t s_server;
@@ -239,6 +240,22 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     send_escaped(req, ha_last_result()[0] ? ha_last_result() : "none yet");
     SEND(req, "</p><button>Save and test</button></form>");
 
+    // MQTT
+    SEND(req, "<h2>MQTT (Home Assistant, Grafana)</h2><form method=post action=/save/mqtt>");
+    sendf(req, "<label><input type=checkbox name=on value=1%s> Connect</label>", c->mqtt_on ? " checked" : "");
+    input(req, "Broker (mqtt://host:1883)", "uri", c->mqtt_uri, "text");
+    input(req, "User", "user", c->mqtt_user, "text");
+    sendf(req, "<label for=mpw>Password</label><input id=mpw name=pw type=password placeholder='%s'>",
+          c->mqtt_pass[0] ? "unchanged if empty" : "");
+    input(req, "Location (topic sensors/&lt;location&gt;/&lt;device&gt;)", "loc", c->mqtt_loc, "text");
+    input(req, "Device", "dev", c->mqtt_dev, "text");
+    char mst[96];
+    mqtt_ha_status(mst, sizeof(mst));
+    SEND(req, "<p class=hint>Home Assistant finds the thermostat by MQTT discovery. Numeric values also reach "
+              "Telegraf/VictoriaMetrics as iot_&lt;field&gt;. State: ");
+    send_escaped(req, mst);
+    SEND(req, "</p><button>Save and connect</button></form>");
+
     // Clock
     SEND(req, "<h2>Clock</h2><form method=post action=/save/clock>");
     sendf(req, "<label><input type=checkbox name=ntp value=1 %s> Use NTP</label>", c->ntp_on ? "checked" : "");
@@ -398,11 +415,21 @@ static esp_err_t get_status(httpd_req_t *req)
           mean);
     sendf(req,
           "\"dhw\":{\"enable\":%s,\"reason\":\"%s\",\"boost_left_s\":%d,\"set_written\":%.1f,\"id56\":%u,"
-          "\"tank\":%.1f,\"tank_valid\":%s,\"pasteur_running\":%s,\"pasteur_result\":\"%s\",\"pasteur_last\":%lld},"
-          "\"history\":[",
+          "\"tank\":%.1f,\"tank_valid\":%s,\"pasteur_running\":%s,\"pasteur_result\":\"%s\",\"pasteur_last\":%lld},",
           st.dhw_enable ? "true" : "false", sched_dhw_reason_name(st.dhw_reason), st.dhw_boost_left_s, st.dhw_set,
           st.id56, st.tank_c, st.tank_valid ? "true" : "false", st.pasteur_running ? "true" : "false",
           sched_pasteur_name(st.pasteur_result), (long long)st.pasteur_last);
+    sendf(req, "\"alerts\":{\"count\":%u,\"text\":\"", st.alert_count);
+    send_escaped(req, st.alert_text);
+    SEND(req, "\",\"active\":[");
+    bool firsta = true;
+    for (int a = 0; a < ALERT_COUNT; a++) {
+        if (st.alerts & (1u << a)) {
+            sendf(req, "%s\"%s\"", firsta ? "" : ",", alert_name(a));
+            firsta = false;
+        }
+    }
+    SEND(req, "]},\"history\":[");
     // History, thinned to one point per 10 min: [room, setpoint, demand]
     thermo_sample_t *h = heap_caps_malloc(sizeof(thermo_sample_t) * THERMO_HISTORY_LEN, MALLOC_CAP_SPIRAM);
     int n = h ? thermo_history(h, THERMO_HISTORY_LEN) : 0;
@@ -446,6 +473,13 @@ static esp_err_t get_config(httpd_req_t *req)
         sched_config_get(&sc, i, v, sizeof(v));
         bool text = strchr(v, ':') || strcmp(v, "-") == 0;
         sendf(req, text ? ",\"%s\":\"%s\"" : ",\"%s\":%s", sched_config_name(i), v);
+    }
+    alert_config_t ac;
+    thermo_get_alert_config(&ac);
+    sendf(req, ",\"alert_version\":%u", ac.version);
+    for (int i = 0; i < alert_config_count(); i++) {
+        alert_config_get(&ac, i, v, sizeof(v));
+        sendf(req, ",\"%s\":%s", alert_config_name(i), v);
     }
     SEND(req, ",\"prog\":[");
     char day[100];
@@ -581,6 +615,80 @@ static void wifi_cb(void *arg)
     board_wifi_connect(s_new_ssid, s_new_pass);
 }
 
+static void kpi_json(httpd_req_t *req, const char *name, const dl_kpi_t *k, bool last)
+{
+    sendf(req,
+          "\"%s\":{\"hours\":%.2f,\"ch_starts\":%u,\"dhw_starts\":%u,\"ch_starts_h\":%.2f,\"ch_burns\":%u,"
+          "\"median_burn_min\":%.1f,\"short_pct\":%.1f,\"burner_h\":%.2f,\"dhw_burner_h\":%.2f,\"cond_pct\":%.1f,"
+          "\"mean_mod\":%.1f,\"min_mod_pct\":%.1f,\"comfort_kh\":%.2f,\"over_kh\":%.2f,\"gas_kwh\":%.2f,"
+          "\"mean_room\":%.2f,\"mean_target\":%.2f,\"mean_flow\":%.1f,\"mean_return\":%.1f,\"ot_errors\":%.0f}%s",
+          name, k->hours, k->ch_starts, k->dhw_starts, k->ch_starts_h, k->ch_burns, k->median_burn_min, k->short_pct,
+          k->burner_h, k->dhw_burner_h, k->cond_pct, k->mean_mod, k->min_mod_pct, k->comfort_kh, k->over_kh,
+          k->gas_kwh, k->mean_room, k->mean_target, k->mean_flow, k->mean_return, k->ot_err, last ? "" : ",");
+}
+
+// KPIs over the last hour and 24 h, plus totals since start.
+static esp_err_t get_kpi(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    dl_kpi_t k1, k24;
+    thermo_get_kpi(&k1, &k24);
+    thermo_state_t st;
+    thermo_get(&st);
+    httpd_resp_set_type(req, "application/json");
+    SEND(req, "{");
+    kpi_json(req, "last_hour", &k1, false);
+    kpi_json(req, "last_24h", &k24, false);
+    sendf(req, "\"since_start\":{\"gas_kwh\":%.3f,\"ch_starts\":%lu,\"dhw_starts\":%lu,\"burner_h\":%.2f,"
+               "\"log_minutes\":%d}}",
+          st.gas_kwh_total, (unsigned long)st.ch_starts_total, (unsigned long)st.dhw_starts_total, st.burner_h_total,
+          thermo_log_count());
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// Minute log as CSV (?h=N limits to the last N hours; default all, up to 7 days).
+static esp_err_t get_log(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    int n = thermo_log_count(), from = 0;
+    char q[32], v[12];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && httpd_query_key_value(q, "h", v, sizeof(v)) == ESP_OK) {
+        int h = atoi(v);
+        if (h > 0 && h * 60 < n) {
+            from = n - h * 60;
+        }
+    }
+    httpd_resp_set_type(req, "text/csv");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"thermostat-log.csv\"");
+    SEND(req, datalog_csv_header());
+    char *chunk = malloc(4096);
+    int used = 0;
+    dl_rec_t r;
+    for (int i = from; chunk && i < n && thermo_log_get(i, &r); i++) {
+        int w = datalog_csv_row(&r, chunk + used, 4096 - used);
+        if (w < 0) {
+            break;
+        }
+        used += w;
+        if (used > 4096 - 400) {
+            if (httpd_resp_send_chunk(req, chunk, used) != ESP_OK) {
+                free(chunk);
+                return ESP_FAIL;
+            }
+            used = 0;
+        }
+    }
+    if (chunk && used) {
+        httpd_resp_send_chunk(req, chunk, used);
+    }
+    free(chunk);
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 static esp_err_t post_save(httpd_req_t *req)
 {
     if (!check_auth(req)) {
@@ -635,6 +743,35 @@ static esp_err_t post_save(httpd_req_t *req)
         settings_save(c);
         ok = ha_test(tmsg, sizeof(tmsg));
         msg = tmsg;
+    } else if (strcmp(section, "mqtt") == 0) {
+        c->mqtt_on = form_get(body, "on", v, 512) && v[0] == '1';
+        if (form_get(body, "uri", v, 512)) {
+            if (v[0] && !strstr(v, "://")) {
+                snprintf(c->mqtt_uri, sizeof(c->mqtt_uri), "mqtt://%s", v);
+            } else {
+                strlcpy(c->mqtt_uri, v, sizeof(c->mqtt_uri));
+            }
+        }
+        if (form_get(body, "user", v, 512)) {
+            strlcpy(c->mqtt_user, v, sizeof(c->mqtt_user));
+        }
+        if (form_get(body, "pw", v, 512) && v[0]) {
+            strlcpy(c->mqtt_pass, v, sizeof(c->mqtt_pass));
+        }
+        if (form_get(body, "loc", v, 512) && v[0]) {
+            strlcpy(c->mqtt_loc, v, sizeof(c->mqtt_loc));
+        }
+        if (form_get(body, "dev", v, 512) && v[0]) {
+            strlcpy(c->mqtt_dev, v, sizeof(c->mqtt_dev));
+        }
+        if (c->mqtt_on && strncmp(c->mqtt_uri, "mqtt://", 7) != 0) {
+            msg = "Only mqtt:// (plain TCP) is supported";
+            ok = false;
+        } else {
+            settings_save(c);
+            mqtt_ha_restart();
+            msg = c->mqtt_on ? "MQTT saved, connecting (state shown below after a reload)" : "MQTT off";
+        }
     } else if (strcmp(section, "clock") == 0) {
         c->ntp_on = form_get(body, "ntp", v, 512) && v[0] == '1';
         if (form_get(body, "server", v, 512)) {
@@ -796,6 +933,7 @@ esp_err_t webui_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 10240;  // HA test (possibly TLS) runs in a handler
     cfg.lru_purge_enable = true;
+    cfg.max_uri_handlers = 16;  // default 8; more are registered below
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     cfg.core_id = 0;
     cfg.task_priority = 4;
@@ -810,11 +948,15 @@ esp_err_t webui_start(void)
         {.uri = "/api/ot", .method = HTTP_GET, .handler = get_ot},
         {.uri = "/api/config", .method = HTTP_GET, .handler = get_config},
         {.uri = "/api/otlog.csv", .method = HTTP_GET, .handler = get_otlog},
+        {.uri = "/api/kpi", .method = HTTP_GET, .handler = get_kpi},
+        {.uri = "/api/log.csv", .method = HTTP_GET, .handler = get_log},
         {.uri = "/save/*", .method = HTTP_POST, .handler = post_save},
         {.uri = "/ota", .method = HTTP_POST, .handler = post_ota},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        httpd_register_uri_handler(s_server, &uris[i]);
+        if (httpd_register_uri_handler(s_server, &uris[i]) != ESP_OK) {
+            ESP_LOGE(TAG, "could not register %s", uris[i].uri);
+        }
     }
     ESP_LOGI(TAG, "web setup on port 80");
     return ESP_OK;

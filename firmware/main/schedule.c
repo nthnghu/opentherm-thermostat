@@ -1,4 +1,5 @@
 #include "schedule.h"
+#include "cfgtable.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,50 +18,40 @@ static float clampf(float v, float lo, float hi)
 
 /* ------------------------------------------------------------- config */
 
-typedef enum { T_BOOL, T_U8, T_U16, T_FLOAT, T_TIME } ftype_t;
-
-typedef struct {
-    const char *name;
-    ftype_t type;
-    size_t off;
-    float min, max;
-    const char *help;
-} field_t;
-
-#define F(n, t, lo, hi, h) {#n, t, offsetof(sched_config_t, n), lo, hi, h}
+#define F(n, t, lo, hi, h) CT_FIELD(sched_config_t, n, t, lo, hi, h)
 #define W(i) \
-    {"dhw_win" #i "_start", T_TIME, offsetof(sched_config_t, dhw_win[i - 1].start), 0, 1439, \
+    {"dhw_win" #i "_start", CT_TIME_OPT, offsetof(sched_config_t, dhw_win[i - 1].start), 0, 1439, \
      "DHW window " #i ": start (HH:MM, - = unused)"}, \
-    {"dhw_win" #i "_end", T_TIME, offsetof(sched_config_t, dhw_win[i - 1].end), 0, 1439, \
+    {"dhw_win" #i "_end", CT_TIME_OPT, offsetof(sched_config_t, dhw_win[i - 1].end), 0, 1439, \
      "DHW window " #i ": end (HH:MM, may pass midnight)"}
-static const field_t FIELDS[] = {
-    F(prog_on, T_BOOL, 0, 1, "weekly Comfort/Eco program on/off (off = constant setpoint); edit with PROG"),
-    F(eco_setback_k, T_FLOAT, 0.5f, 6, "Eco = Comfort − this (K)"),
-    F(boost_on, T_BOOL, 0, 1, "boost feature on/off"),
-    F(boost_k, T_FLOAT, 0.5f, 3, "boost: Comfort + this (K)"),
-    F(boost_min, T_U16, 10, 240, "boost: length (min)"),
-    F(away_on, T_BOOL, 0, 1, "away/holiday feature on/off"),
-    F(away_c, T_FLOAT, 5, 20, "away: room target (°C)"),
-    F(away_dhw_off, T_BOOL, 0, 1, "away: hot water off (the tank guard still applies)"),
-    F(summer_on, T_BOOL, 0, 1, "summer mode on/off: CH off while the 24 h outdoor mean is warm"),
-    F(summer_c, T_FLOAT, 10, 25, "summer: CH off at or above this 24 h outdoor mean (°C)"),
-    F(summer_hyst_k, T_FLOAT, 0.5f, 5, "summer: CH back on below summer_c − this (K)"),
-    F(dhw_mode, T_U8, 0, 2, "hot water: 0 = always enabled, 1 = time windows, 2 = off"),
+static const ct_field_t FIELDS[] = {
+    F(prog_on, CT_BOOL, 0, 1, "weekly Comfort/Eco program on/off (off = constant setpoint); edit with PROG"),
+    F(eco_setback_k, CT_FLOAT, 0.5f, 6, "Eco = Comfort − this (K)"),
+    F(boost_on, CT_BOOL, 0, 1, "boost feature on/off"),
+    F(boost_k, CT_FLOAT, 0.5f, 3, "boost: Comfort + this (K)"),
+    F(boost_min, CT_U16, 10, 240, "boost: length (min)"),
+    F(away_on, CT_BOOL, 0, 1, "away/holiday feature on/off"),
+    F(away_c, CT_FLOAT, 5, 20, "away: room target (°C)"),
+    F(away_dhw_off, CT_BOOL, 0, 1, "away: hot water off (the tank guard still applies)"),
+    F(summer_on, CT_BOOL, 0, 1, "summer mode on/off: CH off while the 24 h outdoor mean is warm"),
+    F(summer_c, CT_FLOAT, 10, 25, "summer: CH off at or above this 24 h outdoor mean (°C)"),
+    F(summer_hyst_k, CT_FLOAT, 0.5f, 5, "summer: CH back on below summer_c − this (K)"),
+    F(dhw_mode, CT_U8, 0, 2, "hot water: 0 = always enabled, 1 = time windows, 2 = off"),
     W(1), W(2), W(3),
-    F(guard_on, T_BOOL, 0, 1, "tank guard on/off: enable hot water while the tank is below guard_c"),
-    F(guard_c, T_FLOAT, 30, 55, "tank guard: lowest tank temperature (°C)"),
-    F(guard_hyst_k, T_FLOAT, 1, 15, "tank guard: stays on until guard_c + this (K)"),
-    F(piggy_on, T_BOOL, 0, 1, "piggy-back on/off: enable hot water right after a heating burn (windows mode)"),
-    F(piggy_min, T_U16, 5, 60, "piggy-back: length (min)"),
-    F(dhw_boost_min, T_U16, 0, 240, "hot water boost: length (min, 0 = feature off)"),
-    F(dhw_set_on, T_BOOL, 0, 1, "write the tank setpoint to the boiler (ID 56) on/off; off = panel value"),
-    F(dhw_set_c, T_FLOAT, 35, 60, "tank setpoint written to the boiler (°C)"),
-    F(pasteur_on, T_BOOL, 0, 1, "weekly pasteurisation on/off (needs ID 56 writes to work)"),
-    F(pasteur_day, T_U8, 0, 6, "pasteurisation: day (0 = Monday)"),
-    F(pasteur_min, T_TIME, 0, 1439, "pasteurisation: start time (HH:MM)"),
-    F(pasteur_c, T_FLOAT, 60, 75, "pasteurisation: tank setpoint (°C)"),
-    F(pasteur_hold_min, T_U16, 5, 120, "pasteurisation: time at temperature (min)"),
-    F(pasteur_timeout_min, T_U16, 30, 360, "pasteurisation: give up after (min)"),
+    F(guard_on, CT_BOOL, 0, 1, "tank guard on/off: enable hot water while the tank is below guard_c"),
+    F(guard_c, CT_FLOAT, 30, 55, "tank guard: lowest tank temperature (°C)"),
+    F(guard_hyst_k, CT_FLOAT, 1, 15, "tank guard: stays on until guard_c + this (K)"),
+    F(piggy_on, CT_BOOL, 0, 1, "piggy-back on/off: enable hot water right after a heating burn (windows mode)"),
+    F(piggy_min, CT_U16, 5, 60, "piggy-back: length (min)"),
+    F(dhw_boost_min, CT_U16, 0, 240, "hot water boost: length (min, 0 = feature off)"),
+    F(dhw_set_on, CT_BOOL, 0, 1, "write the tank setpoint to the boiler (ID 56) on/off; off = panel value"),
+    F(dhw_set_c, CT_FLOAT, 35, 60, "tank setpoint written to the boiler (°C)"),
+    F(pasteur_on, CT_BOOL, 0, 1, "weekly pasteurisation on/off (needs ID 56 writes to work)"),
+    F(pasteur_day, CT_U8, 0, 6, "pasteurisation: day (0 = Monday)"),
+    F(pasteur_min, CT_TIME, 0, 1439, "pasteurisation: start time (HH:MM)"),
+    F(pasteur_c, CT_FLOAT, 60, 75, "pasteurisation: tank setpoint (°C)"),
+    F(pasteur_hold_min, CT_U16, 5, 120, "pasteurisation: time at temperature (min)"),
+    F(pasteur_timeout_min, CT_U16, 30, 360, "pasteurisation: give up after (min)"),
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 
@@ -115,38 +106,6 @@ void sched_default_config(sched_config_t *c)
     c->pasteur_timeout_min = 120;
 }
 
-static float get_f(const sched_config_t *c, const field_t *f)
-{
-    const uint8_t *p = (const uint8_t *)c + f->off;
-    switch (f->type) {
-    case T_BOOL: return *(const bool *)p;
-    case T_U8: return *p;
-    case T_U16:
-    case T_TIME: return *(const uint16_t *)p;
-    default: return *(const float *)p;
-    }
-}
-
-static void put_f(sched_config_t *c, const field_t *f, float v)
-{
-    uint8_t *p = (uint8_t *)c + f->off;
-    if (f->type == T_TIME && v == SCHED_UNUSED) {
-        *(uint16_t *)p = SCHED_UNUSED;
-        return;
-    }
-    if (isnan(v)) {
-        v = f->min;
-    }
-    v = clampf(v, f->min, f->max);
-    switch (f->type) {
-    case T_BOOL: *(bool *)p = v != 0; break;
-    case T_U8: *p = (uint8_t)lroundf(v); break;
-    case T_U16:
-    case T_TIME: *(uint16_t *)p = (uint16_t)lroundf(v); break;
-    default: *(float *)p = v; break;
-    }
-}
-
 static int cmp_point(const void *a, const void *b)
 {
     const sched_point_t *x = a, *y = b;
@@ -155,13 +114,7 @@ static int cmp_point(const void *a, const void *b)
 
 void sched_sanitize(sched_config_t *c)
 {
-    for (int i = 0; i < NFIELDS; i++) {
-        if (FIELDS[i].type == T_TIME && get_f(c, &FIELDS[i]) == SCHED_UNUSED &&
-            strncmp(FIELDS[i].name, "dhw_win", 7) == 0) {
-            continue;  // unused window stays unused
-        }
-        put_f(c, &FIELDS[i], get_f(c, &FIELDS[i]));
-    }
+    ct_sanitize(c, FIELDS, NFIELDS);
     for (int w = 0; w < SCHED_WINDOWS; w++) {
         if (c->dhw_win[w].start == SCHED_UNUSED || c->dhw_win[w].end == SCHED_UNUSED) {
             c->dhw_win[w] = (sched_window_t){SCHED_UNUSED, SCHED_UNUSED};
@@ -196,21 +149,8 @@ const char *sched_config_help(int idx)
     return idx >= 0 && idx < NFIELDS ? FIELDS[idx].help : NULL;
 }
 
-static void fmt_time(uint16_t m, char *out, size_t size)
-{
-    if (m == SCHED_UNUSED) {
-        snprintf(out, size, "-");
-    } else {
-        snprintf(out, size, "%02d:%02d", m / 60, m % 60);
-    }
-}
-
-// "HH:MM" or "H:MM" → minutes; "-" → SCHED_UNUSED. Returns -1 on error.
 static int parse_time(const char *s)
 {
-    if (strcmp(s, "-") == 0) {
-        return SCHED_UNUSED;
-    }
     int h, m;
     char tail;
     if (sscanf(s, "%d:%d%c", &h, &m, &tail) != 2 || h < 0 || h > 23 || m < 0 || m > 59) {
@@ -224,51 +164,17 @@ bool sched_config_get(const sched_config_t *c, int idx, char *out, size_t size)
     if (idx < 0 || idx >= NFIELDS) {
         return false;
     }
-    const field_t *f = &FIELDS[idx];
-    float v = get_f(c, f);
-    if (f->type == T_TIME) {
-        fmt_time((uint16_t)v, out, size);
-    } else if (f->type == T_FLOAT) {
-        snprintf(out, size, "%.2f", v);
-    } else {
-        snprintf(out, size, "%d", (int)v);
-    }
+    ct_get(c, &FIELDS[idx], out, size);
     return true;
 }
 
 bool sched_config_set(sched_config_t *c, const char *name, const char *value)
 {
-    for (int i = 0; i < NFIELDS; i++) {
-        const field_t *f = &FIELDS[i];
-        if (strcmp(f->name, name) != 0) {
-            continue;
-        }
-        float v;
-        if (f->type == T_TIME) {
-            int m = parse_time(value);
-            if (m < 0 || (m == SCHED_UNUSED && strncmp(f->name, "dhw_win", 7) != 0)) {
-                return false;
-            }
-            v = (float)m;
-        } else if (f->type == T_BOOL && (strcasecmp(value, "on") == 0 || strcasecmp(value, "true") == 0)) {
-            v = 1;
-        } else if (f->type == T_BOOL && (strcasecmp(value, "off") == 0 || strcasecmp(value, "false") == 0)) {
-            v = 0;
-        } else {
-            char *end;
-            v = strtof(value, &end);
-            if (end == value || *end) {
-                return false;
-            }
-        }
-        if (f->type != T_TIME && (v < f->min || v > f->max)) {
-            return false;
-        }
-        put_f(c, f, v);
-        sched_sanitize(c);
-        return true;
+    if (!ct_set(c, FIELDS, NFIELDS, name, value)) {
+        return false;
     }
-    return false;
+    sched_sanitize(c);
+    return true;
 }
 
 void sched_prog_format(const sched_config_t *c, int wday, char *out, size_t size)
@@ -306,7 +212,7 @@ bool sched_prog_parse(sched_config_t *c, int wday, const char *text)
         *eq = 0;
         int m = parse_time(tok);
         char l = eq[1];
-        if (m < 0 || m == SCHED_UNUSED || eq[2] || (l != 'c' && l != 'e' && l != 'C' && l != 'E')) {
+        if (m < 0 || eq[2] || (l != 'c' && l != 'e' && l != 'C' && l != 'E')) {
             return false;
         }
         pts[n++] = (sched_point_t){(uint16_t)m, (l == 'c' || l == 'C') ? SCHED_COMFORT : SCHED_ECO};

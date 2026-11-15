@@ -140,6 +140,51 @@ Web: `/api/status` has `schedule` and `dhw` objects; `/api/config` also returns 
 
 The screen's status line shows the plan, for example "Eco 19.0 °C until 05:30", "Boost 22.0 °C, 45 min left", "Away 15 °C until 11.20 18:00" or "Summer: heating off".
 
+## Data log, KPIs, alerts and MQTT (Phase 1, milestone 4)
+
+**Data log (`datalog.c`, pure C, host-tested):**
+- one record per minute: room, target, flow/return/tank/pressure, modulation, flame and DHW seconds, starts, estimated gas input, controller state, flags, RSSI, OT errors;
+- kept for 7 days in PSRAM. It is RAM only, so a restart clears it; the long history lives in VictoriaMetrics through MQTT;
+- download from the web page: `/api/log.csv[?h=N]`.
+
+**KPIs (last hour and last 24 h, `/api/kpi`, serial `STAT` → `KPI` line):**
+- CH starts per hour, median CH burn, % burns shorter than 10 min;
+- % CH burner time with the return below 55 °C, mean modulation, % time at minimum;
+- comfort degree-hours (below target − 0.5 K while heating may run);
+- gas input estimate.
+
+The gas estimate assumes ID 17 is relative between the minimum and maximum input (ID 15), with the Tera 24 values as fallback. Check it against the gas meter.
+
+**Alerts (`alerts.c`, pure C, host-tested):** each has its own switch and thresholds in `CFG`.
+
+| Alert | Fires when |
+|---|---|
+| boiler fault | fault bit set, with the ID 5 code |
+| low pressure | below 1.0 bar |
+| pressure falling | dropped 0.3 bar over 24 h |
+| link lost | after 60 s |
+| room sensor lost | after 60 s |
+| short cycling | ≥ 4 starts in the last hour with a median burn under 3 min |
+| room not reaching target | 1 K below for 3 h |
+| pasteurisation failed | the last run did not finish |
+| no clock | after 10 min |
+
+An alert clears 60 s after its condition is gone. The most important one is shown in the screen's status line and sent to HA.
+
+**MQTT (`mqtt_ha.c`):** set it up on the web page under MQTT: broker `mqtt://host:1883`, user, password, location, device. The topics follow the monitoring stack's convention:
+- `sensors/<location>/<device>`: state JSON every 10 s. Telegraf stores its numeric fields as `iot_<field>{location,device}`;
+- `sensors/<location>/<device>/status/availability`: `online`/`offline` (last will);
+- `sensors/<location>/<device>/cmd/{setpoint,mode,preset,dhw_boost}`: commands from HA. They are range-checked and act like the device buttons;
+- `homeassistant/.../config`: discovery. It is sent after every connect and when HA restarts.
+
+In HA the device "Thermostat" appears with:
+- a climate entity: setpoint, Heat/Off, presets boost/away;
+- the sensors and KPIs;
+- one problem sensor per alert;
+- a "Hot water boost" button.
+
+The thermostat never depends on MQTT. Serial `MQTT dump` prints the state JSON and a discovery payload.
+
 ### Host tests
 
 The pure-C parts build and run on the Mac, without ESP-IDF:

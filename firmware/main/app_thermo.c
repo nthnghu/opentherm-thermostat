@@ -126,7 +126,10 @@ static void update_main(void)
     } else {
         snprintf(loss, sizeof(loss), "%s", cfg.loss_mode == CTRL_LOSS_HEAT_OFF ? "heating off" : "last setting kept");
     }
-    if (!st.sensor_ok) {
+    if (st.alert_count && !(st.alerts & (1u << ALERT_SENSOR))) {
+        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " %s#  /  %s%s", (unsigned long)ui_hex(UI_WARN),
+                              st.alert_text, plan, boiler);
+    } else if (!st.sensor_ok) {
         lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering - %s#",
                               (unsigned long)ui_hex(UI_ERR), loss);
     } else if (st.sensor_age_s >= 6) {

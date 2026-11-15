@@ -79,6 +79,13 @@ void settings_load(void)
     load_u8(h, "theme", &c->theme_mode, 0);
     load_u16(h, "day_st", &c->day_start, 7 * 60);
     load_u16(h, "day_en", &c->day_end, 19 * 60);
+    load_u8(h, "mqtt_on", &b8, 0);
+    c->mqtt_on = b8;
+    load_str(h, "mqtt_uri", c->mqtt_uri, sizeof(c->mqtt_uri), "");
+    load_str(h, "mqtt_user", c->mqtt_user, sizeof(c->mqtt_user), "");
+    load_str(h, "mqtt_pass", c->mqtt_pass, sizeof(c->mqtt_pass), "");
+    load_str(h, "mqtt_loc", c->mqtt_loc, sizeof(c->mqtt_loc), "home");
+    load_str(h, "mqtt_dev", c->mqtt_dev, sizeof(c->mqtt_dev), "thermostat");
     if (h) {
         nvs_close(h);
     }
@@ -145,6 +152,12 @@ esp_err_t settings_save(const settings_t *s)
     CHK(nvs_set_u8(h, "theme", s->theme_mode));
     CHK(nvs_set_u16(h, "day_st", s->day_start));
     CHK(nvs_set_u16(h, "day_en", s->day_end));
+    CHK(nvs_set_u8(h, "mqtt_on", s->mqtt_on));
+    CHK(nvs_set_str(h, "mqtt_uri", s->mqtt_uri));
+    CHK(nvs_set_str(h, "mqtt_user", s->mqtt_user));
+    CHK(nvs_set_str(h, "mqtt_pass", s->mqtt_pass));
+    CHK(nvs_set_str(h, "mqtt_loc", s->mqtt_loc));
+    CHK(nvs_set_str(h, "mqtt_dev", s->mqtt_dev));
 #undef CHK
     err = nvs_commit(h);
     nvs_close(h);

@@ -40,6 +40,14 @@ static bool s_cfg_dirty;
 static sched_t s_sched;           // under s_lock (the user actions change it from other tasks)
 static sched_config_t s_scfg;
 static bool s_scfg_dirty;
+static alerts_t s_alerts;         // thermostat task (config changes under s_lock)
+static alert_config_t s_acfg;
+static bool s_acfg_changed, s_acfg_dirty;
+static dl_t s_dl;                 // under s_lock
+static dl_kpi_t s_kpi1, s_kpi24;
+static volatile int s_rssi;
+#define LOG_RECS (7 * 1440)
+#define LOG_BURNS 4096
 static thermo_sample_t *s_hist;   // PSRAM ring
 static int s_hist_head, s_hist_count;
 
@@ -114,6 +122,36 @@ static void save_sched_config(void)
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "schedule settings saved");
+}
+
+static void load_alert_config(void)
+{
+    alert_default_config(&s_acfg);
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
+        alert_config_t c;
+        size_t len = sizeof(c);
+        if (nvs_get_blob(h, "alert", &c, &len) == ESP_OK && len == sizeof(c) && c.version == ALERT_CONFIG_VERSION) {
+            s_acfg = c;
+        }
+        nvs_close(h);
+    }
+    alert_sanitize(&s_acfg);
+}
+
+static void save_alert_config(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    LOCK();
+    alert_config_t c = s_acfg;
+    UNLOCK();
+    nvs_set_blob(h, "alert", &c, sizeof(c));
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "alert settings saved");
 }
 
 static void load(void)
@@ -212,6 +250,10 @@ static void boiler_read(otb_status_t *b)
     s_st.outside_valid = b->valid & OTB_V_TOUT;  // boiler outdoor probe; HA outdoor comes with Phase 1b
     s_st.outside_c = b->outside_c;
     s_st.id56 = b->dhw_set_verify;
+    s_st.press_valid = b->valid & OTB_V_PRESS;
+    s_st.pressure_bar = b->pressure_bar;
+    s_st.boiler_fault = b->link == OTB_LINK_UP && (b->slave_flags & OT_S_FAULT);
+    s_st.oem_fault = b->oem_fault;
     UNLOCK();
 }
 
@@ -397,6 +439,70 @@ static void thermo_task(void *arg)
         s_st.pi_i = o->i;
         s_st.duty = o->duty;
         s_st.starts_last_h = o->starts_last_h;
+        // Data log and KPIs (every second; a record per minute)
+        float cap = (b.valid & OTB_V_CAPS) ? b.max_cap_kw : 0;
+        dl_sample_t ds = {
+            .epoch = clock_ok ? (int64_t)wall : 0,
+            .sensor_ok = s_st.sensor_ok, .room_c = s_st.room_c, .humidity = s_st.humidity,
+            .target_c = so->target_c, .setpoint_c = s_st.setpoint,
+            .heat_mode = in.heat_mode, .ch_allowed = so->ch_allowed,
+            .boiler_up = in.boiler_ok, .sim = s_st.boiler_sim,
+            .flame = in.flame, .dhw_active = in.dhw_active, .fault = s_st.boiler_fault,
+            .ch_enable = o->ch_enable, .dhw_enable = so->dhw_enable,
+            .tset_c = o->tset, .req_c = o->req_c, .p = o->p, .i = o->i,
+            .flow_valid = in.flow_valid, .ret_valid = (b.valid & OTB_V_RET) != 0, .mod_valid = in.mod_valid,
+            .press_valid = s_st.press_valid, .tank_valid = si.tank_valid, .out_valid = si.outside_valid,
+            .flow_c = b.flow_c, .return_c = b.return_c, .modulation = b.modulation, .pressure_bar = b.pressure_bar,
+            .tank_c = b.tank_c, .outside_c = b.outside_c,
+            .ctrl_state = o->state, .sched_src = so->src, .dhw_reason = so->dhw_reason,
+            .rssi = (int8_t)s_rssi, .ot_errors = b.timeouts + b.bad,
+            .cap_kw = cap, .min_kw = cap * ((b.valid & OTB_V_CAPS) ? b.min_mod_pct : 0) / 100.0f,
+        };
+        if (datalog_tick(&s_dl, &ds) || loop == 0) {
+            datalog_kpi(&s_dl, 1, &s_kpi1);
+            datalog_kpi(&s_dl, 24, &s_kpi24);
+        }
+        s_st.gas_kwh_total = s_dl.total_kwh;
+        s_st.ch_starts_total = s_dl.total_ch_starts;
+        s_st.dhw_starts_total = s_dl.total_dhw_starts;
+        s_st.burner_h_total = s_dl.total_burner_s / 3600.0;
+
+        // Alerts
+        if (s_acfg_changed) {
+            s_acfg_changed = false;
+            alerts_set_config(&s_alerts, &s_acfg);
+        }
+        alert_in_t ai = {
+            .now_s = now / 1e6,
+            .boiler_fault = s_st.boiler_fault,
+            .oem_fault = b.oem_fault,
+            .fault_valid = (b.valid & OTB_V_FAULT) != 0,
+            .press_valid = s_st.press_valid,
+            .pressure_bar = b.pressure_bar,
+            .link_up = b.link == OTB_LINK_UP,
+            .link_known = b.link != OTB_LINK_UNKNOWN,
+            .sensor_ok = s_st.sensor_ok,
+            .ch_starts_1h = s_kpi1.ch_starts,
+            .median_burn_1h_min = s_kpi1.median_burn_min,
+            .ch_burns_1h = s_kpi1.ch_burns,
+            .heating_allowed = in.heat_mode,
+            .room_c = s_st.room_c,
+            .target_c = so->target_c,
+            .pasteur_result = so->pasteur_result,
+            .clock_ok = clock_ok,
+        };
+        const alert_out_t *ao = alerts_step(&s_alerts, &ai);
+        uint16_t bits = 0;
+        for (int a = 0; a < ALERT_COUNT; a++) {
+            bits |= ao->active[a] ? 1u << a : 0;
+        }
+        if (bits != s_st.alerts) {
+            ESP_LOGW(TAG, "alerts %04x -> %04x: %s", s_st.alerts, bits, ao->text[0] ? ao->text : "none");
+        }
+        s_st.alerts = bits;
+        s_st.alert_count = (uint8_t)ao->count;
+        strlcpy(s_st.alert_text, ao->text, sizeof(s_st.alert_text));
+
         bool sim = s_st.boiler_sim;
         s_st.loops++;
         otb_cmd_t cmd = {.ch_enable = o->ch_enable, .dhw_enable = so->dhw_enable, .tset = o->tset,
@@ -423,6 +529,10 @@ static void thermo_task(void *arg)
                 s_scfg_dirty = false;
                 save_sched_config();
             }
+            if (s_acfg_dirty) {
+                s_acfg_dirty = false;
+                save_alert_config();
+            }
         }
 
         // Fixed 1 s cadence; if a boiler timeout made us late, don't try to catch up.
@@ -439,6 +549,11 @@ void thermo_start(void)
     load();
     load_ctrl_config();
     load_sched_config();
+    load_alert_config();
+    alerts_init(&s_alerts, &s_acfg);
+    dl_rec_t *recs = heap_caps_calloc(LOG_RECS, sizeof(dl_rec_t), MALLOC_CAP_SPIRAM);
+    dl_burn_t *burns = heap_caps_calloc(LOG_BURNS, sizeof(dl_burn_t), MALLOC_CAP_SPIRAM);
+    datalog_init(&s_dl, recs, recs ? LOG_RECS : 0, burns, burns ? LOG_BURNS : 0);
     s_st.hysteresis = s_cfg.onoff_hyst_k;
     ctrl_init(&s_ctrl, &s_cfg);
     sched_init(&s_sched, &s_scfg);
@@ -449,7 +564,7 @@ void thermo_start(void)
     ESP_LOGI(TAG, "start: setpoint %.1f, mode %s, offset %.1f, boiler %s", s_st.setpoint,
              s_st.mode ? "heat" : "off", s_st.offset, s_st.boiler_sim ? "simulated" : "real");
     // Highest application priority, pinned to core 1 (the UI runs on core 0).
-    xTaskCreatePinnedToCore(thermo_task, "thermo", 6144, NULL, 20, NULL, 1);
+    xTaskCreatePinnedToCore(thermo_task, "thermo", 8192, NULL, 20, NULL, 1);  // KPI pass needs ~1 KB
 }
 
 void thermo_get(thermo_state_t *out)
@@ -603,4 +718,56 @@ bool thermo_pasteurise(bool on)
     bool ok = sched_pasteur_now(&s_sched, on);
     UNLOCK();
     return ok;
+}
+
+void thermo_get_alert_config(alert_config_t *out)
+{
+    LOCK();
+    *out = s_acfg;
+    UNLOCK();
+}
+
+void thermo_set_alert_config(const alert_config_t *c)
+{
+    alert_config_t n = *c;
+    alert_sanitize(&n);
+    LOCK();
+    s_acfg = n;
+    s_acfg_changed = true;
+    s_acfg_dirty = true;
+    UNLOCK();
+    s_dirty_since_us = esp_timer_get_time();
+}
+
+void thermo_get_kpi(dl_kpi_t *h1, dl_kpi_t *h24)
+{
+    LOCK();
+    if (h1) {
+        *h1 = s_kpi1;
+    }
+    if (h24) {
+        *h24 = s_kpi24;
+    }
+    UNLOCK();
+}
+
+int thermo_log_count(void)
+{
+    LOCK();
+    int n = datalog_count(&s_dl);
+    UNLOCK();
+    return n;
+}
+
+bool thermo_log_get(int i, dl_rec_t *out)
+{
+    LOCK();
+    bool ok = datalog_get(&s_dl, i, out);
+    UNLOCK();
+    return ok;
+}
+
+void thermo_set_rssi(int rssi)
+{
+    s_rssi = rssi;
 }

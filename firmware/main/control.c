@@ -1,4 +1,5 @@
 #include "control.h"
+#include "cfgtable.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,45 +18,35 @@
 
 /* ------------------------------------------------------------- config */
 
-typedef enum { T_BOOL, T_U8, T_U16, T_FLOAT } ftype_t;
-
-typedef struct {
-    const char *name;
-    ftype_t type;
-    size_t off;
-    float min, max;
-    const char *help;
-} field_t;
-
-#define F(n, t, lo, hi, h) {#n, t, offsetof(ctrl_config_t, n), lo, hi, h}
-static const field_t FIELDS[] = {
-    F(strategy, T_U8, 0, 1, "0 = on/off baseline (fixed flow), 1 = PI load compensation"),
-    F(flow_max_c, T_FLOAT, 30, 80, "highest flow setpoint ever sent (°C)"),
-    F(flow_min_c, T_FLOAT, 25, 60, "minimum-fire flow (°C); below it the low-load manager takes over"),
-    F(onoff_hyst_k, T_FLOAT, 0.05f, 1, "on/off: hysteresis either side of the setpoint (K)"),
-    F(onoff_flow_c, T_FLOAT, 30, 80, "on/off: fixed flow setpoint (°C)"),
-    F(pi_base_c, T_FLOAT, 20, 60, "PI: base flow (°C)"),
-    F(pi_kp, T_FLOAT, 1, 40, "PI: gain (°C flow per K room error)"),
-    F(pi_ti_h, T_FLOAT, 0.25f, 12, "PI: integral time (h)"),
-    F(pi_deadband_k, T_FLOAT, 0, 0.5f, "PI: no integration within ± this error (K)"),
-    F(pi_i_limit_k, T_FLOAT, 0, 30, "PI: integral limit (K of flow)"),
-    F(rate_k_per_min, T_FLOAT, 0, 10, "flow setpoint slew limit (K/min, 0 = off)"),
-    F(hold_on, T_BOOL, 0, 1, "minimum-fire hold on/off"),
-    F(hold_k, T_FLOAT, 0, 10, "minimum-fire hold: setpoint = flow − this (K)"),
-    F(duty_on, T_BOOL, 0, 1, "duty cycling below the minimum-fire flow on/off"),
-    F(duty_min_burn_s, T_U16, 180, 1800, "duty: shortest planned burn (s)"),
-    F(duty_min_off_s, T_U16, 60, 3600, "duty: shortest pause (s)"),
-    F(max_starts_h, T_U8, 1, 12, "duty: most CH burner starts per hour"),
-    F(freeze_on_dhw, T_BOOL, 0, 1, "freeze the PI integral while the boiler heats the tank"),
-    F(loss_mode, T_U8, 0, 2, "room sensor lost: 0 = feature off, 1 = heating off, 2 = fixed flow with duty"),
-    F(loss_flow_c, T_FLOAT, 25, 70, "sensor lost: fixed flow (°C)"),
-    F(loss_duty_pct, T_U8, 0, 100, "sensor lost: % of each 30 min period with heat"),
-    F(frost_on, T_BOOL, 0, 1, "frost floor on/off (heats in any mode below frost_room_c)"),
-    F(frost_room_c, T_FLOAT, 2, 12, "frost floor: room temperature (°C)"),
-    F(frost_flow_c, T_FLOAT, 25, 60, "frost floor: flow setpoint (°C)"),
-    F(ufh_on, T_BOOL, 0, 1, "underfloor floor on/off (flow ≥ mixer + margin while heating)"),
-    F(ufh_mixer_c, T_FLOAT, 20, 55, "underfloor: thermostatic mixer setting (°C)"),
-    F(ufh_margin_k, T_FLOAT, 0, 15, "underfloor: margin above the mixer setting (K)"),
+#define F(n, t, lo, hi, h) CT_FIELD(ctrl_config_t, n, t, lo, hi, h)
+static const ct_field_t FIELDS[] = {
+    F(strategy, CT_U8, 0, 1, "0 = on/off baseline (fixed flow), 1 = PI load compensation"),
+    F(flow_max_c, CT_FLOAT, 30, 80, "highest flow setpoint ever sent (°C)"),
+    F(flow_min_c, CT_FLOAT, 25, 60, "minimum-fire flow (°C); below it the low-load manager takes over"),
+    F(onoff_hyst_k, CT_FLOAT, 0.05f, 1, "on/off: hysteresis either side of the setpoint (K)"),
+    F(onoff_flow_c, CT_FLOAT, 30, 80, "on/off: fixed flow setpoint (°C)"),
+    F(pi_base_c, CT_FLOAT, 20, 60, "PI: base flow (°C)"),
+    F(pi_kp, CT_FLOAT, 1, 40, "PI: gain (°C flow per K room error)"),
+    F(pi_ti_h, CT_FLOAT, 0.25f, 12, "PI: integral time (h)"),
+    F(pi_deadband_k, CT_FLOAT, 0, 0.5f, "PI: no integration within ± this error (K)"),
+    F(pi_i_limit_k, CT_FLOAT, 0, 30, "PI: integral limit (K of flow)"),
+    F(rate_k_per_min, CT_FLOAT, 0, 10, "flow setpoint slew limit (K/min, 0 = off)"),
+    F(hold_on, CT_BOOL, 0, 1, "minimum-fire hold on/off"),
+    F(hold_k, CT_FLOAT, 0, 10, "minimum-fire hold: setpoint = flow − this (K)"),
+    F(duty_on, CT_BOOL, 0, 1, "duty cycling below the minimum-fire flow on/off"),
+    F(duty_min_burn_s, CT_U16, 180, 1800, "duty: shortest planned burn (s)"),
+    F(duty_min_off_s, CT_U16, 60, 3600, "duty: shortest pause (s)"),
+    F(max_starts_h, CT_U8, 1, 12, "duty: most CH burner starts per hour"),
+    F(freeze_on_dhw, CT_BOOL, 0, 1, "freeze the PI integral while the boiler heats the tank"),
+    F(loss_mode, CT_U8, 0, 2, "room sensor lost: 0 = feature off, 1 = heating off, 2 = fixed flow with duty"),
+    F(loss_flow_c, CT_FLOAT, 25, 70, "sensor lost: fixed flow (°C)"),
+    F(loss_duty_pct, CT_U8, 0, 100, "sensor lost: % of each 30 min period with heat"),
+    F(frost_on, CT_BOOL, 0, 1, "frost floor on/off (heats in any mode below frost_room_c)"),
+    F(frost_room_c, CT_FLOAT, 2, 12, "frost floor: room temperature (°C)"),
+    F(frost_flow_c, CT_FLOAT, 25, 60, "frost floor: flow setpoint (°C)"),
+    F(ufh_on, CT_BOOL, 0, 1, "underfloor floor on/off (flow ≥ mixer + margin while heating)"),
+    F(ufh_mixer_c, CT_FLOAT, 20, 55, "underfloor: thermostatic mixer setting (°C)"),
+    F(ufh_margin_k, CT_FLOAT, 0, 15, "underfloor: margin above the mixer setting (K)"),
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 
@@ -76,37 +67,9 @@ void ctrl_default_config(ctrl_config_t *c)
     };
 }
 
-static float get_f(const ctrl_config_t *c, const field_t *f)
-{
-    const uint8_t *p = (const uint8_t *)c + f->off;
-    switch (f->type) {
-    case T_BOOL: return *(const bool *)p;
-    case T_U8: return *p;
-    case T_U16: return *(const uint16_t *)p;
-    default: return *(const float *)p;
-    }
-}
-
-static void put_f(ctrl_config_t *c, const field_t *f, float v)
-{
-    uint8_t *p = (uint8_t *)c + f->off;
-    if (isnan(v)) {
-        v = f->min;
-    }
-    v = fminf(fmaxf(v, f->min), f->max);
-    switch (f->type) {
-    case T_BOOL: *(bool *)p = v != 0; break;
-    case T_U8: *p = (uint8_t)lroundf(v); break;
-    case T_U16: *(uint16_t *)p = (uint16_t)lroundf(v); break;
-    default: *(float *)p = v; break;
-    }
-}
-
 void ctrl_sanitize(ctrl_config_t *c)
 {
-    for (int i = 0; i < NFIELDS; i++) {
-        put_f(c, &FIELDS[i], get_f(c, &FIELDS[i]));
-    }
+    ct_sanitize(c, FIELDS, NFIELDS);
     if (c->flow_min_c > c->flow_max_c) {
         c->flow_min_c = c->flow_max_c;
     }
@@ -133,45 +96,19 @@ bool ctrl_config_get(const ctrl_config_t *c, int idx, char *out, size_t size)
     if (idx < 0 || idx >= NFIELDS) {
         return false;
     }
-    const field_t *f = &FIELDS[idx];
-    float v = get_f(c, f);
-    if (f->type == T_FLOAT) {
-        snprintf(out, size, "%.2f", v);
-    } else {
-        snprintf(out, size, "%d", (int)v);
-    }
+    ct_get(c, &FIELDS[idx], out, size);
     return true;
 }
 
 bool ctrl_config_set(ctrl_config_t *c, const char *name, const char *value)
 {
-    for (int i = 0; i < NFIELDS; i++) {
-        const field_t *f = &FIELDS[i];
-        if (strcmp(f->name, name) != 0) {
-            continue;
-        }
-        float v;
-        if (f->type == T_BOOL && (strcasecmp(value, "on") == 0 || strcasecmp(value, "true") == 0)) {
-            v = 1;
-        } else if (f->type == T_BOOL && (strcasecmp(value, "off") == 0 || strcasecmp(value, "false") == 0)) {
-            v = 0;
-        } else {
-            char *end;
-            v = strtof(value, &end);
-            if (end == value || *end) {
-                return false;
-            }
-        }
-        if (v < f->min || v > f->max) {
-            return false;
-        }
-        put_f(c, f, v);
-        if (c->flow_min_c > c->flow_max_c) {
-            c->flow_min_c = c->flow_max_c;
-        }
-        return true;
+    if (!ct_set(c, FIELDS, NFIELDS, name, value)) {
+        return false;
     }
-    return false;
+    if (c->flow_min_c > c->flow_max_c) {
+        c->flow_min_c = c->flow_max_c;
+    }
+    return true;
 }
 
 /* ---------------------------------------------------------- controller */

@@ -41,6 +41,13 @@ typedef struct {
     uint8_t theme_mode;    // 0 = auto (HA sun, else day window), 1 = light, 2 = dark
     uint16_t day_start;    // light theme window when HA's sun is unknown (minutes after midnight)
     uint16_t day_end;
+    // MQTT (Home Assistant discovery + telemetry for Telegraf; mqtt_ha.c)
+    bool mqtt_on;
+    char mqtt_uri[96];     // mqtt://host:1883
+    char mqtt_user[64];
+    char mqtt_pass[96];
+    char mqtt_loc[32];     // topic sensors/<loc>/<dev>
+    char mqtt_dev[32];
 } settings_t;
 
 void settings_load(void);

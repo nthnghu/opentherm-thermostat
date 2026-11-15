@@ -5,6 +5,8 @@
 #include <time.h>
 #include "control.h"
 #include "schedule.h"
+#include "datalog.h"
+#include "alerts.h"
 
 #define THERMO_SP_MIN   5.0f
 #define THERMO_SP_MAX   30.0f
@@ -63,6 +65,18 @@ typedef struct {
     bool pasteur_running;
     uint8_t pasteur_result; // sched_pasteur_result_t
     int64_t pasteur_last;
+    // Boiler extras and totals since start
+    bool press_valid;
+    float pressure_bar;
+    bool boiler_fault;
+    uint8_t oem_fault;
+    double gas_kwh_total;   // estimate from the modulation
+    uint32_t ch_starts_total, dhw_starts_total;
+    double burner_h_total;
+    // Alerts (alerts.h)
+    uint16_t alerts;        // bit per alert_id_t
+    uint8_t alert_count;
+    char alert_text[160];   // headline, "" = none
     // Settings
     float offset;           // °C added to the sensor reading
     float hysteresis;       // °C either side of the setpoint (on/off strategy; = ctrl onoff_hyst_k)
@@ -102,6 +116,18 @@ bool thermo_boost(bool on);
 bool thermo_dhw_boost(bool on);
 bool thermo_away(bool on, int64_t until);  // until = epoch, 0 = until cancelled (saved across restarts)
 bool thermo_pasteurise(bool on);
+
+// Alert settings (alerts.h); saved like the control settings.
+void thermo_get_alert_config(alert_config_t *out);
+void thermo_set_alert_config(const alert_config_t *c);
+
+// KPIs over the last hour and the last 24 h (updated every minute).
+void thermo_get_kpi(dl_kpi_t *h1, dl_kpi_t *h24);
+// Minute log (7 days, RAM only): count and record i (0 = oldest).
+int thermo_log_count(void);
+bool thermo_log_get(int i, dl_rec_t *out);
+// Wi-Fi signal for the log (set by the MQTT task; reading it here would block the control loop).
+void thermo_set_rssi(int rssi);
 
 // Copies up to max samples, oldest first; returns the count.
 int thermo_history(thermo_sample_t *out, int max);

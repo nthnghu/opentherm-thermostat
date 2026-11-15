@@ -16,6 +16,7 @@
 #include "webui.h"
 #include "debug.h"
 #include "motion.h"
+#include "mqtt_ha.h"
 
 static const char *TAG = "main";
 
@@ -61,6 +62,7 @@ void app_main(void)
 
     timekeep_init();
     webui_start();
+    mqtt_ha_start();  // connects once Wi-Fi is up (settings: web page -> MQTT)
 
     lvgl_port_lock(0);
     ui_shell_create();
