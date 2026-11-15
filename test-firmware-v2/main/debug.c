@@ -12,6 +12,8 @@
 #include "esp_lvgl_port.h"
 #include "ui.h"
 #include "thermostat.h"
+#include "motion.h"
+#include "settings.h"
 
 static void debug_task(void *arg)
 {
@@ -40,6 +42,13 @@ static void debug_task(void *arg)
             thermo_get(&st);
             printf("STAT sensor_ok=%d room=%.2f hum=%.1f errors=%lu sp=%.1f demand=%d loops=%lu\n", st.sensor_ok, st.room_c,
                    st.humidity, (unsigned long)st.sensor_errors, st.setpoint, st.demand, (unsigned long)st.loops);
+            motion_debug_t m;
+            motion_debug(&m);
+            printf("MOT on=%d state=%s mean=%d contrast=%d changed=%d/576 delta=%d.%02d frames=%d grab_fail=%d "
+                   "detections=%lu idle_ms=%lu\n",
+                   settings_get()->motion_wake, motion_state_name(), m.mean, m.contrast, m.changed, m.delta_x100 / 100,
+                   m.delta_x100 % 100, m.frames, m.grab_fail,
+                   (unsigned long)motion_count(), (unsigned long)lv_display_get_inactive_time(NULL));
             continue;
         }
         if (strcmp(line, "SNAP") != 0) {

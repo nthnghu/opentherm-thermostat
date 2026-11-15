@@ -24,6 +24,7 @@ static volatile bool s_paused;
 static volatile motion_state_t s_state = MOTION_OFF;
 static volatile int64_t s_last_us;
 static volatile uint32_t s_count;
+static volatile int s_dbg_mean, s_dbg_changed, s_dbg_frames, s_dbg_grab_fail, s_dbg_delta, s_dbg_contrast;
 
 typedef struct {
     float cell[N];
@@ -67,8 +68,11 @@ static void wake_screen(void)
 static void motion_task(void *arg)
 {
     static grid_t cur, bg;
-    static const float thr[3] = {28, 18, 12};          // per-cell change (luma levels)
-    static const float frac[3] = {0.08f, 0.04f, 0.02f}; // share of cells that must change
+    // Per-cell threshold in units of the scene's own contrast (std-dev of the cell brightness), so a
+    // flat, low-contrast picture still registers a person; never below MIN_THR (sensor noise is ~1-2).
+    static const float thr[3] = {0.9f, 0.6f, 0.4f};      // x contrast
+    static const float frac[3] = {0.04f, 0.02f, 0.01f};  // share of cells that must change
+    const float MIN_THR = 5.0f;
     bool owner = false;   // we started the stream
     int warmup = 0, hits = 0;
     int64_t cooldown_until = 0;
@@ -95,8 +99,25 @@ static void motion_task(void *arg)
             warmup = 0;
         }
         if (!camera_grab(grid_cb, &cur)) {
+            s_dbg_grab_fail++;
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
+        }
+        s_dbg_frames++;
+        s_dbg_mean = (int)cur.mean;
+        {   // raw frame-to-frame difference (x100): sensor noise keeps this above 0 on live video
+            static grid_t prev;
+            float d = 0;
+            for (int i = 0; i < N; i++) {
+                d += fabsf(cur.cell[i] - prev.cell[i]);
+            }
+            s_dbg_delta = (int)(d * 100 / N);
+            float var = 0;  // spatial contrast: std-dev of the cell brightness
+            for (int i = 0; i < N; i++) {
+                var += (cur.cell[i] - cur.mean) * (cur.cell[i] - cur.mean);
+            }
+            s_dbg_contrast = (int)sqrtf(var / N);
+            prev = cur;
         }
         if (cur.mean < DARK_LUMA) {
             s_state = MOTION_TOO_DARK;
@@ -112,11 +133,17 @@ static void motion_task(void *arg)
             continue;
         }
         int sens = c->motion_sens > 2 ? 2 : c->motion_sens;
+        float var = 0;
+        for (int i = 0; i < N; i++) {
+            var += (bg.cell[i] - bg.mean) * (bg.cell[i] - bg.mean);
+        }
+        float cell_thr = fmaxf(thr[sens] * sqrtf(var / N), MIN_THR);
         int changed = 0;
         for (int i = 0; i < N; i++) {
             float d = fabsf((cur.cell[i] - cur.mean) - (bg.cell[i] - bg.mean));
-            changed += d > thr[sens];
+            changed += d > cell_thr;
         }
+        s_dbg_changed = changed;
         bool lights = fabsf(cur.mean - bg.mean) > 40;  // a light switched on/off: someone is there
         int64_t now = esp_timer_get_time();
         hits = (changed > frac[sens] * N || lights) ? hits + 1 : 0;
@@ -175,3 +202,14 @@ uint32_t motion_count(void)
 {
     return s_count;
 }
+
+void motion_debug(motion_debug_t *d)
+{
+    d->mean = s_dbg_mean;
+    d->changed = s_dbg_changed;
+    d->contrast = s_dbg_contrast;
+    d->delta_x100 = s_dbg_delta;
+    d->frames = s_dbg_frames;
+    d->grab_fail = s_dbg_grab_fail;
+}
+
