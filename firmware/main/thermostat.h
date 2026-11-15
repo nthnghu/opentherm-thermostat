@@ -28,6 +28,7 @@ typedef struct {
     float flow_setpoint;    // °C requested (OT ID 1)
     // Boiler (OpenTherm)
     bool boiler_sim;
+    bool sim_room;          // bench: the simulated house replaces the SHT40 temperature
     bool boiler_online;     // answered recently
     bool flame;
     float flow_c;
@@ -58,6 +59,7 @@ void thermo_set_mode(thermo_mode_t m);
 void thermo_set_offset(float c);
 void thermo_set_hysteresis(float c);
 void thermo_set_boiler_sim(bool sim);
+void thermo_set_sim_room(bool on);
 
 // Copies up to max samples, oldest first; returns the count.
 int thermo_history(thermo_sample_t *out, int max);

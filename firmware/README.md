@@ -42,3 +42,51 @@ Then on the device: Apps → Setup → Diagnostics → Update Wi-Fi chip.
 - `STAT` prints the thermostat state; `tools/serlog.py PORT SECONDS out.log` captures the log.
 
 Run them with the ESP-IDF Python (it has pyserial).
+
+## OpenTherm bus (Phase 1, version 0.2)
+
+The design is in `docs/research/10-recommendation-phase1.md`.
+
+| File | Role |
+|---|---|
+| `opentherm.c` | PHY: Manchester TX/RX through the DIYLESS shield, reply latency |
+| `ot_bus.c` | Bus task (core 1, priority 21). It is the only user of the PHY and runs a 1 s cycle that never stops. It also keeps the frame capture: 32768 frames in PSRAM, about 3 h |
+| `otb_core.c` | Master logic, pure C. See the cycle below |
+| `ot_sim.c` + `plant_sim.c` | Simulated boiler, pure C. See below |
+| `ot_frame.c` | Frame helpers and Data-IDs |
+
+**One bus cycle (`otb_core.c`):**
+- ID 0 status, retried once;
+- ID 1 setpoint;
+- one scheduled slot: live values, then the configuration record, the counters and the ID 57 mirror.
+
+**Rules in `otb_core.c`:**
+- Support map: 3 negative answers mark an ID unsupported. It is probed again hourly and after a reconnect.
+- The link counts as lost after 5 failed cycles in a row.
+- Immergas flags, all on by default: `ca` (ID 0 low byte 0xCA), `mirror57`, `explicitoff` (CH off = CH bit cleared + ID 1 = 10 °C).
+
+**Simulated boiler (`ot_sim.c` + `plant_sim.c`):** an Immergas-like slave on a house, radiator and tank model. Its quirks can be switched on and off:
+- writes ignored without 0xCA;
+- heats to ID 57;
+- ignores the CH bit;
+- E31 after 60 s of silence, with CH locked until a power cycle;
+- missed replies;
+- faults.
+
+Serial commands (USB):
+- `OTSTAT`: link, boiler values, statistics, supported and unsupported IDs.
+- `SIM show|reset|powercycle`, `SIM out <°C>`, `SIM room <°C>`, `SIM miss <%>`, `SIM silence 0|1`, `SIM fault <code>`, `SIM pressure <bar>`, `SIM leak <bar/day>`, `SIM needca|heats57|ignoreoff|dhwwrite 0|1`: drive the simulator.
+- `SIM room 1|0`: the simulated house temperature replaces the SHT40 reading (bench closed loop, saved).
+- `SIM ca|mirror57|explicitoff 0|1`: the bus flags (RAM only for now).
+
+Web (login required):
+- `/api/ot`: bus state and support map (JSON).
+- `/api/otlog.csv[?n=N]`: the frame capture. Decode frames with `docs/research/interactive/opentherm-frame.html`.
+
+### Host tests
+
+The pure-C parts build and run on the Mac, without ESP-IDF:
+
+```sh
+make -C firmware/tests/host
+```

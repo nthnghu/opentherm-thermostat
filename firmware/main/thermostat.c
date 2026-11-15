@@ -15,7 +15,8 @@
 #include "nvs.h"
 #include "board.h"
 #include "sht4x.h"
-#include "opentherm.h"
+#include "ot_bus.h"
+#include "ot_frame.h"
 #include "timekeep.h"
 
 static const char *TAG = "thermo";
@@ -26,7 +27,6 @@ static const char *TAG = "thermo";
 #define FLOW_MIN         30.0f
 #define FLOW_MAX         60.0f
 #define FLOW_OFF         10.0f
-#define OT_OFFLINE_AFTER 5   // failed exchanges in a row
 #define SMOOTH_ALPHA     (2.0f / 30.0f)  // reading every 2 s -> ~30 s exponential average
 #define SHOW_BAND_C      0.08f           // shown temperature moves only past this from the smoothed value
 #define SHOW_BAND_RH     0.8f
@@ -51,6 +51,7 @@ static void load(void)
     s_st.offset = 0.0f;
     s_st.hysteresis = 0.2f;
     s_st.boiler_sim = true;
+    s_st.sim_room = false;
     nvs_handle_t h;
     if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
         int32_t v;
@@ -70,6 +71,9 @@ static void load(void)
         if (nvs_get_u8(h, "sim", &b) == ESP_OK) {
             s_st.boiler_sim = b;
         }
+        if (nvs_get_u8(h, "simroom", &b) == ESP_OK) {
+            s_st.sim_room = b;
+        }
         nvs_close(h);
     }
 }
@@ -88,6 +92,7 @@ static void save(void)
     nvs_set_i32(h, "ofs", (int32_t)lroundf(c.offset * 10));
     nvs_set_i32(h, "hyst", (int32_t)lroundf(c.hysteresis * 100));
     nvs_set_u8(h, "sim", c.boiler_sim);
+    nvs_set_u8(h, "simroom", c.sim_room);
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "settings saved (sp %.1f, mode %d)", c.setpoint, c.mode);
@@ -100,63 +105,22 @@ static void mark_dirty(void)
 
 /* ---------------------------------------------------------------- boiler */
 
-static bool ot_exchange(uint8_t type, uint8_t id, uint16_t data, uint16_t *resp_data)
+// The bus task (ot_bus.c) talks to the boiler every second; here we only hand over the request and copy
+// back what it learned.
+static void boiler_step(bool demand, float flow_sp)
 {
-    uint32_t resp;
-    esp_err_t err = ot_transfer(ot_frame(type, id, data), &resp);
-    uint8_t rt = ot_type(resp);
-    bool ok = err == ESP_OK && ot_id(resp) == id && (rt == OT_READ_ACK || rt == OT_WRITE_ACK);
+    otb_cmd_t cmd = {.ch_enable = demand, .dhw_enable = true, .tset = flow_sp};
+    otbus_set_cmd(&cmd);
+    otb_status_t b;
+    otbus_get(&b);
     LOCK();
-    if (ok) {
-        s_st.ot_ok++;
-    } else {
-        s_st.ot_errors++;
-    }
+    s_st.boiler_online = b.link == OTB_LINK_UP;
+    s_st.flame = b.slave_flags & OT_S_FLAME;
+    s_st.flow_c = b.flow_c;
+    s_st.modulation = b.modulation;
+    s_st.ot_ok = b.ok;
+    s_st.ot_errors = b.timeouts + b.bad;
     UNLOCK();
-    if (ok && resp_data) {
-        *resp_data = ot_data(resp);
-    }
-    return ok;
-}
-
-static void boiler_step(bool demand, float flow_sp, int loop)
-{
-    static int fails;
-    // ID 0 every second: master status (CH enable) / slave status (flame).
-    uint16_t st;
-    bool ok = ot_exchange(OT_READ_DATA, OT_ID_STATUS, demand ? 0x0100 : 0x0000, &st);
-    fails = ok ? 0 : fails + 1;
-    bool online = fails < OT_OFFLINE_AFTER;
-    LOCK();
-    s_st.boiler_online = online && (ok || s_st.boiler_online);
-    if (ok) {
-        s_st.flame = st & 0x08;
-    }
-    UNLOCK();
-    if (!ok) {
-        return;  // no boiler: don't spend the loop on more timeouts
-    }
-    // Then one of: control setpoint, flow temperature, modulation.
-    uint16_t d;
-    switch (loop % 3) {
-    case 0:
-        ot_exchange(OT_WRITE_DATA, OT_ID_TSET, ot_to_f88(flow_sp), NULL);
-        break;
-    case 1:
-        if (ot_exchange(OT_READ_DATA, OT_ID_TBOILER, 0, &d)) {
-            LOCK();
-            s_st.flow_c = ot_f88(d);
-            UNLOCK();
-        }
-        break;
-    default:
-        if (ot_exchange(OT_READ_DATA, OT_ID_REL_MOD, 0, &d)) {
-            LOCK();
-            s_st.modulation = ot_f88(d);
-            UNLOCK();
-        }
-        break;
-    }
 }
 
 /* --------------------------------------------------------------- history */
@@ -197,7 +161,6 @@ static void thermo_task(void *arg)
 {
     esp_task_wdt_add(NULL);
     bool sensor_inited = sht4x_init(board_i2c_bus()) == ESP_OK;
-    ot_init();
     TickType_t wake = xTaskGetTickCount();
     int64_t last_hist = 0;
     for (int loop = 0;; loop++) {
@@ -210,6 +173,15 @@ static void thermo_task(void *arg)
             esp_err_t err = sensor_inited ? sht4x_measure(&t, &h) : ESP_ERR_INVALID_STATE;
             if (!sensor_inited) {
                 sensor_inited = sht4x_init(board_i2c_bus()) == ESP_OK;
+            }
+            // Bench testing: the simulated house replaces the SHT40 temperature (humidity stays real).
+            float sim_t;
+            if (s_st.sim_room && s_st.boiler_sim && otbus_sim_room(&sim_t)) {
+                t = sim_t;
+                if (err != ESP_OK) {
+                    h = 45;
+                    err = ESP_OK;
+                }
             }
             LOCK();
             if (err == ESP_OK && t > -20 && t < 60) {
@@ -271,11 +243,8 @@ static void thermo_task(void *arg)
         UNLOCK();
 
         // 3. Boiler
-        ot_set_simulated(sim);
-        if (sim) {
-            ot_sim_tick(LOOP_MS / 1000.0f);
-        }
-        boiler_step(demand, flow, loop);
+        otbus_set_simulated(sim);
+        boiler_step(demand, flow);
 
         // 4. History (1 / min) and debounced save
         if (now - last_hist >= 60LL * 1000000 || last_hist == 0) {
@@ -356,6 +325,14 @@ void thermo_set_hysteresis(float c)
     c = fminf(fmaxf(roundf(c * 20) / 20, 0.05f), 1.0f);
     LOCK();
     s_st.hysteresis = c;
+    UNLOCK();
+    mark_dirty();
+}
+
+void thermo_set_sim_room(bool on)
+{
+    LOCK();
+    s_st.sim_room = on;
     UNLOCK();
     mark_dirty();
 }

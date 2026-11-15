@@ -20,6 +20,8 @@
 #include "timekeep.h"
 #include "selftest.h"
 #include "ha.h"
+#include "ot_bus.h"
+#include "ot_frame.h"
 
 static const char *TAG = "web";
 static httpd_handle_t s_server;
@@ -399,6 +401,116 @@ static esp_err_t get_status(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+// OpenTherm bus state and the support map.
+static esp_err_t get_ot(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    otb_status_t b;
+    otbus_get(&b);
+    otb_flags_t f;
+    otbus_get_flags(&f);
+    httpd_resp_set_type(req, "application/json");
+    sendf(req,
+          "{\"boiler\":\"%s\",\"link\":\"%s\",\"slave_flags\":%u,\"flow\":%.2f,\"return\":%.2f,\"modulation\":%.1f,"
+          "\"pressure\":%.2f,\"tank\":%.2f,\"tset_sent\":%.1f,\"tset_acked\":%s,",
+          otbus_simulated() ? "simulated" : "real", otb_link_name(b.link), b.slave_flags, b.flow_c, b.return_c,
+          b.modulation, b.pressure_bar, b.tank_c, b.tset_sent, b.tset_acked ? "true" : "false");
+    sendf(req,
+          "\"fault_flags\":%u,\"oem_fault\":%u,\"member_id\":%u,\"slave_config\":%u,\"max_cap_kw\":%u,"
+          "\"min_mod_pct\":%u,\"ch_bounds\":[%d,%d],\"dhw_bounds\":[%d,%d],\"dhw_set\":%.1f,\"maxset\":%.1f,",
+          b.fault_flags, b.oem_fault, b.member_id, b.slave_config, b.max_cap_kw, b.min_mod_pct, b.ch_min, b.ch_max,
+          b.dhw_min, b.dhw_max, b.dhw_set_c, b.maxset_c);
+    sendf(req,
+          "\"counters\":[%u,%u,%u,%u,%u,%u,%u,%u],\"valid\":%lu,\"flags\":{\"ca\":%s,\"mirror57\":%s,"
+          "\"explicit_off\":%s},",
+          b.counters[0], b.counters[1], b.counters[2], b.counters[3], b.counters[4], b.counters[5], b.counters[6],
+          b.counters[7], (unsigned long)b.valid, f.status_ca ? "true" : "false", f.mirror_57 ? "true" : "false",
+          f.explicit_off ? "true" : "false");
+    sendf(req,
+          "\"stats\":{\"cycles\":%lu,\"frames\":%lu,\"ok\":%lu,\"timeouts\":%lu,\"bad\":%lu,\"unknown_id\":%lu,"
+          "\"data_invalid\":%lu,\"retries\":%lu,\"link_losses\":%lu,\"latency_last\":%u,\"latency_max\":%u,"
+          "\"latency_avg\":%.1f},",
+          (unsigned long)b.cycles, (unsigned long)b.frames, (unsigned long)b.ok, (unsigned long)b.timeouts,
+          (unsigned long)b.bad, (unsigned long)b.unknown_id, (unsigned long)b.data_invalid,
+          (unsigned long)b.retries, (unsigned long)b.link_losses, b.last_latency_ms, b.max_latency_ms,
+          b.latency_n ? (double)b.latency_sum_ms / b.latency_n : 0.0);
+    uint8_t sup[128];
+    otbus_get_support(sup);
+    SEND(req, "\"supported\":[");
+    char buf[8];
+    bool first = true;
+    for (int i = 0; i < 128; i++) {
+        if (sup[i] == OTB_ID_SUPPORTED) {
+            snprintf(buf, sizeof(buf), "%s%d", first ? "" : ",", i);
+            SEND(req, buf);
+            first = false;
+        }
+    }
+    SEND(req, "],\"unsupported\":[");
+    first = true;
+    for (int i = 0; i < 128; i++) {
+        if (sup[i] == OTB_ID_UNSUPPORTED) {
+            snprintf(buf, sizeof(buf), "%s%d", first ? "" : ",", i);
+            SEND(req, buf);
+            first = false;
+        }
+    }
+    SEND(req, "]}");
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// Frame capture as CSV (oldest first). ?n=<count> limits it to the last n frames.
+static esp_err_t get_otlog(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    int max = OTBUS_FRAME_RING;
+    char q[32], v[12];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && httpd_query_key_value(q, "n", v, sizeof(v)) == ESP_OK) {
+        int n = atoi(v);
+        if (n > 0 && n < max) {
+            max = n;
+        }
+    }
+    otbus_frame_t *f = heap_caps_malloc(sizeof(otbus_frame_t) * max, MALLOC_CAP_SPIRAM);
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+        return ESP_OK;
+    }
+    int n = otbus_frames(f, max);
+    httpd_resp_set_type(req, "text/csv");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"otlog.csv\"");
+    // Wall-clock time of a frame = now - (uptime_now - t_ms), when the clock is set.
+    int64_t up_ms = esp_timer_get_time() / 1000;
+    time_t now = timekeep_valid() ? time(NULL) : 0;
+    SEND(req, "uptime_ms,unix_time,source,result,latency_ms,request,response,id,req_type,resp_type,resp_value_f88\n");
+    static const char *const res_names[] = {"ok", "timeout", "bad", "skip"};
+    char *chunk = malloc(4096);
+    int used = 0;
+    for (int i = 0; chunk && i < n; i++) {
+        const otbus_frame_t *e = &f[i];
+        long long unix_t = now ? (long long)now - (up_ms - (int64_t)e->t_ms) / 1000 : 0;
+        used += snprintf(chunk + used, 4096 - used, "%lu,%lld,%s,%s,%u,%08lX,%08lX,%u,%s,%s,%.2f\n",
+                         (unsigned long)e->t_ms, unix_t, e->sim ? "sim" : "real", res_names[e->result & 3],
+                         e->latency_ms, (unsigned long)e->req, (unsigned long)e->resp, ot_id(e->req),
+                         ot_type_name(ot_type(e->req)), e->result == 0 ? ot_type_name(ot_type(e->resp)) : "",
+                         e->result == 0 ? ot_f88(ot_data(e->resp)) : 0.0f);
+        if (used > 4096 - 160) {
+            httpd_resp_send_chunk(req, chunk, used);
+            used = 0;
+        }
+    }
+    if (chunk && used) {
+        httpd_resp_send_chunk(req, chunk, used);
+    }
+    free(chunk);
+    free(f);
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 /* ------------------------------------------------------------------ saves */
 
 static void restart_cb(void *arg)
@@ -639,6 +751,8 @@ esp_err_t webui_start(void)
     const httpd_uri_t uris[] = {
         {.uri = "/", .method = HTTP_GET, .handler = get_root},
         {.uri = "/api/status", .method = HTTP_GET, .handler = get_status},
+        {.uri = "/api/ot", .method = HTTP_GET, .handler = get_ot},
+        {.uri = "/api/otlog.csv", .method = HTTP_GET, .handler = get_otlog},
         {.uri = "/save/*", .method = HTTP_POST, .handler = post_save},
         {.uri = "/ota", .method = HTTP_POST, .handler = post_ota},
     };

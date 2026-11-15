@@ -1,0 +1,329 @@
+#include "otb_core.h"
+#include <string.h>
+#include <math.h>
+#include "ot_frame.h"
+
+#define NEVER INT64_MIN
+#define NEG_FOR_UNSUPPORTED 3
+#define REPROBE_MS (3600LL * 1000)
+#define MIRROR_57_REFRESH_MS (60LL * 1000)
+#define CONFIRM_MS (5LL * 1000)  // re-ask soon after a negative answer, to settle support quickly
+
+static const struct {
+    uint8_t id;
+    bool write;
+    uint32_t period_s;
+} SLOT_TABLE[] = {
+    // Live values first, so they are known soon after a (re)connect
+    {OT_ID_TBOILER, false, 4},
+    {OT_ID_REL_MOD, false, 4},
+    {OT_ID_TRET, false, 10},
+    // Configuration record (also refreshed hourly)
+    {OT_ID_SLAVE_CONFIG, false, 3600},
+    {OT_ID_MASTER_CONFIG, true, 3600},
+    {OT_ID_MASTER_OT_VERSION, true, 3600},
+    {OT_ID_SLAVE_OT_VERSION, false, 3600},
+    {OT_ID_SLAVE_VERSION, false, 3600},
+    {OT_ID_MAX_CAP_MIN_MOD, false, 3600},
+    {OT_ID_REMOTE_PARAMS, false, 3600},
+    {OT_ID_TDHW_BOUNDS, false, 3600},
+    {OT_ID_MAXTSET_BOUNDS, false, 3600},
+    // Slower values and optional sensors
+    {OT_ID_TDHW, false, 30},
+    {OT_ID_CH_PRESSURE, false, 60},
+    {OT_ID_TOUTSIDE, false, 60},
+    {OT_ID_FAULT, false, 10},  // only while the fault bit is set
+    {OT_ID_TDHW_SET, false, 300},
+    {OT_ID_TEXHAUST, false, 300},
+    {OT_ID_DHW_FLOW, false, 300},
+    {OT_ID_MAXTSET, true, 0},  // the ID 57 mirror, scheduled separately
+    // Counters, hourly
+    {OT_ID_BURNER_STARTS, false, 3600},
+    {OT_ID_CH_PUMP_STARTS, false, 3600},
+    {OT_ID_DHW_PUMP_STARTS, false, 3600},
+    {OT_ID_DHW_BURNER_STARTS, false, 3600},
+    {OT_ID_BURNER_HOURS, false, 3600},
+    {OT_ID_CH_PUMP_HOURS, false, 3600},
+    {OT_ID_DHW_PUMP_HOURS, false, 3600},
+    {OT_ID_DHW_BURNER_HOURS, false, 3600},
+};
+
+const char *otb_link_name(otb_link_t l)
+{
+    return l == OTB_LINK_UP ? "up" : (l == OTB_LINK_LOST ? "lost" : "unknown");
+}
+
+void otb_init(otb_core_t *c)
+{
+    memset(c, 0, sizeof(*c));
+    c->flags = (otb_flags_t){.status_ca = true, .mirror_57 = true, .explicit_off = true};
+    c->cmd = (otb_cmd_t){.ch_enable = false, .dhw_enable = true, .tset = 10};
+    c->nslots = (int)(sizeof(SLOT_TABLE) / sizeof(SLOT_TABLE[0]));
+    for (int i = 0; i < c->nslots; i++) {
+        c->slots[i] = (otb_slot_t){.id = SLOT_TABLE[i].id, .write = SLOT_TABLE[i].write,
+                                   .period_ms = SLOT_TABLE[i].period_s * 1000u, .last_ms = NEVER};
+    }
+    c->last_reprobe_ms = NEVER;
+    c->last_57_ms = NEVER;
+    c->last_57_sent = -100;
+}
+
+float otb_tset_for(const otb_core_t *c)
+{
+    float t = c->cmd.tset;
+    if (!c->cmd.ch_enable && c->flags.explicit_off) {
+        t = 10;
+    }
+    return fminf(fmaxf(t, 10), 90);
+}
+
+static void on_connect(otb_core_t *c, int64_t now)
+{
+    for (int i = 0; i < c->nslots; i++) {
+        c->slots[i].last_ms = NEVER;
+    }
+    for (int i = 0; i < 128; i++) {
+        if (c->support[i] == OTB_ID_UNSUPPORTED) {
+            c->support[i] = OTB_ID_UNKNOWN;
+        }
+        c->neg[i] = 0;
+    }
+    c->last_57_ms = NEVER;
+    c->last_reprobe_ms = now;
+}
+
+static void record_latency(otb_status_t *st, uint16_t l)
+{
+    st->last_latency_ms = l;
+    if (l > st->max_latency_ms) {
+        st->max_latency_ms = l;
+    }
+    st->latency_sum_ms += l;
+    st->latency_n++;
+}
+
+// Sends one frame. Returns the result; *resp valid when OTB_XFER_OK.
+static otb_xfer_result_t send(otb_core_t *c, otb_xfer_fn xfer, void *ctx, uint8_t type, uint8_t id, uint16_t data,
+                              uint32_t *resp)
+{
+    uint16_t lat = 0;
+    otb_xfer_result_t r = xfer(ctx, ot_frame(type, id, data), resp, &lat);
+    if (r == OTB_XFER_SKIP) {
+        return r;
+    }
+    c->st.frames++;
+    if (r == OTB_XFER_OK && ot_id(*resp) != id) {
+        r = OTB_XFER_BAD;
+    }
+    switch (r) {
+    case OTB_XFER_OK:
+        c->st.ok++;
+        record_latency(&c->st, lat);
+        break;
+    case OTB_XFER_TIMEOUT:
+        c->st.timeouts++;
+        break;
+    default:
+        c->st.bad++;
+        break;
+    }
+    return r;
+}
+
+static void note_negative(otb_core_t *c, uint8_t id)
+{
+    if (id >= 128) {
+        return;
+    }
+    if (c->neg[id] < 255) {
+        c->neg[id]++;
+    }
+    if (c->neg[id] >= NEG_FOR_UNSUPPORTED) {
+        c->support[id] = OTB_ID_UNSUPPORTED;
+    }
+}
+
+static int8_t s8(uint8_t v)
+{
+    return (int8_t)v;
+}
+
+static void parse(otb_core_t *c, uint8_t id, uint16_t d)
+{
+    otb_status_t *st = &c->st;
+    switch (id) {
+    case OT_ID_TBOILER: st->flow_c = ot_f88(d); st->valid |= OTB_V_FLOW; break;
+    case OT_ID_TRET: st->return_c = ot_f88(d); st->valid |= OTB_V_RET; break;
+    case OT_ID_REL_MOD: st->modulation = ot_f88(d); st->valid |= OTB_V_MOD; break;
+    case OT_ID_CH_PRESSURE: st->pressure_bar = ot_f88(d); st->valid |= OTB_V_PRESS; break;
+    case OT_ID_TDHW: st->tank_c = ot_f88(d); st->valid |= OTB_V_TDHW; break;
+    case OT_ID_TOUTSIDE: st->outside_c = ot_f88(d); st->valid |= OTB_V_TOUT; break;
+    case OT_ID_TEXHAUST: st->exhaust_c = (int16_t)d; st->valid |= OTB_V_TEXH; break;
+    case OT_ID_DHW_FLOW: st->dhw_flow = ot_f88(d); st->valid |= OTB_V_DHW_FLOW; break;
+    case OT_ID_FAULT: st->fault_flags = ot_hb(d); st->oem_fault = ot_lb(d); st->valid |= OTB_V_FAULT; break;
+    case OT_ID_SLAVE_CONFIG: st->slave_config = ot_hb(d); st->member_id = ot_lb(d); st->valid |= OTB_V_CONFIG; break;
+    case OT_ID_MAX_CAP_MIN_MOD: st->max_cap_kw = ot_hb(d); st->min_mod_pct = ot_lb(d); st->valid |= OTB_V_CAPS; break;
+    case OT_ID_REMOTE_PARAMS: st->remote_params = d; st->valid |= OTB_V_REMOTE; break;
+    case OT_ID_TDHW_BOUNDS: st->dhw_max = s8(ot_hb(d)); st->dhw_min = s8(ot_lb(d)); st->valid |= OTB_V_DHW_BOUNDS; break;
+    case OT_ID_MAXTSET_BOUNDS: st->ch_max = s8(ot_hb(d)); st->ch_min = s8(ot_lb(d)); st->valid |= OTB_V_CH_BOUNDS; break;
+    case OT_ID_TDHW_SET: st->dhw_set_c = ot_f88(d); st->valid |= OTB_V_DHW_SET; break;
+    case OT_ID_MAXTSET: st->maxset_c = ot_f88(d); st->valid |= OTB_V_MAXSET; break;
+    case OT_ID_SLAVE_OT_VERSION: st->slave_ot_version = ot_f88(d); st->valid |= OTB_V_VERSION; break;
+    case OT_ID_SLAVE_VERSION: st->slave_type = ot_hb(d); st->slave_version = ot_lb(d); st->valid |= OTB_V_VERSION; break;
+    default:
+        if (id >= OT_ID_BURNER_STARTS && id <= OT_ID_DHW_BURNER_HOURS) {
+            st->counters[id - OT_ID_BURNER_STARTS] = d;
+            st->valid |= OTB_V_COUNTERS;
+        }
+        break;
+    }
+}
+
+static uint16_t write_value(const otb_core_t *c, uint8_t id)
+{
+    switch (id) {
+    case OT_ID_MASTER_CONFIG: return 0x0000;  // no master flags, member ID 0
+    case OT_ID_MASTER_OT_VERSION: return ot_to_f88(2.2f);
+    case OT_ID_MAXTSET: return ot_to_f88(otb_tset_for(c));
+    default: return 0;
+    }
+}
+
+static bool slot_eligible(const otb_core_t *c, const otb_slot_t *s)
+{
+    if (c->support[s->id] == OTB_ID_UNSUPPORTED) {
+        return false;
+    }
+    if (s->id == OT_ID_FAULT) {
+        return (c->st.slave_flags & OT_S_FAULT) != 0;
+    }
+    return s->id != OT_ID_MAXTSET;  // the mirror is chosen separately
+}
+
+static otb_slot_t *pick_slot(otb_core_t *c, int64_t now)
+{
+    // 1. The ID 57 mirror when the value changed or is due for a refresh.
+    if (c->flags.mirror_57 && c->support[OT_ID_MAXTSET] != OTB_ID_UNSUPPORTED) {
+        float v = otb_tset_for(c);
+        if (c->last_57_ms == NEVER || fabsf(v - c->last_57_sent) >= 0.5f || now - c->last_57_ms >= MIRROR_57_REFRESH_MS) {
+            for (int i = 0; i < c->nslots; i++) {
+                if (c->slots[i].id == OT_ID_MAXTSET) {
+                    return &c->slots[i];
+                }
+            }
+        }
+    }
+    // 2. Never-sent slots in table order, then the most overdue one.
+    otb_slot_t *best = NULL;
+    int64_t best_over = -1;
+    for (int i = 0; i < c->nslots; i++) {
+        otb_slot_t *s = &c->slots[i];
+        if (!slot_eligible(c, s)) {
+            continue;
+        }
+        if (s->last_ms == NEVER) {
+            return s;
+        }
+        int64_t period = (c->neg[s->id] && c->support[s->id] == OTB_ID_UNKNOWN) ? CONFIRM_MS : (int64_t)s->period_ms;
+        int64_t over = now - s->last_ms - period;
+        if (over >= 0 && over > best_over) {
+            best_over = over;
+            best = s;
+        }
+    }
+    return best;
+}
+
+void otb_cycle(otb_core_t *c, int64_t now, otb_xfer_fn xfer, void *ctx)
+{
+    otb_status_t *st = &c->st;
+    st->cycles++;
+
+    // Hourly re-probe of unsupported IDs
+    if (c->last_reprobe_ms != NEVER && now - c->last_reprobe_ms >= REPROBE_MS) {
+        c->last_reprobe_ms = now;
+        for (int i = 0; i < 128; i++) {
+            if (c->support[i] == OTB_ID_UNSUPPORTED) {
+                c->support[i] = OTB_ID_UNKNOWN;
+                c->neg[i] = 0;
+            }
+        }
+    }
+
+    // 1. Status (retried once)
+    uint8_t mflags = (c->cmd.ch_enable ? OT_M_CH_ENABLE : 0) | (c->cmd.dhw_enable ? OT_M_DHW_ENABLE : 0);
+    uint16_t sdata = (uint16_t)(mflags << 8) | (c->flags.status_ca ? OT_IMMERGAS_STATUS_LB : 0);
+    uint32_t resp = 0;
+    otb_xfer_result_t r = send(c, xfer, ctx, OT_READ_DATA, OT_ID_STATUS, sdata, &resp);
+    if (r == OTB_XFER_SKIP) {
+        return;
+    }
+    bool status_ok = r == OTB_XFER_OK && ot_type(resp) == OT_READ_ACK;
+    if (!status_ok) {
+        st->retries++;
+        r = send(c, xfer, ctx, OT_READ_DATA, OT_ID_STATUS, sdata, &resp);
+        status_ok = r == OTB_XFER_OK && ot_type(resp) == OT_READ_ACK;
+    }
+    if (!status_ok) {
+        st->fails_in_row++;
+        if (st->fails_in_row >= OTB_FAILS_FOR_LOST && st->link != OTB_LINK_LOST) {
+            if (st->link == OTB_LINK_UP) {
+                st->link_losses++;
+            }
+            st->link = OTB_LINK_LOST;
+        }
+        return;  // keep the cadence (status every cycle) but don't spend the cycle on more timeouts
+    }
+    st->fails_in_row = 0;
+    st->slave_flags = ot_lb(ot_data(resp));
+    if (st->link != OTB_LINK_UP) {
+        st->link = OTB_LINK_UP;
+        on_connect(c, now);
+    }
+    if (c->last_reprobe_ms == NEVER) {
+        c->last_reprobe_ms = now;
+    }
+
+    // 2. Control setpoint
+    float tset = otb_tset_for(c);
+    uint16_t tdata = ot_to_f88(tset);
+    r = send(c, xfer, ctx, OT_WRITE_DATA, OT_ID_TSET, tdata, &resp);
+    if (r == OTB_XFER_SKIP) {
+        return;
+    }
+    st->tset_sent = tset;
+    st->tset_acked = r == OTB_XFER_OK && ot_type(resp) == OT_WRITE_ACK && ot_data(resp) == tdata;
+
+    // 3. One scheduled slot
+    otb_slot_t *s = pick_slot(c, now);
+    if (!s) {
+        return;
+    }
+    uint16_t wdata = s->write ? write_value(c, s->id) : 0;
+    r = send(c, xfer, ctx, s->write ? OT_WRITE_DATA : OT_READ_DATA, s->id, wdata, &resp);
+    if (r == OTB_XFER_SKIP) {
+        return;
+    }
+    s->last_ms = now;
+    if (s->id == OT_ID_MAXTSET) {
+        c->last_57_ms = now;
+        c->last_57_sent = otb_tset_for(c);
+    }
+    if (r != OTB_XFER_OK) {
+        note_negative(c, s->id);
+        return;
+    }
+    uint8_t t = ot_type(resp);
+    if (t == OT_READ_ACK || t == OT_WRITE_ACK) {
+        c->support[s->id] = OTB_ID_SUPPORTED;
+        c->neg[s->id] = 0;
+        parse(c, s->id, ot_data(resp));
+    } else {
+        if (t == OT_UNKNOWN_DATA_ID) {
+            st->unknown_id++;
+        } else if (t == OT_DATA_INVALID) {
+            st->data_invalid++;
+        }
+        note_negative(c, s->id);
+    }
+}

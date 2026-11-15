@@ -1,0 +1,36 @@
+#pragma once
+// OpenTherm bus task: the only user of the PHY. Runs otb_core every second on core 1, against the real boiler
+// (DIYLESS shield) or the simulated Immergas boiler (ot_sim + plant_sim). The cadence never stops.
+// Every frame is kept in a PSRAM ring (frame capture) for /api/otlog.csv.
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include "otb_core.h"
+
+void otbus_start(void);
+
+void otbus_set_cmd(const otb_cmd_t *cmd);
+void otbus_get(otb_status_t *st);
+void otbus_get_support(uint8_t out[128]);  // otb_support_t per ID
+void otbus_get_flags(otb_flags_t *f);
+void otbus_set_flags(const otb_flags_t *f);
+
+void otbus_set_simulated(bool sim);
+bool otbus_simulated(void);
+// Room temperature of the simulated house (only while simulating). false = not simulating.
+bool otbus_sim_room(float *room_c);
+// Text commands for the simulator and the flags (serial "SIM ..."). Writes a reply into out.
+void otbus_command(const char *cmd, char *out, size_t size);
+
+typedef struct {
+    uint32_t t_ms;   // since boot
+    uint32_t req, resp;
+    uint16_t latency_ms;
+    uint8_t result;  // otb_xfer_result_t
+    uint8_t sim;
+} otbus_frame_t;
+
+#define OTBUS_FRAME_RING 32768  // ~3 h at 3 frames/s (512 KB PSRAM)
+
+// Copies up to max of the most recent frames, oldest first; returns the count.
+int otbus_frames(otbus_frame_t *out, int max);

@@ -22,22 +22,8 @@ static volatile int s_tx_pos;
 static volatile int64_t s_rx_ts;
 static volatile int s_rx_bits;
 static volatile uint32_t s_rx_frame;
-static bool s_sim = true;
+static volatile int64_t s_tx_end, s_rx_start;
 static bool s_inited;
-
-uint32_t ot_frame(uint8_t type, uint8_t id, uint16_t data)
-{
-    uint32_t f = ((uint32_t)(type & 7) << 28) | ((uint32_t)id << 16) | data;
-    if (__builtin_popcount(f) & 1) {
-        f |= 1u << 31;  // even parity
-    }
-    return f;
-}
-
-bool ot_parity_ok(uint32_t f)
-{
-    return (__builtin_popcount(f) & 1) == 0;
-}
 
 static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_data_t *e, void *arg)
 {
@@ -50,6 +36,7 @@ static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_dat
     gpio_set_level(OT_PIN_OUT, OUT_IDLE);
     gptimer_stop(t);
     s_rx_ts = esp_timer_get_time();
+    s_tx_end = s_rx_ts;
     s_state = ST_WAITING;
     return false;
 }
@@ -66,6 +53,7 @@ static void IRAM_ATTR rx_edge(void *arg)
         if (level == 1) {
             s_state = ST_START_BIT;
             s_rx_ts = now;
+            s_rx_start = now;
         } else {
             s_state = ST_INVALID;
             xSemaphoreGiveFromISR(s_done, &woke);
@@ -132,27 +120,13 @@ esp_err_t ot_init(void)
     return ESP_OK;
 }
 
-void ot_set_simulated(bool sim)
-{
-    s_sim = sim;
-}
-
-bool ot_simulated(void)
-{
-    return s_sim;
-}
-
 int ot_in_level(void)
 {
     return gpio_get_level(OT_PIN_IN);
 }
 
-esp_err_t ot_transfer(uint32_t request, uint32_t *response)
+esp_err_t ot_transfer(uint32_t request, uint32_t *response, uint16_t *latency_ms)
 {
-    if (s_sim) {
-        *response = ot_sim_respond(request);
-        return ot_parity_ok(*response) ? ESP_OK : ESP_ERR_INVALID_CRC;
-    }
     if (!s_inited) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -183,5 +157,9 @@ esp_err_t ot_transfer(uint32_t request, uint32_t *response)
         return ESP_ERR_INVALID_RESPONSE;
     }
     *response = s_rx_frame;
+    if (latency_ms) {
+        int64_t l = (s_rx_start - s_tx_end) / 1000;
+        *latency_ms = l < 0 ? 0 : (l > 65535 ? 65535 : (uint16_t)l);
+    }
     return ot_parity_ok(*response) ? ESP_OK : ESP_ERR_INVALID_CRC;
 }

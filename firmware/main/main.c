@@ -9,7 +9,7 @@
 #include "ui_theme.h"
 #include "settings.h"
 #include "sht4x.h"
-#include "opentherm.h"
+#include "ot_bus.h"
 #include "thermostat.h"
 #include "selftest.h"
 #include "timekeep.h"
@@ -53,7 +53,7 @@ void app_main(void)
 
     // The thermostat starts before anything slow, so it runs even while the hardware check waits.
     sht4x_init(board_i2c_bus());
-    ot_init();
+    otbus_start();  // OpenTherm cadence from here on
     thermo_start();
 
     bool hw_ok = selftest_run();  // also brings up audio, camera and Wi-Fi
