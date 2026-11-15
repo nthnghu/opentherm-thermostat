@@ -3,7 +3,10 @@
 A DIY wall thermostat built on a **Guition JC4880P443C** 4.3" touch panel (ESP32-P4 + ESP32-C6),
 a **DIYLESS Master OpenTherm Shield** and an **SHT40** room sensor, with Home Assistant integration.
 
-Status: test firmware. Everything except the boiler is wired and verified on the bench; the
+Status: version 0.1 in development on `main`. The bench-tested test firmware (v2) is kept on the
+[`testing-v2`](https://github.com/nthnghu/opentherm-thermostat/tree/testing-v2) branch.
+
+Test firmware state: Everything except the boiler is wired and verified on the bench; the
 OpenTherm side runs against a built-in simulated boiler until the real boiler is connected.
 
 ## Repository layout
