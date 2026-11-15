@@ -126,7 +126,10 @@ static void update_main(void)
     } else {
         snprintf(loss, sizeof(loss), "%s", cfg.loss_mode == CTRL_LOSS_HEAT_OFF ? "heating off" : "last setting kept");
     }
-    if (st.alert_count && !(st.alerts & (1u << ALERT_SENSOR))) {
+    if (st.svc_running) {
+        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_SETTINGS " Service: %s# - %s", (unsigned long)ui_hex(UI_WARN),
+                              svc_routine_title(st.svc_routine), st.svc_step);
+    } else if (st.alert_count && !(st.alerts & (1u << ALERT_SENSOR))) {
         lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " %s#  /  %s%s", (unsigned long)ui_hex(UI_WARN),
                               st.alert_text, plan, boiler);
     } else if (!st.sensor_ok) {

@@ -13,6 +13,7 @@
 #include "opentherm.h"
 #include "ot_sim.h"
 #include "timekeep.h"
+#include "nvs.h"
 
 static const char *TAG = "otbus";
 
@@ -31,6 +32,8 @@ static volatile bool s_sim = true;
 static ot_sim_t s_bsim;
 static bool s_sim_inited;
 static int64_t s_cycle_start_us, s_last_frame_end_us;
+static otb_manual_t s_manual_req, s_manual_pub;  // request (pending) / last state of the core's manual frame
+static bool s_silent;
 
 static otbus_frame_t *s_ring;
 static uint32_t s_ring_head, s_ring_count;
@@ -125,6 +128,11 @@ static void bus_task(void *arg)
         LOCK();
         s_core.cmd = s_cmd;
         s_core.flags = s_flags;
+        s_core.silent = s_silent;
+        if (s_manual_req.pending && !s_core.manual.pending) {
+            otb_manual_request(&s_core, s_manual_req.type, s_manual_req.id, s_manual_req.data);
+            s_manual_req.pending = false;
+        }
         UNLOCK();
         int64_t now_ms = s_cycle_start_us / 1000;
         if (s_sim) {
@@ -140,6 +148,8 @@ static void bus_task(void *arg)
         }
         LOCK();
         s_pub = s_core.st;
+        s_manual_pub = s_core.manual;
+        s_manual_pub.pending |= s_manual_req.pending;
         memcpy(s_support, s_core.support, sizeof(s_support));
         UNLOCK();
         if (xTaskDelayUntil(&wake, pdMS_TO_TICKS(CYCLE_MS)) == pdFALSE) {
@@ -159,6 +169,15 @@ void otbus_start(void)
     otb_init(&s_core);
     s_cmd = s_core.cmd;
     s_flags = s_core.flags;
+    nvs_handle_t h;
+    if (nvs_open("otbus", NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v;
+        if (nvs_get_u8(h, "flags", &v) == ESP_OK) {
+            s_flags = (otb_flags_t){.status_ca = v & 1, .mirror_57 = (v >> 1) & 1, .explicit_off = (v >> 2) & 1};
+        }
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "flags: ca=%d mirror57=%d explicitoff=%d", s_flags.status_ca, s_flags.mirror_57, s_flags.explicit_off);
     ot_init();
     // Above the thermostat task (20), on core 1 with it; the UI and Wi-Fi run on core 0.
     xTaskCreatePinnedToCore(bus_task, "otbus", 4096, NULL, 21, NULL, 1);
@@ -193,10 +212,46 @@ void otbus_get_flags(otb_flags_t *f)
     UNLOCK();
 }
 
-void otbus_set_flags(const otb_flags_t *f)
+void otbus_set_flags(const otb_flags_t *f, bool save)
 {
     LOCK();
     s_flags = *f;
+    UNLOCK();
+    if (!save) {
+        return;
+    }
+    nvs_handle_t h;
+    if (nvs_open("otbus", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "flags", (uint8_t)(f->status_ca | f->mirror_57 << 1 | f->explicit_off << 2));
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "flags saved: ca=%d mirror57=%d explicitoff=%d", f->status_ca, f->mirror_57, f->explicit_off);
+}
+
+bool otbus_manual(uint8_t type, uint8_t id, uint16_t data)
+{
+    LOCK();
+    bool ok = !s_manual_req.pending;
+    if (ok) {
+        s_manual_req = (otb_manual_t){.pending = true, .type = type, .id = id, .data = data};
+        s_manual_pub.pending = true;
+    }
+    UNLOCK();
+    return ok;
+}
+
+void otbus_manual_get(otb_manual_t *m)
+{
+    LOCK();
+    *m = s_manual_pub;
+    UNLOCK();
+}
+
+void otbus_set_silent(bool silent)
+{
+    LOCK();
+    s_silent = silent;
     UNLOCK();
 }
 
@@ -249,9 +304,9 @@ void otbus_command(const char *cmd, char *out, size_t size)
         bool *p = k[0] == 'c' ? &f.status_ca : (k[0] == 'm' ? &f.mirror_57 : &f.explicit_off);
         if (v) {
             *p = on_off(v);
-            otbus_set_flags(&f);
+            otbus_set_flags(&f, true);
         }
-        snprintf(out, size, "flags: ca=%d mirror57=%d explicitoff=%d", f.status_ca, f.mirror_57, f.explicit_off);
+        snprintf(out, size, "flags (saved): ca=%d mirror57=%d explicitoff=%d", f.status_ca, f.mirror_57, f.explicit_off);
         return;
     }
     // Simulator
@@ -280,6 +335,8 @@ void otbus_command(const char *cmd, char *out, size_t size)
         b->q.heats_to_57 = on_off(v);
     } else if (strcmp(k, "ignoreoff") == 0 && v) {
         b->q.ignores_ch_off = on_off(v);
+    } else if (strcmp(k, "id14") == 0 && v) {
+        b->q.honours_id14 = on_off(v);
     } else if (strcmp(k, "dhwwrite") == 0 && v) {
         b->q.dhw_set_writable = on_off(v);
     } else if (strcmp(k, "silence") == 0 && v) {
@@ -292,7 +349,7 @@ void otbus_command(const char *cmd, char *out, size_t size)
         xSemaphoreGive(s_sim_lock);
         snprintf(out, size,
                  "unknown. SIM show|reset|powercycle|out C|swing K|room C|miss %%|silence 0/1|fault code|pressure bar|"
-                 "leak bar/day|needca|heats57|ignoreoff|dhwwrite 0/1; ca|mirror57|explicitoff 0/1");
+                 "leak bar/day|needca|heats57|ignoreoff|dhwwrite|id14 0/1; ca|mirror57|explicitoff 0/1");
         return;
     }
     bool ch;

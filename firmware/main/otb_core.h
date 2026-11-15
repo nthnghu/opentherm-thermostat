@@ -84,6 +84,16 @@ typedef struct {
 
 #define OTB_MAX_SLOTS 40
 
+// One-off frame (service mode): sent instead of the scheduled slot in the next cycle.
+typedef struct {
+    bool pending;        // waiting to be sent
+    uint8_t type, id;    // OT_READ_DATA / OT_WRITE_DATA
+    uint16_t data;
+    uint32_t seq;        // increments when a request completes
+    uint8_t result;      // otb_xfer_result_t of the last completed request
+    uint32_t resp;       // its answer (valid with OTB_XFER_OK)
+} otb_manual_t;
+
 typedef struct {
     otb_status_t st;
     otb_flags_t flags;
@@ -97,11 +107,15 @@ typedef struct {
     int64_t last_57_ms;
     int64_t dhw_write_ms;   // last ID 56 write (NEVER = not since the (re)connect)
     bool dhw_readback_due;
+    otb_manual_t manual;
+    bool silent;            // service test: send nothing at all (comm-loss behaviour of the boiler)
 } otb_core_t;
 
 void otb_init(otb_core_t *c);
 // One bus cycle at time now_ms. The transfer function may return OTB_XFER_SKIP to end the cycle early.
 void otb_cycle(otb_core_t *c, int64_t now_ms, otb_xfer_fn xfer, void *ctx);
+// Queues a one-off frame; false while another one is pending.
+bool otb_manual_request(otb_core_t *c, uint8_t type, uint8_t id, uint16_t data);
 // Value ID 1 carries for a command (applies explicit_off).
 float otb_tset_for(const otb_core_t *c);
 const char *otb_link_name(otb_link_t l);

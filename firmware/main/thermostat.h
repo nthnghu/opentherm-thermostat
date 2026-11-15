@@ -3,10 +3,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
+#include <stddef.h>
 #include "control.h"
 #include "schedule.h"
 #include "datalog.h"
 #include "alerts.h"
+#include "service.h"
 
 #define THERMO_SP_MIN   5.0f
 #define THERMO_SP_MAX   30.0f
@@ -77,6 +79,11 @@ typedef struct {
     uint16_t alerts;        // bit per alert_id_t
     uint8_t alert_count;
     char alert_text[160];   // headline, "" = none
+    // Service mode (service.h)
+    bool svc_active, svc_running;
+    uint8_t svc_routine;
+    int svc_elapsed_s, svc_idle_left_s;
+    char svc_step[80];
     // Settings
     float offset;           // °C added to the sensor reading
     float hysteresis;       // °C either side of the setpoint (on/off strategy; = ctrl onoff_hyst_k)
@@ -128,6 +135,17 @@ int thermo_log_count(void);
 bool thermo_log_get(int i, dl_rec_t *out);
 // Wi-Fi signal for the log (set by the MQTT task; reading it here would block the control loop).
 void thermo_set_rssi(int rssi);
+
+// Service mode and commissioning routines. why gets a short reason on refusal.
+bool thermo_svc_enter(bool on);
+bool thermo_svc_start(svc_routine_t r, bool confirmed, char *why, size_t size);
+void thermo_svc_cancel(void);
+bool thermo_svc_manual(bool write, uint8_t id, uint16_t data, char *why, size_t size);
+// Applies what a finished routine recommends (bus flags, flow_min_c). Writes what changed into msg.
+bool thermo_svc_apply(svc_routine_t r, char *msg, size_t size);
+void thermo_svc_get(svc_record_t *rec, char *manual_text, size_t size);  // either may be NULL
+void thermo_get_svc_config(svc_config_t *out);
+void thermo_set_svc_config(const svc_config_t *c);
 
 // Copies up to max samples, oldest first; returns the count.
 int thermo_history(thermo_sample_t *out, int max);

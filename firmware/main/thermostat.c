@@ -4,6 +4,7 @@
 // Sensor lost (no reading for 30 s), frost floor and every other feature: see control.h and ctrl_config_t.
 #include "thermostat.h"
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -44,6 +45,8 @@ static alerts_t s_alerts;         // thermostat task (config changes under s_loc
 static alert_config_t s_acfg;
 static bool s_acfg_changed, s_acfg_dirty;
 static dl_t s_dl;                 // under s_lock
+static svc_t s_svc;               // under s_lock
+static bool s_svccfg_dirty;
 static dl_kpi_t s_kpi1, s_kpi24;
 static volatile int s_rssi;
 #define LOG_RECS (7 * 1440)
@@ -122,6 +125,52 @@ static void save_sched_config(void)
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "schedule settings saved");
+}
+
+static void load_svc(void)
+{
+    svc_config_t c;
+    svc_default_config(&c);
+    svc_record_t *rec = calloc(1, sizeof(svc_record_t));
+    bool have_rec = false;
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
+        svc_config_t lc;
+        size_t len = sizeof(lc);
+        if (nvs_get_blob(h, "svc", &lc, &len) == ESP_OK && len == sizeof(lc) && lc.version == SVC_CONFIG_VERSION) {
+            c = lc;
+        }
+        len = sizeof(svc_record_t);
+        have_rec = rec && nvs_get_blob(h, "svcrec", rec, &len) == ESP_OK && len == sizeof(svc_record_t);
+        nvs_close(h);
+    }
+    svc_init(&s_svc, &c, have_rec ? rec : NULL);
+    free(rec);
+}
+
+static void save_svc(bool cfg, bool rec)
+{
+    nvs_handle_t h;
+    if (nvs_open("thermo", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    svc_record_t *r = rec ? malloc(sizeof(svc_record_t)) : NULL;
+    LOCK();
+    svc_config_t c = s_svc.cfg;
+    if (r) {
+        *r = s_svc.rec;
+    }
+    UNLOCK();
+    if (cfg) {
+        nvs_set_blob(h, "svc", &c, sizeof(c));
+    }
+    if (r) {
+        nvs_set_blob(h, "svcrec", r, sizeof(*r));
+        free(r);
+    }
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "service %s saved", rec ? "record" : "settings");
 }
 
 static void load_alert_config(void)
@@ -507,11 +556,49 @@ static void thermo_task(void *arg)
         s_st.loops++;
         otb_cmd_t cmd = {.ch_enable = o->ch_enable, .dhw_enable = so->dhw_enable, .tset = o->tset,
                          .dhw_set = so->dhw_set};
+
+        // Service mode: a running routine replaces the request (service.c)
+        otb_manual_t man;
+        otbus_manual_get(&man);
+        svc_in_t vi = {
+            .now_s = now / 1e6, .epoch = clock_ok ? (int64_t)wall : 0, .sim = s_st.boiler_sim, .bus = &b, .manual = &man,
+            .room_ok = s_st.sensor_ok, .room_c = s_st.room_c, .frost_c = s_cfg.frost_room_c,
+            .flow_max_c = s_cfg.flow_max_c,
+        };
+        otbus_get_flags(&vi.flags);
+        const svc_out_t *vo = svc_step(&s_svc, &vi);
+        if (vo->override) {
+            cmd = vo->cmd;
+            cmd.dhw_set = 0;
+            s_st.demand = cmd.ch_enable;
+            s_st.flow_setpoint = cmd.tset;
+        }
+        s_st.svc_active = vo->active;
+        s_st.svc_running = vo->running;
+        s_st.svc_routine = vo->routine;
+        s_st.svc_elapsed_s = vo->elapsed_s;
+        s_st.svc_idle_left_s = vo->idle_left_s;
+        strlcpy(s_st.svc_step, vo->step, sizeof(s_st.svc_step));
+        bool svc_manual = vo->manual, svc_flags = vo->set_flags, svc_silent = vo->silent;
+        uint8_t mt = vo->m_type, mi = vo->m_id;
+        uint16_t md = vo->m_data;
+        otb_flags_t sf = vo->flags;
+        bool svc_save = vo->record_changed;
         UNLOCK();
 
         // 3. Boiler
         otbus_set_simulated(sim);
+        if (svc_flags) {
+            otbus_set_flags(&sf, false);  // RAM only: a routine's temporary flags never reach NVS
+        }
+        otbus_set_silent(svc_silent);
+        if (svc_manual) {
+            otbus_manual(mt, mi, md);
+        }
         otbus_set_cmd(&cmd);
+        if (svc_save) {
+            save_svc(false, true);
+        }
 
         // 4. History (1 / min) and debounced save
         if (now - last_hist >= 60LL * 1000000 || last_hist == 0) {
@@ -533,6 +620,10 @@ static void thermo_task(void *arg)
                 s_acfg_dirty = false;
                 save_alert_config();
             }
+            if (s_svccfg_dirty) {
+                s_svccfg_dirty = false;
+                save_svc(true, false);
+            }
         }
 
         // Fixed 1 s cadence; if a boiler timeout made us late, don't try to catch up.
@@ -550,6 +641,7 @@ void thermo_start(void)
     load_ctrl_config();
     load_sched_config();
     load_alert_config();
+    load_svc();
     alerts_init(&s_alerts, &s_acfg);
     dl_rec_t *recs = heap_caps_calloc(LOG_RECS, sizeof(dl_rec_t), MALLOC_CAP_SPIRAM);
     dl_burn_t *burns = heap_caps_calloc(LOG_BURNS, sizeof(dl_burn_t), MALLOC_CAP_SPIRAM);
@@ -770,4 +862,111 @@ bool thermo_log_get(int i, dl_rec_t *out)
 void thermo_set_rssi(int rssi)
 {
     s_rssi = rssi;
+}
+
+static double now_mono(void)
+{
+    return esp_timer_get_time() / 1e6;
+}
+
+bool thermo_svc_enter(bool on)
+{
+    LOCK();
+    if (on) {
+        svc_enter(&s_svc, now_mono());
+    } else {
+        svc_exit(&s_svc);
+    }
+    UNLOCK();
+    ESP_LOGW(TAG, "service mode %s", on ? "on" : "off");
+    return true;
+}
+
+bool thermo_svc_start(svc_routine_t r, bool confirmed, char *why, size_t size)
+{
+    LOCK();
+    bool ok = svc_start(&s_svc, r, confirmed, now_mono(), why, size);
+    UNLOCK();
+    if (ok) {
+        ESP_LOGW(TAG, "service routine %s started", svc_routine_name(r));
+    }
+    return ok;
+}
+
+void thermo_svc_cancel(void)
+{
+    LOCK();
+    svc_cancel(&s_svc);
+    UNLOCK();
+}
+
+bool thermo_svc_manual(bool write, uint8_t id, uint16_t data, char *why, size_t size)
+{
+    LOCK();
+    bool ok = svc_manual(&s_svc, write, id, data, now_mono(), why, size);
+    UNLOCK();
+    return ok;
+}
+
+bool thermo_svc_apply(svc_routine_t r, char *msg, size_t size)
+{
+    svc_apply_t a;
+    LOCK();
+    bool ok = svc_recommend(&s_svc.rec, r, &a);
+    UNLOCK();
+    if (!ok) {
+        snprintf(msg, size, "nothing to apply (run %s first)", svc_routine_name(r));
+        return false;
+    }
+    otb_flags_t f;
+    otbus_get_flags(&f);
+    if (a.set_ca) {
+        f.status_ca = a.ca;
+    }
+    if (a.set_mirror) {
+        f.mirror_57 = a.mirror;
+    }
+    if (a.set_explicit_off) {
+        f.explicit_off = a.explicit_off;
+    }
+    if (a.set_ca || a.set_mirror || a.set_explicit_off) {
+        otbus_set_flags(&f, true);
+    }
+    if (a.set_flow_min) {
+        ctrl_config_t c;
+        thermo_get_ctrl_config(&c);
+        c.flow_min_c = a.flow_min_c;
+        thermo_set_ctrl_config(&c);
+    }
+    snprintf(msg, size, "applied: ca=%d mirror57=%d explicitoff=%d%s", f.status_ca, f.mirror_57, f.explicit_off,
+             a.set_flow_min ? ", flow_min_c set" : "");
+    return true;
+}
+
+void thermo_svc_get(svc_record_t *rec, char *manual_text, size_t size)
+{
+    LOCK();
+    if (rec) {
+        *rec = s_svc.rec;
+    }
+    if (manual_text) {
+        strlcpy(manual_text, s_svc.out.manual_text, size);
+    }
+    UNLOCK();
+}
+
+void thermo_get_svc_config(svc_config_t *out)
+{
+    LOCK();
+    *out = s_svc.cfg;
+    UNLOCK();
+}
+
+void thermo_set_svc_config(const svc_config_t *c)
+{
+    LOCK();
+    svc_set_config(&s_svc, c);
+    s_svccfg_dirty = true;
+    UNLOCK();
+    s_dirty_since_us = esp_timer_get_time();
 }

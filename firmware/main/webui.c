@@ -256,6 +256,78 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     send_escaped(req, mst);
     SEND(req, "</p><button>Save and connect</button></form>");
 
+    // Service mode and commissioning (service.c)
+    {
+        thermo_state_t st;
+        thermo_get(&st);
+        svc_record_t *rec = malloc(sizeof(svc_record_t));
+        char mt[96] = "";
+        if (rec) {
+            thermo_svc_get(rec, mt, sizeof(mt));
+        }
+        SEND(req, "<h2>Service (commissioning)</h2>");
+        if (!st.svc_active) {
+            SEND(req, "<p class=hint>Service mode runs the boiler test routines (docs/research ch. 10, \"Verify on the "
+                      "real boiler\"). It ends by itself after 30 min without activity.</p>"
+                      "<form method=post action=/save/svc><input type=hidden name=a value=on>"
+                      "<button>Enter service mode</button></form>");
+        } else {
+            sendf(req, "<p>Service mode on (ends in %d min without activity). ", st.svc_idle_left_s / 60);
+            if (st.svc_running) {
+                sendf(req, "<b>Running: %s</b>, %d s: ", svc_routine_title(st.svc_routine), st.svc_elapsed_s);
+                send_escaped(req, st.svc_step);
+                SEND(req, "</p><form method=post action=/save/svc><input type=hidden name=a value=cancel>"
+                          "<button>Cancel the routine</button></form>");
+            } else {
+                SEND(req, "</p>");
+            }
+            SEND(req, "<form method=post action=/save/svc><input type=hidden name=a value=off>"
+                      "<button>Leave service mode</button></form>");
+        }
+        SEND(req, "<table><tr><th>Routine</th><th>Last result</th><th></th></tr>");
+        for (int i = 0; rec && i < SVC_COUNT; i++) {
+            const svc_result_t *r = &rec->r[i];
+            sendf(req, "<tr><td><b>%s</b><br><span class=hint>", svc_routine_title(i));
+            send_escaped(req, svc_routine_help(i));
+            sendf(req, "</span></td><td>%s%s", svc_rstate_name(r->state), r->sim ? " (simulated boiler)" : "");
+            if (r->epoch) {
+                time_t t = (time_t)r->epoch;
+                struct tm lt;
+                localtime_r(&t, &lt);
+                sendf(req, " %04d-%02d-%02d %02d:%02d", lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, lt.tm_hour,
+                      lt.tm_min);
+            }
+            SEND(req, "<br>");
+            send_escaped(req, r->text);
+            SEND(req, "</td><td>");
+            if (st.svc_active && !st.svc_running) {
+                sendf(req, "<form method=post action=/save/svc><input type=hidden name=a value=run>"
+                           "<input type=hidden name=r value=%s>", svc_routine_name(i));
+                if (i == SVC_COMM_LOSS) {
+                    SEND(req, "<label><input type=checkbox name=confirm value=1> I can power-cycle the boiler</label>");
+                }
+                SEND(req, "<button>Start</button></form>");
+            }
+            svc_apply_t ap;
+            if (rec && svc_recommend(rec, i, &ap)) {
+                sendf(req, "<form method=post action=/save/svc><input type=hidden name=a value=apply>"
+                           "<input type=hidden name=r value=%s><button>Apply</button></form>", svc_routine_name(i));
+            }
+            SEND(req, "</td></tr>");
+        }
+        SEND(req, "</table>");
+        if (st.svc_active && !st.svc_running) {
+            SEND(req, "<h3>Read / write one Data-ID</h3><form method=post action=/save/svc>"
+                      "<input type=hidden name=a value=manual><label for=mid>Data-ID</label>"
+                      "<input id=mid name=id type=number min=0 max=127>"
+                      "<label for=mval>Value to write (°C or %; 0x1234 = raw). Empty = read. Writes: IDs 1, 14, 56, 57 only"
+                      "</label><input id=mval name=v type=text><button>Send</button></form><p class=hint>Last answer: ");
+            send_escaped(req, mt[0] ? mt : "none");
+            SEND(req, " (reload to see a new answer)</p>");
+        }
+        free(rec);
+    }
+
     // Clock
     SEND(req, "<h2>Clock</h2><form method=post action=/save/clock>");
     sendf(req, "<label><input type=checkbox name=ntp value=1 %s> Use NTP</label>", c->ntp_on ? "checked" : "");
@@ -481,6 +553,12 @@ static esp_err_t get_config(httpd_req_t *req)
         alert_config_get(&ac, i, v, sizeof(v));
         sendf(req, ",\"%s\":%s", alert_config_name(i), v);
     }
+    svc_config_t vc;
+    thermo_get_svc_config(&vc);
+    for (int i = 0; i < svc_config_count(); i++) {
+        svc_config_get(&vc, i, v, sizeof(v));
+        sendf(req, ",\"%s\":%s", svc_config_name(i), v);
+    }
     SEND(req, ",\"prog\":[");
     char day[100];
     for (int d = 0; d < 7; d++) {
@@ -625,6 +703,40 @@ static void kpi_json(httpd_req_t *req, const char *name, const dl_kpi_t *k, bool
           name, k->hours, k->ch_starts, k->dhw_starts, k->ch_starts_h, k->ch_burns, k->median_burn_min, k->short_pct,
           k->burner_h, k->dhw_burner_h, k->cond_pct, k->mean_mod, k->min_mod_pct, k->comfort_kh, k->over_kh,
           k->gas_kwh, k->mean_room, k->mean_target, k->mean_flow, k->mean_return, k->ot_err, last ? "" : ",");
+}
+
+// Service mode state and the commissioning record.
+static esp_err_t get_service(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    thermo_state_t st;
+    thermo_get(&st);
+    svc_record_t *rec = malloc(sizeof(svc_record_t));
+    if (!rec) {
+        return httpd_resp_send_500(req);
+    }
+    char mt[96];
+    thermo_svc_get(rec, mt, sizeof(mt));
+    httpd_resp_set_type(req, "application/json");
+    sendf(req, "{\"active\":%s,\"running\":%s,\"routine\":\"%s\",\"elapsed_s\":%d,\"idle_left_s\":%d,\"step\":\"",
+          st.svc_active ? "true" : "false", st.svc_running ? "true" : "false",
+          st.svc_running ? svc_routine_name(st.svc_routine) : "", st.svc_elapsed_s, st.svc_idle_left_s);
+    send_escaped(req, st.svc_step);
+    SEND(req, "\",\"manual\":\"");
+    send_escaped(req, mt);
+    SEND(req, "\",\"results\":{");
+    for (int i = 0; i < SVC_COUNT; i++) {
+        const svc_result_t *r = &rec->r[i];
+        sendf(req, "%s\"%s\":{\"state\":\"%s\",\"sim\":%s,\"time\":%lld,\"v\":[%.2f,%.2f,%.2f,%.2f],\"text\":\"", i ? "," : "",
+              svc_routine_name(i), svc_rstate_name(r->state), r->sim ? "true" : "false", (long long)r->epoch, r->v[0], r->v[1], r->v[2], r->v[3]);
+        send_escaped(req, r->text);
+        SEND(req, "\"}");
+    }
+    SEND(req, "}}");
+    free(rec);
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 // KPIs over the last hour and 24 h, plus totals since start.
@@ -773,6 +885,37 @@ static esp_err_t post_save(httpd_req_t *req)
         } else {
             mqtt_ha_restart();
             msg = c->mqtt_on ? "MQTT saved, connecting (state shown below after a reload)" : "MQTT off";
+        }
+    } else if (strcmp(section, "svc") == 0) {
+        char a[16] = "", r[24] = "";
+        form_get(body, "a", a, sizeof(a));
+        form_get(body, "r", r, sizeof(r));
+        int rt = svc_routine_by_name(r);
+        if (strcmp(a, "on") == 0 || strcmp(a, "off") == 0) {
+            thermo_svc_enter(a[1] == 'n');
+            msg = a[1] == 'n' ? "Service mode on" : "Service mode off";
+        } else if (strcmp(a, "run") == 0 && rt >= 0) {
+            bool confirm = form_get(body, "confirm", v, 512) && v[0] == '1';
+            ok = thermo_svc_start((svc_routine_t)rt, confirm, tmsg, sizeof(tmsg));
+            msg = ok ? "Routine started (reload to follow it)" : tmsg;
+        } else if (strcmp(a, "cancel") == 0) {
+            thermo_svc_cancel();
+            msg = "Routine cancelled";
+        } else if (strcmp(a, "apply") == 0 && rt >= 0) {
+            ok = thermo_svc_apply((svc_routine_t)rt, tmsg, sizeof(tmsg));
+            msg = tmsg;
+        } else if (strcmp(a, "manual") == 0) {
+            char ids[8] = "";
+            form_get(body, "id", ids, sizeof(ids));
+            form_get(body, "v", v, 512);
+            int id = ids[0] ? atoi(ids) : -1;
+            bool w = v[0] != 0;
+            uint16_t data = !w ? 0 : (strncmp(v, "0x", 2) == 0 ? (uint16_t)strtoul(v, NULL, 16) : ot_to_f88(strtof(v, NULL)));
+            ok = id >= 0 && id < 128 && thermo_svc_manual(w, (uint8_t)id, data, tmsg, sizeof(tmsg));
+            msg = ok ? "Sent; reload for the answer" : (id < 0 ? "Data-ID missing" : tmsg);
+        } else {
+            msg = "Unknown service action";
+            ok = false;
         }
     } else if (strcmp(section, "clock") == 0) {
         c->ntp_on = form_get(body, "ntp", v, 512) && v[0] == '1';
@@ -952,6 +1095,7 @@ esp_err_t webui_start(void)
         {.uri = "/api/otlog.csv", .method = HTTP_GET, .handler = get_otlog},
         {.uri = "/api/kpi", .method = HTTP_GET, .handler = get_kpi},
         {.uri = "/api/log.csv", .method = HTTP_GET, .handler = get_log},
+        {.uri = "/api/service", .method = HTTP_GET, .handler = get_service},
         {.uri = "/save/*", .method = HTTP_POST, .handler = post_save},
         {.uri = "/ota", .method = HTTP_POST, .handler = post_ota},
     };

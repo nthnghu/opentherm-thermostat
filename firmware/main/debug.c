@@ -110,6 +110,8 @@ static void debug_task(void *arg)
             ctrl_config_t c;
             sched_config_t sc;
             alert_config_t ac;
+            svc_config_t vc;
+            thermo_get_svc_config(&vc);
             thermo_get_ctrl_config(&c);
             thermo_get_sched_config(&sc);
             thermo_get_alert_config(&ac);
@@ -122,6 +124,8 @@ static void debug_task(void *arg)
                 thermo_set_sched_config(&sc);
                 alert_default_config(&ac);
                 thermo_set_alert_config(&ac);
+                svc_default_config(&vc);
+                thermo_set_svc_config(&vc);
                 printf("CFG defaults restored\n");
             } else if (n == 2) {
                 if (ctrl_config_set(&c, name, value)) {
@@ -132,6 +136,9 @@ static void debug_task(void *arg)
                     printf("CFG %s = %s ok\n", name, value);
                 } else if (alert_config_set(&ac, name, value)) {
                     thermo_set_alert_config(&ac);
+                    printf("CFG %s = %s ok\n", name, value);
+                } else if (svc_config_set(&vc, name, value)) {
+                    thermo_set_svc_config(&vc);
                     printf("CFG %s = %s ok\n", name, value);
                 } else {
                     printf("CFG %s = %s refused (unknown name or out of range)\n", name, value);
@@ -149,6 +156,10 @@ static void debug_task(void *arg)
                 for (int i = 0; i < alert_config_count(); i++) {
                     alert_config_get(&ac, i, v, sizeof(v));
                     printf("CFG %-19s %-8s %s\n", alert_config_name(i), v, alert_config_help(i));
+                }
+                for (int i = 0; i < svc_config_count(); i++) {
+                    svc_config_get(&vc, i, v, sizeof(v));
+                    printf("CFG %-19s %-8s %s\n", svc_config_name(i), v, svc_config_help(i));
                 }
             }
             continue;
@@ -176,6 +187,59 @@ static void debug_task(void *arg)
                 printf("PROG %d %s %s\n", i, days[i], buf);
             }
             printf("PROG prog_on=%d eco_setback_k=%.1f\n", sc.prog_on, sc.eco_setback_k);
+            continue;
+        }
+        if (strncmp(line, "SVC", 3) == 0 && (line[3] == 0 || line[3] == ' ')) {
+            // SVC = status and record; SVC on|off; SVC run <name> [confirm]; SVC cancel; SVC apply <name>
+            char a[16] = "", b[24] = "", c3[16] = "", why[128];
+            int n = sscanf(line + 3, "%15s %23s %15s", a, b, c3);
+            if (n >= 1 && (strcmp(a, "on") == 0 || strcmp(a, "off") == 0)) {
+                thermo_svc_enter(a[1] == 'n');
+            } else if (n >= 2 && strcmp(a, "run") == 0) {
+                int r = svc_routine_by_name(b);
+                bool ok = r >= 0 && thermo_svc_start((svc_routine_t)r, strcmp(c3, "confirm") == 0, why, sizeof(why));
+                printf("SVC run %s: %s\n", b, r < 0 ? "unknown routine" : (ok ? "started" : why));
+            } else if (n >= 1 && strcmp(a, "cancel") == 0) {
+                thermo_svc_cancel();
+            } else if (n >= 2 && strcmp(a, "apply") == 0) {
+                int r = svc_routine_by_name(b);
+                if (r >= 0) {
+                    thermo_svc_apply((svc_routine_t)r, why, sizeof(why));
+                }
+                printf("SVC apply %s: %s\n", b, r < 0 ? "unknown routine" : why);
+            }
+            thermo_state_t st;
+            thermo_get(&st);
+            printf("SVC active=%d idle_left=%ds running=%d routine=%s elapsed=%ds step=%s\n", st.svc_active,
+                   st.svc_idle_left_s, st.svc_running, st.svc_running ? svc_routine_name(st.svc_routine) : "-",
+                   st.svc_elapsed_s, st.svc_step);
+            svc_record_t *rec = malloc(sizeof(svc_record_t));
+            if (rec) {
+                char mt[96];
+                thermo_svc_get(rec, mt, sizeof(mt));
+                for (int i = 0; i < SVC_COUNT; i++) {
+                    const svc_result_t *r = &rec->r[i];
+                    printf("SVC %-10s %-7s%s v=%.1f/%.1f/%.1f/%.1f %s\n", svc_routine_name(i), svc_rstate_name(r->state),
+                           r->sim ? " (sim)" : "", r->v[0], r->v[1], r->v[2], r->v[3], r->text);
+                }
+                printf("SVC manual: %s\n", mt[0] ? mt : "-");
+                free(rec);
+            }
+            continue;
+        }
+        if (strncmp(line, "OT read ", 8) == 0 || strncmp(line, "OT write ", 9) == 0) {
+            // Service mode only. OT read <id>; OT write <id> <value> (°C/% as f8.8, or 0x1234 raw)
+            bool w = line[3] == 'w';
+            char vs[24] = "";
+            int id = -1;
+            sscanf(line + (w ? 9 : 8), "%d %23s", &id, vs);
+            uint16_t data = 0;
+            if (w) {
+                data = strncmp(vs, "0x", 2) == 0 ? (uint16_t)strtoul(vs, NULL, 16) : ot_to_f88(strtof(vs, NULL));
+            }
+            char why[96];
+            bool ok = id >= 0 && id < 128 && (!w || vs[0]) && thermo_svc_manual(w, (uint8_t)id, data, why, sizeof(why));
+            printf("OT %s %d: %s (answer: SVC)\n", w ? "write" : "read", id, ok ? "queued" : (id < 0 ? "bad id" : why));
             continue;
         }
         if (strcmp(line, "MQTT") == 0) {

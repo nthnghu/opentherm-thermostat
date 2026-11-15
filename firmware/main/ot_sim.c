@@ -99,10 +99,15 @@ bool ot_sim_respond(ot_sim_t *b, uint32_t req, uint32_t *resp)
         }
         *resp = ack(type, id, type == OT_WRITE_DATA ? d : ot_to_f88(b->dhw_set));
         return true;
+    case OT_ID_MAX_REL_MOD:
+        if (type == OT_WRITE_DATA && writes_ok && b->q.honours_id14) {
+            b->plant_p.max_mod_pct = fminf(fmaxf(ot_f88(d), 0), 100);
+        }
+        *resp = ack(type, id, d);
+        return true;
     case OT_ID_MASTER_CONFIG:
     case OT_ID_MASTER_OT_VERSION:
     case OT_ID_MASTER_VERSION:
-    case OT_ID_MAX_REL_MOD:
     case OT_ID_TROOM:
     case OT_ID_TROOM_SET:
         *resp = ack(type, id, d);

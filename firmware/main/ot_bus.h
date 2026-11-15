@@ -13,7 +13,13 @@ void otbus_set_cmd(const otb_cmd_t *cmd);
 void otbus_get(otb_status_t *st);
 void otbus_get_support(uint8_t out[128]);  // otb_support_t per ID
 void otbus_get_flags(otb_flags_t *f);
-void otbus_set_flags(const otb_flags_t *f);
+// save = also keep them in NVS (otherwise RAM only, as the service routines use them).
+void otbus_set_flags(const otb_flags_t *f, bool save);
+
+// Service: one-off frame (false while another is pending) and its state; silence on the line.
+bool otbus_manual(uint8_t type, uint8_t id, uint16_t data);
+void otbus_manual_get(otb_manual_t *m);
+void otbus_set_silent(bool silent);
 
 void otbus_set_simulated(bool sim);
 bool otbus_simulated(void);

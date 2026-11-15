@@ -11,6 +11,7 @@ typedef struct {
     bool heats_to_57;      // the boiler heats to ID 57 (max CH setpoint) instead of ID 1
     bool ignores_ch_off;   // clearing the CH bit alone does not stop the burner while ID 1 > 10 °C
     bool dhw_set_writable; // ID 56 writes take effect (false: ACKed, panel value kept, as with P7 = 2)
+    bool honours_id14;     // ID 14 (max relative modulation) limits the CH burner power
     float panel_max_ch;    // t1: the boiler never heats above this
     float e31_after_s;     // no valid frame for this long -> E31, CH locked out until a power cycle
     uint8_t miss_pct;      // % of requests left unanswered

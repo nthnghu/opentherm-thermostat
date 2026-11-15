@@ -17,6 +17,7 @@ typedef struct {
     float out_swing;    // ± daily swing (K), warmest at 15:00
     // Boiler
     float pmin_kw, pmax_kw, pmax_dhw_kw;
+    float max_mod_pct;  // CH power limit (OpenTherm ID 14), 100 = none
     float t4_s;         // anti-cycle wait after a CH cut-out
     float cut_k;        // flame off when flow > target + cut_k
     float t0_c;         // lowest flow target the boiler accepts

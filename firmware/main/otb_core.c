@@ -274,10 +274,55 @@ static otb_slot_t *pick_slot(otb_core_t *c, int64_t now)
     return best;
 }
 
+bool otb_manual_request(otb_core_t *c, uint8_t type, uint8_t id, uint16_t data)
+{
+    if (c->manual.pending || id >= 128 || (type != OT_READ_DATA && type != OT_WRITE_DATA)) {
+        return false;
+    }
+    c->manual.type = type;
+    c->manual.id = id;
+    c->manual.data = data;
+    c->manual.pending = true;
+    return true;
+}
+
+// The one-off frame of this cycle. Reads update the values and the support map like a slot would.
+static void run_manual(otb_core_t *c, otb_xfer_fn xfer, void *ctx)
+{
+    otb_manual_t *m = &c->manual;
+    uint32_t resp = 0;
+    otb_xfer_result_t r = send(c, xfer, ctx, m->type, m->id, m->data, &resp);
+    if (r == OTB_XFER_SKIP) {
+        return;  // stays pending for the next cycle
+    }
+    m->pending = false;
+    m->result = (uint8_t)r;
+    m->resp = resp;
+    m->seq++;
+    if (r != OTB_XFER_OK) {
+        return;
+    }
+    uint8_t t = ot_type(resp);
+    if (t == OT_READ_ACK || t == OT_WRITE_ACK) {
+        c->support[m->id] = OTB_ID_SUPPORTED;
+        c->neg[m->id] = 0;
+        if (t == OT_READ_ACK) {
+            parse(c, m->id, ot_data(resp));
+        }
+    } else if (t == OT_UNKNOWN_DATA_ID) {
+        c->st.unknown_id++;
+    } else if (t == OT_DATA_INVALID) {
+        c->st.data_invalid++;
+    }
+}
+
 void otb_cycle(otb_core_t *c, int64_t now, otb_xfer_fn xfer, void *ctx)
 {
     otb_status_t *st = &c->st;
     st->cycles++;
+    if (c->silent) {
+        return;  // nothing on the line (service comm-loss test); the link state is judged when talking again
+    }
 
     // Hourly re-probe of unsupported IDs
     if (c->last_reprobe_ms != NEVER && now - c->last_reprobe_ms >= REPROBE_MS) {
@@ -334,7 +379,11 @@ void otb_cycle(otb_core_t *c, int64_t now, otb_xfer_fn xfer, void *ctx)
     st->tset_sent = tset;
     st->tset_acked = r == OTB_XFER_OK && ot_type(resp) == OT_WRITE_ACK && ot_data(resp) == tdata;
 
-    // 3. One scheduled slot
+    // 3. A one-off frame (service), else one scheduled slot
+    if (c->manual.pending) {
+        run_manual(c, xfer, ctx);
+        return;
+    }
     otb_slot_t *s = pick_slot(c, now);
     if (!s) {
         return;

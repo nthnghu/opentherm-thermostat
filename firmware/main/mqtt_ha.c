@@ -164,6 +164,7 @@ static const sensor_def_t SENSORS[] = {
     {"dhw_reason", "Hot water reason", NULL, NULL, NULL, -1, true},
     {"alert_text", "Alert", NULL, NULL, NULL, -1, false},
     {"pasteur_result", "Last pasteurisation", NULL, NULL, NULL, -1, true},
+    {"service_routine", "Service routine", NULL, NULL, NULL, -1, true},
 };
 
 typedef struct {
@@ -179,6 +180,7 @@ static const binary_def_t BINARIES[] = {
     {"summer", "Summer mode", NULL, false},
     {"boiler_online", "Boiler link", "connectivity", true},
     {"simulated", "Simulated boiler", NULL, true},
+    {"service", "Service mode", NULL, true},
 };
 
 static void dev_block(jb_t *j)
@@ -359,6 +361,9 @@ static bool build_state(void)
         snprintf(key, sizeof(key), "alert_%s", alert_name(a));
         jb_num(&j, key, true, "%.0f", (st.alerts >> a) & 1);
     }
+    // Service
+    jb_num(&j, "service", true, "%.0f", st.svc_active);
+    jb_str(&j, "service_routine", st.svc_running ? svc_routine_name(st.svc_routine) : "none");
     // Device
     jb_num(&j, "ot_errors", true, "%.0f", st.ot_errors);
     jb_num(&j, "rssi", s_rssi != 0, "%.0f", s_rssi);

@@ -188,6 +188,47 @@ The thermostat never depends on MQTT. Serial helpers:
 - `MQTT on|off` switches the client;
 - `MQTT dump` prints the state JSON and a discovery payload.
 
+## Service mode and commissioning (Phase 1, milestone 5, `service.c`)
+
+`service.c` is pure C and host-tested against the simulator with each Immergas quirk switched on and off. The routines cover the ch. 10 test table, "Verify on the real boiler":
+
+| Routine | Tests | What it does | Burns gas | Apply sets |
+|---|---|---|---|---|
+| `identity` | 6, 16 | Reads 3, 125, 127, 15, 6, 48, 49, 93–95 and probes 18, 19, 26–28, 33–36, 115–123 | no | – |
+| `status_ca` | 4 | ID 57 write + read-back with ID 0 low byte 0x00, then 0xCA | no | `ca` |
+| `writes` | 8 | ID 56 and 57: write a few degrees off, read back, restore | no | – |
+| `setpoint` | 7 | ID 57 = 60, ID 1 = 30/45/40 (`svc_step_min` each), compares the flow | ~30 min | `mirror57` |
+| `ch_off` | 9, 15 | During a burn: CH bit cleared with ID 1 kept, then with ID 1 = 10; pump post-run | ~10 min | `explicitoff` |
+| `id14` | 10 | During a burn: ID 14 = 30/100/0 %, watches ID 17 | ~12 min | – |
+| `min_fire` | 12 | Holds TSet = flow − 3 at minimum modulation until the flow is stable (OPV) | up to 40 min | `flow_min_c` |
+| `cutout` | 13, 14 | Lowers TSet until the cut-out, then times re-ignition (anti-cycle) and the power ramp | ~15 min | – |
+| `comm_loss` | 18, 20 | Silent for `svc_silence_s`, then reads ID 5 (E31?) and checks whether heating works again | – | – |
+
+`comm_loss` needs explicit confirmation: on the Tera, E31 is expected to lock heating until the boiler is power-cycled.
+
+**How a routine runs:**
+- It replaces the normal request (CH/DHW/flow setpoint, bus flags) step by step and restores the bus flags afterwards.
+- It aborts on any of these:
+  - the boiler stops answering or reports a fault for 10 s (except `comm_loss`);
+  - the room drops below the frost limit;
+  - its time limit;
+  - Cancel.
+- Results go into the commissioning record, saved in NVS. Each result carries the time and a "(sim)" mark when it was measured on the simulated boiler.
+- Service mode ends by itself after `svc_idle_min` (30 min) without activity.
+- One-off reads of any ID, and writes to IDs 1, 14, 56 and 57 only, are possible while service mode is on and no routine runs.
+
+The bus flags (`ca`, `mirror57`, `explicitoff`) are now saved in NVS: by Apply and by `SIM ca|mirror57|explicitoff`. A routine's temporary changes stay in RAM.
+
+**Where to use it:**
+- Serial:
+  - `SVC` shows the state and the record;
+  - `SVC on|off`, `SVC run <routine> [confirm]`, `SVC cancel`, `SVC apply <routine>`;
+  - `OT read <id>`, `OT write <id> <°C|%|0xRAW>`;
+  - `CFG svc_*` for the settings.
+- Web: the Service section on the main page, and `/api/service` (JSON).
+- Screen: the status line shows the running routine and its step.
+- MQTT: `service` and `service_routine` fields.
+
 ### Host tests
 
 The pure-C parts build and run on the Mac, without ESP-IDF:

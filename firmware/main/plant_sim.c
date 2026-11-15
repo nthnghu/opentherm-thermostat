@@ -11,7 +11,7 @@ void plant_default_params(plant_params_t *p)
 {
     *p = (plant_params_t){
         .loss_kw = 10, .t_design = -13, .tau_h = 40, .r50_kw = 16, .water_l = 80, .t_out = 5, .out_swing = 4,
-        .pmin_kw = 4.3f, .pmax_kw = 24, .pmax_dhw_kw = 28, .t4_s = 180, .cut_k = 5, .t0_c = 25, .t5_s = 180,
+        .pmin_kw = 4.3f, .pmax_kw = 24, .pmax_dhw_kw = 28, .max_mod_pct = 100, .t4_s = 180, .cut_k = 5, .t0_c = 25, .t5_s = 180,
         .pressure_bar = 1.5f, .leak_bar_per_day = 0,
         .tank_l = 120, .tank_set_c = 50, .a4_k = 25, .a5_k = 3, .dhw_draws = true,
     };
@@ -123,6 +123,7 @@ static void step(plant_state_t *s, const plant_params_t *p, const plant_inputs_t
                 s->ac_until_s = s->t_s + p->t4_s;
             } else {
                 float cap = p->pmin_kw + (p->pmax_kw - p->pmin_kw) * fminf(1, (float)(s->t_s - s->ign_s) / p->t5_s);
+                cap = fminf(cap, p->pmin_kw + (p->pmax_kw - p->pmin_kw) * p->max_mod_pct / 100);
                 float pw = s->power_kw + 0.04f * (target - flow_now) * dt;
                 s->power_kw = fmaxf(p->pmin_kw, fminf(cap, pw));
             }
