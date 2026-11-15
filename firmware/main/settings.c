@@ -1,5 +1,6 @@
 #include "settings.h"
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -86,6 +87,8 @@ void settings_load(void)
     load_str(h, "mqtt_pass", c->mqtt_pass, sizeof(c->mqtt_pass), "");
     load_str(h, "mqtt_loc", c->mqtt_loc, sizeof(c->mqtt_loc), "home");
     load_str(h, "mqtt_dev", c->mqtt_dev, sizeof(c->mqtt_dev), "thermostat");
+    load_str(h, "svc_salt", c->svc_salt, sizeof(c->svc_salt), "");
+    load_str(h, "svc_hash", c->svc_hash, sizeof(c->svc_hash), "");
     if (h) {
         nvs_close(h);
     }
@@ -158,6 +161,8 @@ esp_err_t settings_save(const settings_t *s)
     CHK(nvs_set_str(h, "mqtt_pass", s->mqtt_pass));
     CHK(nvs_set_str(h, "mqtt_loc", s->mqtt_loc));
     CHK(nvs_set_str(h, "mqtt_dev", s->mqtt_dev));
+    CHK(nvs_set_str(h, "svc_salt", s->svc_salt));
+    CHK(nvs_set_str(h, "svc_hash", s->svc_hash));
 #undef CHK
     err = nvs_commit(h);
     nvs_close(h);
@@ -223,4 +228,52 @@ bool settings_check_web_password(const char *user, const char *password)
 bool settings_web_configured(void)
 {
     return s_cfg.web_hash[0] != 0;
+}
+
+bool settings_set_svc_pin(settings_t *s, const char *pin)
+{
+    size_t n = strlen(pin);
+    if (n == 0) {
+        s->svc_salt[0] = s->svc_hash[0] = 0;
+        return true;
+    }
+    if (n < 4 || n > 6) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (pin[i] < '0' || pin[i] > '9') {
+            return false;
+        }
+    }
+    uint8_t salt[16];
+    esp_fill_random(salt, sizeof(salt));
+    to_hex(salt, sizeof(salt), s->svc_salt);
+    hash_pw(s->svc_salt, pin, s->svc_hash);
+    return true;
+}
+
+bool settings_check_svc_pin(const char *pin)
+{
+    settings_t *c = malloc(sizeof(settings_t));
+    if (!c) {
+        return false;
+    }
+    settings_copy(c);
+    bool ok = false;
+    if (c->svc_hash[0]) {
+        char h[65];
+        hash_pw(c->svc_salt, pin, h);
+        unsigned diff = 0;
+        for (int i = 0; i < 64; i++) {
+            diff |= (unsigned)(h[i] ^ c->svc_hash[i]);
+        }
+        ok = diff == 0;
+    }
+    free(c);
+    return ok;
+}
+
+bool settings_svc_pin_configured(void)
+{
+    return s_cfg.svc_hash[0] != 0;
 }

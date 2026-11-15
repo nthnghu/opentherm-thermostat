@@ -15,7 +15,7 @@ typedef enum {
 
 #define CT_UNUSED 0xFFFF
 
-typedef struct {
+typedef struct ct_field {
     const char *name;
     ct_type_t type;
     size_t off;
@@ -33,3 +33,7 @@ void ct_get(const void *obj, const ct_field_t *f, char *out, size_t size);
 bool ct_set(void *obj, const ct_field_t *f, int n, const char *name, const char *value);
 // True when ct_get gives text that needs quotes in JSON.
 bool ct_is_text(const ct_field_t *f, const char *formatted);
+// Editors: the value one step up (dir > 0) or down from cur (text as from ct_get), clamped to the range.
+// Steps: bool toggles; integers 1 (or ~1/100 of a wide range); floats 0.05/0.1/0.5/1 by range; times 15 min
+// (an optional time goes to "-" below 00:00).
+void ct_step_value(const ct_field_t *f, const char *cur, int dir, char *out, size_t size);

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -16,6 +17,7 @@
 #include "settings.h"
 #include "thermostat.h"
 #include "ot_bus.h"
+#include "cfgall.h"
 
 static const char *TAG = "mqtt";
 
@@ -277,6 +279,39 @@ static void send_discovery(void)
         disc_publish("binary_sensor", obj, &j);
     }
 
+    // Everyday settings (the same values as the device Settings page)
+    j.n = 0;
+    jb_add(&j, "{");
+    dev_block(&j);
+    jb_add(&j, ",\"name\":\"Weekly program\",\"uniq_id\":\"%s_prog_on\",\"cmd_t\":\"~/cmd/prog_on\",\"stat_t\":\"~\","
+               "\"val_tpl\":\"{{ value_json.prog_on }}\",\"pl_on\":\"1\",\"pl_off\":\"0\",\"icon\":\"mdi:calendar-clock\"}",
+           s_node);
+    disc_publish("switch", "prog_on", &j);
+    j.n = 0;
+    jb_add(&j, "{");
+    dev_block(&j);
+    jb_add(&j, ",\"name\":\"Summer mode (auto)\",\"uniq_id\":\"%s_summer_on\",\"cmd_t\":\"~/cmd/summer_on\","
+               "\"stat_t\":\"~\",\"val_tpl\":\"{{ value_json.summer_on }}\",\"pl_on\":\"1\",\"pl_off\":\"0\","
+               "\"icon\":\"mdi:weather-sunny\"}",
+           s_node);
+    disc_publish("switch", "summer_on", &j);
+    j.n = 0;
+    jb_add(&j, "{");
+    dev_block(&j);
+    jb_add(&j, ",\"name\":\"Hot water mode\",\"uniq_id\":\"%s_dhw_mode\",\"cmd_t\":\"~/cmd/dhw_mode\",\"stat_t\":\"~\","
+               "\"val_tpl\":\"{{ value_json.dhw_mode }}\",\"options\":[\"Always\",\"Windows\",\"Off\"],"
+               "\"icon\":\"mdi:water-boiler\"}",
+           s_node);
+    disc_publish("select", "dhw_mode", &j);
+    j.n = 0;
+    jb_add(&j, "{");
+    dev_block(&j);
+    jb_add(&j, ",\"name\":\"Eco setback\",\"uniq_id\":\"%s_eco_setback\",\"cmd_t\":\"~/cmd/eco_setback\",\"stat_t\":\"~\","
+               "\"val_tpl\":\"{{ value_json.eco_setback }}\",\"min\":0.5,\"max\":6,\"step\":0.5,\"unit_of_meas\":\"K\","
+               "\"mode\":\"box\",\"icon\":\"mdi:thermometer-minus\"}",
+           s_node);
+    disc_publish("number", "eco_setback", &j);
+
     // Hot water boost button
     j.n = 0;
     jb_add(&j, "{");
@@ -361,6 +396,14 @@ static bool build_state(void)
         snprintf(key, sizeof(key), "alert_%s", alert_name(a));
         jb_num(&j, key, true, "%.0f", (st.alerts >> a) & 1);
     }
+    // Everyday settings
+    sched_config_t sc;
+    thermo_get_sched_config(&sc);
+    static const char *dm[3] = {"Always", "Windows", "Off"};
+    jb_num(&j, "prog_on", true, "%.0f", sc.prog_on);
+    jb_num(&j, "summer_on", true, "%.0f", sc.summer_on);
+    jb_str(&j, "dhw_mode", dm[sc.dhw_mode <= 2 ? sc.dhw_mode : 0]);
+    jb_num(&j, "eco_setback", true, "%.1f", sc.eco_setback_k);
     // Service
     jb_num(&j, "service", true, "%.0f", st.svc_active);
     jb_str(&j, "service_routine", st.svc_running ? svc_routine_name(st.svc_routine) : "none");
@@ -433,6 +476,12 @@ static void on_command(const char *name, const char *v)
             thermo_boost(false);
             thermo_away(false, 0);
         }
+    } else if (strcmp(name, "prog_on") == 0 || strcmp(name, "summer_on") == 0) {
+        cfgall_set(name, strcmp(v, "1") == 0 || strcasecmp(v, "on") == 0 ? "1" : "0");
+    } else if (strcmp(name, "dhw_mode") == 0) {
+        cfgall_set("dhw_mode", strcmp(v, "Always") == 0 ? "0" : (strcmp(v, "Windows") == 0 ? "1" : (strcmp(v, "Off") == 0 ? "2" : "x")));
+    } else if (strcmp(name, "eco_setback") == 0) {
+        cfgall_set("eco_setback_k", v);
     } else if (strcmp(name, "dhw_boost") == 0) {
         thermo_dhw_boost(strcmp(v, "off") != 0);
     }

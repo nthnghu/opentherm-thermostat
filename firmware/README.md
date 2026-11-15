@@ -229,6 +229,34 @@ The bus flags (`ca`, `mirror57`, `explicitoff`) are now saved in NVS: by Apply a
 - Screen: the status line shows the running routine and its step.
 - MQTT: `service` and `service_routine` fields.
 
+## User interface (Phase 1, milestone 6)
+
+**Thermostat app, swipe pages:**
+1. Room, setpoint, mode. The status line shows the plan, alerts and service; tap it for the boiler card.
+2. 24 h chart.
+3. **Boiler card:** link (simulated/real), burner, flow/return, modulation, setpoint, pressure, tank, controller state, starts, burns, efficiency and gas estimate (24 h), active alerts.
+4. **Schedule:**
+   - the week as Comfort (orange) / Eco (blue) bars; tap a day to edit its switch times (±15 min, Comfort/Eco, add/delete, copy to other days);
+   - program on/off;
+   - Boost and Away;
+   - hot water mode (Always / Windows / Off), Hot water boost, tank and pasteurisation status.
+5. **Settings:**
+   - everyday shortcuts: program, Eco setback, summer mode, hot water, sensor-loss mode, frost protection and limit, underfloor floor;
+   - **All settings:** every field of every table, edited with −/+ (long press repeats), range and help shown;
+   - **Service:** asks for the service PIN (set on the web page; locks again after 10 min, 5 wrong tries = 5 min wait). Shows service mode on/off, the routines with their last results, Start/Cancel and Apply. `comm_loss` asks for confirmation.
+
+All editors use `cfgall.c`, one index over the control, schedule, alert and service tables. The serial `CFG`, the web form and JSON import use the same index. `CFG defaults` keeps the weekly program.
+
+**Web page:**
+- "Thermostat settings": every field, grouped by table, with help and range;
+- "Weekly program": one line per day, `06:00=c 08:00=e`;
+- "Export / import": `/api/config?download=1` gives all settings, the program and the boiler flags as JSON; paste a file to restore it. Unknown keys are ignored and values are range-checked;
+- the service PIN.
+
+**Home Assistant, everyday controls:** switches "Weekly program" and "Summer mode (auto)", a select "Hot water mode", and a number "Eco setback".
+
+Serial screens for screenshots: `GO page N`, `GO edit <name>`, `GO advanced`, `GO service`, `GO day <0..6>`.
+
 ### Host tests
 
 The pure-C parts build and run on the Mac, without ESP-IDF:

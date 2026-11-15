@@ -8,7 +8,7 @@
 
 #define SUMMER_MIN_HOURS 12      // hours of outdoor data in the last 24 h before summer mode may switch
 #define PASTEUR_START_WINDOW 60  // a missed start time is still taken up to this many minutes late
-#define PASTEUR_BELOW_K 2.0f     // the tank counts as hot at pasteur_c − this (sensor position)
+#define PASTEUR_BELOW_K 2.0f     // the tank counts as hot at pasteur_c - this (sensor position)
 #define PASTEUR_WAIT_S 300.0     // a start waits this long for the tank and ID 56 readings (e.g. after a boot)
 
 static float clampf(float v, float lo, float hi)
@@ -26,7 +26,7 @@ static float clampf(float v, float lo, float hi)
      "DHW window " #i ": end (HH:MM, may pass midnight)"}
 static const ct_field_t FIELDS[] = {
     F(prog_on, CT_BOOL, 0, 1, "weekly Comfort/Eco program on/off (off = constant setpoint); edit with PROG"),
-    F(eco_setback_k, CT_FLOAT, 0.5f, 6, "Eco = Comfort − this (K)"),
+    F(eco_setback_k, CT_FLOAT, 0.5f, 6, "Eco = Comfort - this (K)"),
     F(boost_on, CT_BOOL, 0, 1, "boost feature on/off"),
     F(boost_k, CT_FLOAT, 0.5f, 3, "boost: Comfort + this (K)"),
     F(boost_min, CT_U16, 10, 240, "boost: length (min)"),
@@ -35,7 +35,7 @@ static const ct_field_t FIELDS[] = {
     F(away_dhw_off, CT_BOOL, 0, 1, "away: hot water off (the tank guard still applies)"),
     F(summer_on, CT_BOOL, 0, 1, "summer mode on/off: CH off while the 24 h outdoor mean is warm"),
     F(summer_c, CT_FLOAT, 10, 25, "summer: CH off at or above this 24 h outdoor mean (°C)"),
-    F(summer_hyst_k, CT_FLOAT, 0.5f, 5, "summer: CH back on below summer_c − this (K)"),
+    F(summer_hyst_k, CT_FLOAT, 0.5f, 5, "summer: CH back on below summer_c - this (K)"),
     F(dhw_mode, CT_U8, 0, 2, "hot water: 0 = always enabled, 1 = time windows, 2 = off"),
     W(1), W(2), W(3),
     F(guard_on, CT_BOOL, 0, 1, "tank guard on/off: enable hot water while the tank is below guard_c"),
@@ -142,6 +142,11 @@ int sched_config_count(void)
 const char *sched_config_name(int idx)
 {
     return idx >= 0 && idx < NFIELDS ? FIELDS[idx].name : NULL;
+}
+
+const struct ct_field *sched_config_field(int idx)
+{
+    return idx >= 0 && idx < NFIELDS ? &FIELDS[idx] : NULL;
 }
 
 const char *sched_config_help(int idx)

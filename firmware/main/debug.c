@@ -19,6 +19,7 @@
 #include "ot_frame.h"
 #include "schedule.h"
 #include "alerts.h"
+#include "cfgall.h"
 #include "mqtt_ha.h"
 #include "nvs.h"
 #include <time.h>
@@ -106,60 +107,21 @@ static void debug_task(void *arg)
             continue;
         }
         if (strncmp(line, "CFG", 3) == 0 && (line[3] == 0 || line[3] == ' ')) {
-            // CFG = list, CFG <name> <value> = set (saved after 5 s), CFG defaults = factory values (both tables)
-            ctrl_config_t c;
-            sched_config_t sc;
-            alert_config_t ac;
-            svc_config_t vc;
-            thermo_get_svc_config(&vc);
-            thermo_get_ctrl_config(&c);
-            thermo_get_sched_config(&sc);
-            thermo_get_alert_config(&ac);
+            // CFG = list, CFG <name> <value> = set (saved after 5 s), CFG defaults = factory values (program kept)
             char name[32] = "", value[24] = "";
             int n = sscanf(line + 3, "%31s %23s", name, value);
             if (n == 1 && strcmp(name, "defaults") == 0) {
-                ctrl_default_config(&c);
-                thermo_set_ctrl_config(&c);
-                sched_default_config(&sc);
-                thermo_set_sched_config(&sc);
-                alert_default_config(&ac);
-                thermo_set_alert_config(&ac);
-                svc_default_config(&vc);
-                thermo_set_svc_config(&vc);
-                printf("CFG defaults restored\n");
+                cfgall_defaults();
+                printf("CFG defaults restored (weekly program kept)\n");
             } else if (n == 2) {
-                if (ctrl_config_set(&c, name, value)) {
-                    thermo_set_ctrl_config(&c);
-                    printf("CFG %s = %s ok\n", name, value);
-                } else if (sched_config_set(&sc, name, value)) {
-                    thermo_set_sched_config(&sc);
-                    printf("CFG %s = %s ok\n", name, value);
-                } else if (alert_config_set(&ac, name, value)) {
-                    thermo_set_alert_config(&ac);
-                    printf("CFG %s = %s ok\n", name, value);
-                } else if (svc_config_set(&vc, name, value)) {
-                    thermo_set_svc_config(&vc);
-                    printf("CFG %s = %s ok\n", name, value);
-                } else {
-                    printf("CFG %s = %s refused (unknown name or out of range)\n", name, value);
-                }
+                printf("CFG %s = %s %s\n", name, value,
+                       cfgall_set(name, value) ? "ok" : "refused (unknown name or out of range)");
             } else {
                 char v[24];
-                for (int i = 0; i < ctrl_config_count(); i++) {
-                    ctrl_config_get(&c, i, v, sizeof(v));
-                    printf("CFG %-19s %-8s %s\n", ctrl_config_name(i), v, ctrl_config_help(i));
-                }
-                for (int i = 0; i < sched_config_count(); i++) {
-                    sched_config_get(&sc, i, v, sizeof(v));
-                    printf("CFG %-19s %-8s %s\n", sched_config_name(i), v, sched_config_help(i));
-                }
-                for (int i = 0; i < alert_config_count(); i++) {
-                    alert_config_get(&ac, i, v, sizeof(v));
-                    printf("CFG %-19s %-8s %s\n", alert_config_name(i), v, alert_config_help(i));
-                }
-                for (int i = 0; i < svc_config_count(); i++) {
-                    svc_config_get(&vc, i, v, sizeof(v));
-                    printf("CFG %-19s %-8s %s\n", svc_config_name(i), v, svc_config_help(i));
+                for (int i = 0; i < cfgall_count(); i++) {
+                    const ct_field_t *f = cfgall_field(i, NULL);
+                    cfgall_get(i, v, sizeof(v));
+                    printf("CFG %-19s %-8s %s\n", f->name, v, f->help);
                 }
             }
             continue;

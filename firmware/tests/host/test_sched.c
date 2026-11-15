@@ -3,6 +3,8 @@
 #include <string.h>
 #include "test.h"
 #include "schedule.h"
+#include "cfgtable.h"
+#include "control.h"
 #include "otb_core.h"
 #include "ot_sim.h"
 #include "ot_frame.h"
@@ -435,8 +437,47 @@ static void test_config_table(void)
     CHECK(bad.pasteur_c <= 75 && bad.dhw_mode <= 2 && bad.version == SCHED_CONFIG_VERSION, "sanitize garbage");
 }
 
+static const ct_field_t *find(const char *name)
+{
+    for (int i = 0; i < sched_config_count(); i++) {
+        if (strcmp(sched_config_field(i)->name, name) == 0) {
+            return sched_config_field(i);
+        }
+    }
+    for (int i = 0; i < ctrl_config_count(); i++) {
+        if (strcmp(ctrl_config_field(i)->name, name) == 0) {
+            return ctrl_config_field(i);
+        }
+    }
+    return NULL;
+}
+
+static void test_step(void)
+{
+    char o[24];
+    ct_step_value(find("eco_setback_k"), "2.00", 1, o, sizeof(o));
+    CHECK(strcmp(o, "2.10") == 0, "float 0.5..6 steps 0.1: %s", o);
+    ct_step_value(find("eco_setback_k"), "6.00", 1, o, sizeof(o));
+    CHECK(strcmp(o, "6.00") == 0, "clamped at max: %s", o);
+    ct_step_value(find("flow_max_c"), "55.00", -1, o, sizeof(o));
+    CHECK(strcmp(o, "54.50") == 0, "range 50 steps 0.5: %s", o);
+    ct_step_value(find("prog_on"), "0", 1, o, sizeof(o));
+    CHECK(strcmp(o, "1") == 0, "bool toggles");
+    ct_step_value(find("pasteur_min"), "13:00", 1, o, sizeof(o));
+    CHECK(strcmp(o, "13:15") == 0, "time +15: %s", o);
+    ct_step_value(find("pasteur_min"), "00:00", -1, o, sizeof(o));
+    CHECK(strcmp(o, "00:00") == 0, "required time stops at 00:00: %s", o);
+    ct_step_value(find("dhw_win1_start"), "00:00", -1, o, sizeof(o));
+    CHECK(strcmp(o, "-") == 0, "optional time goes to unused: %s", o);
+    ct_step_value(find("dhw_win1_start"), "-", 1, o, sizeof(o));
+    CHECK(strcmp(o, "00:00") == 0, "and back: %s", o);
+    ct_step_value(find("duty_min_burn_s"), "600", 1, o, sizeof(o));
+    CHECK(strcmp(o, "660") == 0, "range over 1000 (seconds) steps 60: %s", o);
+}
+
 int main(void)
 {
+    test_step();
     test_program();
     test_boost_away_summer();
     test_dhw_logic();

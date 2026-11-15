@@ -130,6 +130,8 @@ const char *ctrl_state_name(ctrl_state_t s);
 int ctrl_config_count(void);
 const char *ctrl_config_name(int idx);
 const char *ctrl_config_help(int idx);
+// Field description (type, range) for generic editors; NULL past the end.
+const struct ct_field *ctrl_config_field(int idx);
 // Formats field idx as text. Returns false for a bad index.
 bool ctrl_config_get(const ctrl_config_t *c, int idx, char *out, size_t size);
 // Parses and range-checks a value. Returns false (and leaves c unchanged) on a bad name or value.

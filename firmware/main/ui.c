@@ -1,5 +1,6 @@
 // UI shell: status bar on the top layer, app launcher, inactivity return to the thermostat, dimming.
 #include "ui.h"
+#include "ui_pages.h"
 #include "ui_theme.h"
 #include <time.h>
 #include <string.h>
@@ -439,6 +440,12 @@ void ui_debug_go(const char *what)
     if (strncmp(what, "panel ", 6) == 0) {
         lv_screen_load(s_apps[APP_SETUP]);
         app_setup_open_panel(atoi(what + 6));
+        return;
+    }
+    if (strncmp(what, "edit ", 5) == 0 || strcmp(what, "advanced") == 0 || strcmp(what, "service") == 0 ||
+        strncmp(what, "day ", 4) == 0) {
+        ui_go_thermostat();
+        ui_pages_debug(what);
         return;
     }
     if (strncmp(what, "page ", 5) == 0) {

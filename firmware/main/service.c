@@ -47,6 +47,11 @@ const char *svc_config_name(int idx)
     return idx >= 0 && idx < NFIELDS ? FIELDS[idx].name : NULL;
 }
 
+const struct ct_field *svc_config_field(int idx)
+{
+    return idx >= 0 && idx < NFIELDS ? &FIELDS[idx] : NULL;
+}
+
 const char *svc_config_help(int idx)
 {
     return idx >= 0 && idx < NFIELDS ? FIELDS[idx].help : NULL;

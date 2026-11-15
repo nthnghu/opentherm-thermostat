@@ -1,5 +1,5 @@
 // Thermostat app: swipeable pages. Page 1 = room temperature, clock, setpoint; page 2 = 24 h chart;
-// further pages are placeholders for later (other sensors, schedule, settings).
+// page 3 = boiler card, page 4 = schedule, page 5 = settings (ui_pages.c).
 #include <stdio.h>
 #include <time.h>
 #include <math.h>
@@ -9,6 +9,7 @@
 #include "ui_theme.h"
 #include "thermostat.h"
 #include "timekeep.h"
+#include "ui_pages.h"
 
 #define CHART_POINTS 144  // 24 h at 10 min
 
@@ -41,6 +42,11 @@ static void mode_cb(lv_event_t *e)
     thermo_state_t st;
     thermo_get(&st);
     thermo_set_mode(st.mode == THERMO_MODE_HEAT ? THERMO_MODE_OFF : THERMO_MODE_HEAT);
+}
+
+static void info_cb(lv_event_t *e)
+{
+    app_thermo_show_page(2);  // the boiler card, with the alerts
 }
 
 static void apps_cb(lv_event_t *e)
@@ -222,6 +228,8 @@ static void build_main(lv_obj_t *p)
     lv_label_set_long_mode(s_info, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s_info, 20, 600);
+    lv_obj_add_flag(s_info, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_info, info_cb, LV_EVENT_CLICKED, NULL);
 }
 
 /* ------------------------------------------------------------ chart page */
@@ -291,20 +299,6 @@ static void build_chart(lv_obj_t *p)
     lv_obj_set_pos(s_chart_info, 22, 572);
 }
 
-static void build_placeholder(lv_obj_t *p, const char *title, const char *text)
-{
-    lv_obj_t *t = lv_label_create(p);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
-    lv_label_set_text(t, title);
-    lv_obj_set_pos(t, 20, 16);
-    lv_obj_t *l = lv_label_create(p);
-    lv_obj_set_width(l, 440);
-    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(l, ui_c(0x90A4AE), 0);
-    lv_label_set_text(l, text);
-    lv_obj_set_pos(l, 20, 70);
-}
-
 /* --------------------------------------------------------------- general */
 
 static int active_page(void)
@@ -322,12 +316,21 @@ static void update_dots(void)
     }
 }
 
+static void update_page(int page)
+{
+    switch (page) {
+    case 1: update_chart(); break;
+    case 2: ui_pages_boiler_update(); break;
+    case 3: ui_pages_schedule_update(); break;
+    case 4: ui_pages_settings_update(); break;
+    default: break;
+    }
+}
+
 static void tile_cb(lv_event_t *e)
 {
     update_dots();
-    if (active_page() == 1) {
-        update_chart();
-    }
+    update_page(active_page());
 }
 
 static void timer_cb(lv_timer_t *t)
@@ -337,8 +340,9 @@ static void timer_cb(lv_timer_t *t)
     }
     update_main();
     static int n;
-    if (++n % 60 == 0 && active_page() == 1) {
-        update_chart();
+    int page = active_page();
+    if (page >= 2 || (++n % 60 == 0 && page == 1)) {
+        update_page(page);
     }
 }
 
@@ -352,9 +356,7 @@ void app_thermo_show_page(int page)
     lv_obj_update_layout(s_tv);
     lv_tileview_set_tile_by_index(s_tv, page, 0, LV_ANIM_OFF);
     update_dots();
-    if (page == 1) {
-        update_chart();
-    }
+    update_page(page);
 }
 
 lv_obj_t *app_thermo_create(void)
@@ -372,12 +374,10 @@ lv_obj_t *app_thermo_create(void)
 
     build_main(lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT));
     build_chart(lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT | LV_DIR_RIGHT));
-    build_placeholder(lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_LEFT | LV_DIR_RIGHT), "Other sensors",
-                      "Coming later: temperatures from other rooms and Home Assistant sensors.");
-    build_placeholder(lv_tileview_add_tile(s_tv, 3, 0, LV_DIR_LEFT | LV_DIR_RIGHT), "Schedule",
-                      "Coming later: the weekly heating schedule, run locally on the device.");
-    build_placeholder(lv_tileview_add_tile(s_tv, 4, 0, LV_DIR_LEFT), "Thermostat settings",
-                      "Coming later. For now: Apps > Setup > Thermostat (sensor offset, hysteresis, boiler mode).");
+    ui_pages_init(s_scr);
+    ui_pages_boiler(lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_LEFT | LV_DIR_RIGHT));
+    ui_pages_schedule(lv_tileview_add_tile(s_tv, 3, 0, LV_DIR_LEFT | LV_DIR_RIGHT));
+    ui_pages_settings(lv_tileview_add_tile(s_tv, 4, 0, LV_DIR_LEFT));
 
     // Page dots
     for (int i = 0; i < 5; i++) {

@@ -92,5 +92,7 @@ const char *alert_title(alert_id_t id);  // e.g. "Low water pressure"
 int alert_config_count(void);
 const char *alert_config_name(int idx);
 const char *alert_config_help(int idx);
+// Field description (type, range) for generic editors; NULL past the end.
+const struct ct_field *alert_config_field(int idx);
 bool alert_config_get(const alert_config_t *c, int idx, char *out, size_t size);
 bool alert_config_set(alert_config_t *c, const char *name, const char *value);

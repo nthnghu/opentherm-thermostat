@@ -48,6 +48,9 @@ typedef struct {
     char mqtt_pass[96];
     char mqtt_loc[32];     // topic sensors/<loc>/<dev>
     char mqtt_dev[32];
+    // Service-mode PIN for the device (set on the web page); empty hash = device service menu locked
+    char svc_salt[33];
+    char svc_hash[65];
 } settings_t;
 
 void settings_load(void);
@@ -61,3 +64,8 @@ bool settings_wifi_configured(void);
 void settings_set_web_password(settings_t *s, const char *user, const char *password);
 bool settings_check_web_password(const char *user, const char *password);
 bool settings_web_configured(void);
+
+// Service PIN (4-6 digits; "" clears it)
+bool settings_set_svc_pin(settings_t *s, const char *pin);  // false: not 4-6 digits
+bool settings_check_svc_pin(const char *pin);
+bool settings_svc_pin_configured(void);

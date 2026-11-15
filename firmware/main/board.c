@@ -498,13 +498,26 @@ i2c_master_bus_handle_t board_i2c_bus(void)
     return s_i2c;
 }
 
+// The AP info comes from the C6 over SDIO (an RPC). Several tasks ask (status bar, MQTT): answer from a
+// 2-second cache, and keep the last good value for 30 s when a read fails (it showed "0" otherwise).
 int board_wifi_rssi(void)
 {
-    wifi_ap_record_t ap;
-    if (!s_wifi_up || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+    static int last;
+    static int64_t last_us;
+    if (!s_wifi_up) {
         return 0;
     }
-    return ap.rssi;
+    int64_t now = esp_timer_get_time();
+    if (last && now - last_us < 2000000) {
+        return last;
+    }
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK && ap.rssi != 0) {
+        last = ap.rssi;
+        last_us = now;
+        return last;
+    }
+    return now - last_us < 30000000 ? last : 0;
 }
 
 bool board_touch_ok(void)

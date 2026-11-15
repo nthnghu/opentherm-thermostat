@@ -22,7 +22,7 @@ static const ct_field_t FIELDS[] = {
     F(short_starts_h, CT_U8, 2, 30, "short cycling: at least this many CH starts in the last hour"),
     F(short_median_min, CT_FLOAT, 1, 15, "short cycling: with a median burn shorter than this (min)"),
     F(cold_on, CT_BOOL, 0, 1, "alert: room not reaching the target on/off"),
-    F(cold_k, CT_FLOAT, 0.3f, 5, "cold room: below target − this (K)"),
+    F(cold_k, CT_FLOAT, 0.3f, 5, "cold room: below target - this (K)"),
     F(cold_h, CT_FLOAT, 0.5f, 24, "cold room: for this long (h)"),
     F(pasteur_on, CT_BOOL, 0, 1, "alert: pasteurisation did not finish on/off"),
     F(clock_on, CT_BOOL, 0, 1, "alert: no valid clock on/off"),
@@ -76,6 +76,11 @@ int alert_config_count(void)
 const char *alert_config_name(int idx)
 {
     return idx >= 0 && idx < NFIELDS ? FIELDS[idx].name : NULL;
+}
+
+const struct ct_field *alert_config_field(int idx)
+{
+    return idx >= 0 && idx < NFIELDS ? &FIELDS[idx] : NULL;
 }
 
 const char *alert_config_help(int idx)

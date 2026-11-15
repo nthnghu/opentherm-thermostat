@@ -153,5 +153,7 @@ const char *svc_rstate_name(svc_rstate_t s);
 int svc_config_count(void);
 const char *svc_config_name(int idx);
 const char *svc_config_help(int idx);
+// Field description (type, range) for generic editors; NULL past the end.
+const struct ct_field *svc_config_field(int idx);
 bool svc_config_get(const svc_config_t *c, int idx, char *out, size_t size);
 bool svc_config_set(svc_config_t *c, const char *name, const char *value);

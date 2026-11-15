@@ -23,6 +23,8 @@
 #include "ot_bus.h"
 #include "ot_frame.h"
 #include "mqtt_ha.h"
+#include "cfgall.h"
+#include "cJSON.h"
 
 static const char *TAG = "web";
 static httpd_handle_t s_server;
@@ -316,6 +318,11 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
             SEND(req, "</td></tr>");
         }
         SEND(req, "</table>");
+        sendf(req, "<h3>Service PIN for the device</h3><p class=hint>%s</p><form method=post action=/save/svcpin>"
+                   "<input name=pin type=password inputmode=numeric placeholder='4-6 digits, empty = remove'>"
+                   "<button>Set PIN</button></form>",
+              settings_svc_pin_configured() ? "A PIN is set. Settings > Service on the device asks for it."
+                                            : "No PIN yet: the service menu on the device is locked.");
         if (st.svc_active && !st.svc_running) {
             SEND(req, "<h3>Read / write one Data-ID</h3><form method=post action=/save/svc>"
                       "<input type=hidden name=a value=manual><label for=mid>Data-ID</label>"
@@ -326,6 +333,59 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
             SEND(req, " (reload to see a new answer)</p>");
         }
         free(rec);
+    }
+
+    // All settings (cfgall: the same tables as the device editor and the serial CFG command)
+    {
+        SEND(req, "<h2>Thermostat settings</h2><form method=post action=/save/cfg><input type=hidden name=cfgform value=1>");
+        int last_t = -1;
+        char val[24];
+        for (int i = 0; i < cfgall_count(); i++) {
+            cfg_table_t t;
+            const ct_field_t *f = cfgall_field(i, &t);
+            if ((int)t != last_t) {
+                sendf(req, "%s<h3>%s</h3>", last_t >= 0 ? "" : "", cfgall_table_title(t));
+                last_t = (int)t;
+            }
+            cfgall_get(i, val, sizeof(val));
+            if (f->type == CT_BOOL) {
+                sendf(req, "<label><input type=checkbox name=%s value=1%s> %s</label>", f->name,
+                      strcmp(val, "0") ? " checked" : "", f->name);
+            } else {
+                sendf(req, "<label for=%s>%s</label><input id=%s name=%s value='%s'>", f->name, f->name, f->name, f->name,
+                      val);
+            }
+            SEND(req, "<p class=hint>");
+            send_escaped(req, f->help);
+            if (f->type == CT_TIME_OPT) {
+                SEND(req, " (HH:MM or -)");
+            } else if (f->type == CT_TIME) {
+                SEND(req, " (HH:MM)");
+            } else if (f->type != CT_BOOL) {
+                sendf(req, " [%g..%g]", f->min, f->max);
+            }
+            SEND(req, "</p>");
+        }
+        SEND(req, "<button>Save settings</button></form>");
+
+        sched_config_t sc;
+        thermo_get_sched_config(&sc);
+        SEND(req, "<h2>Weekly program</h2><form method=post action=/save/prog><p class=hint>Switch times per day, "
+                  "e.g. <code>06:00=c 08:00=e 17:00=c 22:30=e</code> (c = Comfort = your setpoint, e = Eco). Empty = "
+                  "the day continues the previous one. Used when prog_on is ticked.</p>");
+        static const char *dn[7] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+        char day[100];
+        for (int d = 0; d < 7; d++) {
+            sched_prog_format(&sc, d, day, sizeof(day));
+            sendf(req, "<label for=prog%d>%s</label><input id=prog%d name=prog%d value='%s'>", d, dn[d], d, d, day);
+        }
+        SEND(req, "<button>Save program</button></form>");
+
+        SEND(req, "<h2>Export / import</h2><p class=hint><a href='/api/config?download=1'>Download the configuration "
+                  "(JSON)</a>: all settings, the weekly program and the boiler flags. Paste a saved file below to "
+                  "restore it; unknown keys are ignored, values are range-checked.</p>"
+                  "<form method=post action=/save/import><textarea name=json spellcheck=false "
+                  "placeholder='{\"format\":\"thermostat-config-1\", ...}'></textarea><button>Import</button></form>");
     }
 
     // Clock
@@ -528,45 +588,106 @@ static esp_err_t get_config(httpd_req_t *req)
     if (!check_auth(req)) {
         return ESP_OK;
     }
-    ctrl_config_t c;
-    thermo_get_ctrl_config(&c);
-    httpd_resp_set_type(req, "application/json");
-    char v[24];
-    sendf(req, "{\"version\":%u", c.version);
-    for (int i = 0; i < ctrl_config_count(); i++) {
-        ctrl_config_get(&c, i, v, sizeof(v));
-        sendf(req, ",\"%s\":%s", ctrl_config_name(i), v);
+    char q[32], v[24];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && strstr(q, "download")) {
+        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"thermostat-config.json\"");
     }
-    // Schedule settings (times as "HH:MM" strings, "-" = unused) and the weekly program
+    httpd_resp_set_type(req, "application/json");
+    const esp_app_desc_t *app = esp_app_get_description();
+    sendf(req, "{\"format\":\"thermostat-config-1\",\"firmware\":\"%s\"", app->version);
+    for (int i = 0; i < cfgall_count(); i++) {
+        const ct_field_t *f = cfgall_field(i, NULL);
+        cfgall_get(i, v, sizeof(v));
+        sendf(req, ct_is_text(f, v) ? ",\"%s\":\"%s\"" : ",\"%s\":%s", f->name, v);
+    }
     sched_config_t sc;
     thermo_get_sched_config(&sc);
-    sendf(req, ",\"sched_version\":%u", sc.version);
-    for (int i = 0; i < sched_config_count(); i++) {
-        sched_config_get(&sc, i, v, sizeof(v));
-        bool text = strchr(v, ':') || strcmp(v, "-") == 0;
-        sendf(req, text ? ",\"%s\":\"%s\"" : ",\"%s\":%s", sched_config_name(i), v);
-    }
-    alert_config_t ac;
-    thermo_get_alert_config(&ac);
-    sendf(req, ",\"alert_version\":%u", ac.version);
-    for (int i = 0; i < alert_config_count(); i++) {
-        alert_config_get(&ac, i, v, sizeof(v));
-        sendf(req, ",\"%s\":%s", alert_config_name(i), v);
-    }
-    svc_config_t vc;
-    thermo_get_svc_config(&vc);
-    for (int i = 0; i < svc_config_count(); i++) {
-        svc_config_get(&vc, i, v, sizeof(v));
-        sendf(req, ",\"%s\":%s", svc_config_name(i), v);
-    }
     SEND(req, ",\"prog\":[");
     char day[100];
     for (int d = 0; d < 7; d++) {
         sched_prog_format(&sc, d, day, sizeof(day));
         sendf(req, "%s\"%s\"", d ? "," : "", day);
     }
-    SEND(req, "]}");
+    otb_flags_t fl;
+    otbus_get_flags(&fl);
+    sendf(req, "],\"bus_flags\":{\"ca\":%d,\"mirror57\":%d,\"explicitoff\":%d}}", fl.status_ca, fl.mirror_57,
+          fl.explicit_off);
     return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// Applies an exported configuration (JSON text). Unknown keys are ignored; returns the count applied and
+// lists refused names in msg.
+static int import_config(const char *json, char *msg, size_t size)
+{
+    cJSON *root = cJSON_Parse(json);
+    if (!root || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        snprintf(msg, size, "not a JSON object");
+        return -1;
+    }
+    int applied = 0;
+    size_t n = (size_t)snprintf(msg, size, "refused:");
+    bool any_refused = false;
+    for (cJSON *it = root->child; it; it = it->next) {
+        if (!it->string || cfgall_find(it->string) < 0) {
+            continue;
+        }
+        char v[24];
+        if (cJSON_IsString(it)) {
+            snprintf(v, sizeof(v), "%s", it->valuestring);
+        } else if (cJSON_IsNumber(it)) {
+            snprintf(v, sizeof(v), "%g", it->valuedouble);
+        } else if (cJSON_IsBool(it)) {
+            snprintf(v, sizeof(v), "%d", cJSON_IsTrue(it));
+        } else {
+            continue;
+        }
+        if (cfgall_set(it->string, v)) {
+            applied++;
+        } else if (n < size) {
+            n += (size_t)snprintf(msg + n, size - n, " %s", it->string);
+            any_refused = true;
+        }
+    }
+    cJSON *prog = cJSON_GetObjectItem(root, "prog");
+    if (cJSON_IsArray(prog) && cJSON_GetArraySize(prog) == 7) {
+        sched_config_t sc;
+        thermo_get_sched_config(&sc);
+        bool ok = true;
+        for (int d = 0; d < 7 && ok; d++) {
+            cJSON *e = cJSON_GetArrayItem(prog, d);
+            ok = cJSON_IsString(e) && sched_prog_parse(&sc, d, e->valuestring);
+        }
+        if (ok) {
+            thermo_set_sched_config(&sc);
+            applied++;
+        } else if (n < size) {
+            n += (size_t)snprintf(msg + n, size - n, " prog");
+            any_refused = true;
+        }
+    }
+    cJSON *fl = cJSON_GetObjectItem(root, "bus_flags");
+    if (cJSON_IsObject(fl)) {
+        otb_flags_t f;
+        otbus_get_flags(&f);
+        cJSON *x;
+        if ((x = cJSON_GetObjectItem(fl, "ca")) && cJSON_IsNumber(x)) {
+            f.status_ca = x->valueint != 0;
+        }
+        if ((x = cJSON_GetObjectItem(fl, "mirror57")) && cJSON_IsNumber(x)) {
+            f.mirror_57 = x->valueint != 0;
+        }
+        if ((x = cJSON_GetObjectItem(fl, "explicitoff")) && cJSON_IsNumber(x)) {
+            f.explicit_off = x->valueint != 0;
+        }
+        otbus_set_flags(&f, true);
+        applied++;
+    }
+    cJSON_Delete(root);
+    if (!any_refused) {
+        msg[0] = 0;
+    }
+    return applied;
 }
 
 // OpenTherm bus state and the support map.
@@ -806,7 +927,7 @@ static esp_err_t post_save(httpd_req_t *req)
     if (!check_auth(req)) {
         return ESP_OK;
     }
-    char *body = read_body(req, 4096);
+    char *body = read_body(req, 12288);  // the settings and import forms are a few KB
     if (!body) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request");
     }
@@ -915,6 +1036,93 @@ static esp_err_t post_save(httpd_req_t *req)
             msg = ok ? "Sent; reload for the answer" : (id < 0 ? "Data-ID missing" : tmsg);
         } else {
             msg = "Unknown service action";
+            ok = false;
+        }
+    } else if (strcmp(section, "cfg") == 0) {
+        // Every field of the settings form; only changed values are set
+        int changed = 0;
+        size_t rn = 0;
+        tmsg[0] = 0;
+        char cur[24];
+        for (int i = 0; i < cfgall_count(); i++) {
+            const ct_field_t *f = cfgall_field(i, NULL);
+            if (!form_get(body, f->name, v, 512)) {
+                if (f->type == CT_BOOL && cfgall_get(i, cur, sizeof(cur)) && strcmp(cur, "0") != 0 &&
+                    strstr(body, "cfgform=1")) {
+                    cfgall_set(f->name, "0");  // unticked checkbox
+                    changed++;
+                }
+                continue;
+            }
+            cfgall_get(i, cur, sizeof(cur));
+            if (f->type == CT_BOOL) {
+                strlcpy(v, "1", 512);
+            }
+            if (strcmp(cur, v) == 0 || (f->type == CT_FLOAT && fabsf(strtof(cur, NULL) - strtof(v, NULL)) < 1e-4f)) {
+                continue;
+            }
+            if (cfgall_set(f->name, v)) {
+                changed++;
+            } else if (rn < sizeof(tmsg)) {
+                rn += (size_t)snprintf(tmsg + rn, sizeof(tmsg) - rn, "%s%s", rn ? ", " : "Refused: ", f->name);
+            }
+        }
+        if (tmsg[0]) {
+            ok = false;
+            msg = tmsg;
+        } else {
+            snprintf(tmsg, sizeof(tmsg), "%d setting(s) changed", changed);
+            msg = tmsg;
+        }
+    } else if (strcmp(section, "prog") == 0) {
+        sched_config_t sc;
+        thermo_get_sched_config(&sc);
+        bool pok = true;
+        for (int d = 0; d < 7 && pok; d++) {
+            char key[8];
+            snprintf(key, sizeof(key), "prog%d", d);
+            if (form_get(body, key, v, 512)) {
+                pok = sched_prog_parse(&sc, d, v);
+            }
+        }
+        if (pok) {
+            thermo_set_sched_config(&sc);
+            msg = "Weekly program saved";
+        } else {
+            msg = "Program not saved: use HH:MM=c or HH:MM=e, up to 6 per day";
+            ok = false;
+        }
+    } else if (strcmp(section, "import") == 0) {
+        // The JSON is longer than v: decode it in place from the body
+        char *j = strstr(body, "json=");
+        if (j) {
+            j += 5;
+            char *end = strchr(j, '&');
+            if (end) {
+                *end = 0;
+            }
+            url_decode(j);
+            char rep[96];
+            int n = import_config(j, rep, sizeof(rep));
+            if (n < 0) {
+                snprintf(tmsg, sizeof(tmsg), "Import failed: %s", rep);
+                ok = false;
+            } else {
+                snprintf(tmsg, sizeof(tmsg), "Imported %d item(s). %s", n, rep);
+                ok = rep[0] == 0;
+            }
+            msg = tmsg;
+        } else {
+            msg = "Nothing to import";
+            ok = false;
+        }
+    } else if (strcmp(section, "svcpin") == 0) {
+        form_get(body, "pin", v, 512);
+        if (settings_set_svc_pin(c, v)) {
+            settings_save(c);
+            msg = v[0] ? "Service PIN set" : "Service PIN removed: the device service menu is locked";
+        } else {
+            msg = "The PIN must be 4 to 6 digits";
             ok = false;
         }
     } else if (strcmp(section, "clock") == 0) {

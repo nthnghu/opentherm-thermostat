@@ -179,6 +179,8 @@ const char *sched_pasteur_name(sched_pasteur_result_t r);
 int sched_config_count(void);
 const char *sched_config_name(int idx);
 const char *sched_config_help(int idx);
+// Field description (type, range) for generic editors; NULL past the end.
+const struct ct_field *sched_config_field(int idx);
 bool sched_config_get(const sched_config_t *c, int idx, char *out, size_t size);
 bool sched_config_set(sched_config_t *c, const char *name, const char *value);
 // One day of the program as text: "06:00=c 08:00=e 17:00=c 22:30=e" (c = Comfort, e = Eco).

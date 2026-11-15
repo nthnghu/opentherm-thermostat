@@ -121,3 +121,44 @@ bool ct_set(void *obj, const ct_field_t *fields, int n, const char *name, const 
     }
     return false;
 }
+
+void ct_step_value(const ct_field_t *f, const char *cur, int dir, char *out, size_t size)
+{
+    int sgn = dir > 0 ? 1 : -1;
+    if (f->type == CT_BOOL) {
+        snprintf(out, size, "%d", strcmp(cur, "0") == 0 ? 1 : 0);
+        return;
+    }
+    if (f->type == CT_TIME || f->type == CT_TIME_OPT) {
+        int m = parse_time(cur);
+        if (m == CT_UNUSED) {
+            m = sgn > 0 ? 0 : (f->type == CT_TIME_OPT ? CT_UNUSED : 0);
+        } else {
+            m = (m / 15) * 15 + sgn * 15;
+            if (m < 0) {
+                m = f->type == CT_TIME_OPT ? CT_UNUSED : 0;
+            } else if (m > 1439) {
+                m = 1425;
+            }
+        }
+        if (m == CT_UNUSED) {
+            snprintf(out, size, "-");
+        } else {
+            snprintf(out, size, "%02d:%02d", m / 60, m % 60);
+        }
+        return;
+    }
+    float v = strtof(cur, NULL), range = f->max - f->min, step;
+    if (f->type == CT_FLOAT) {
+        step = range <= 2 ? 0.05f : (range <= 15 ? 0.1f : (range <= 60 ? 0.5f : 1.0f));
+    } else {
+        step = range > 1000 ? 60 : (range > 300 ? 10 : 1);
+    }
+    v = roundf(v / step) * step + sgn * step;
+    v = fminf(fmaxf(v, f->min), f->max);
+    if (f->type == CT_FLOAT) {
+        snprintf(out, size, "%.2f", v);
+    } else {
+        snprintf(out, size, "%d", (int)lroundf(v));
+    }
+}

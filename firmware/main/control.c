@@ -28,11 +28,11 @@ static const ct_field_t FIELDS[] = {
     F(pi_base_c, CT_FLOAT, 20, 60, "PI: base flow (°C)"),
     F(pi_kp, CT_FLOAT, 1, 40, "PI: gain (°C flow per K room error)"),
     F(pi_ti_h, CT_FLOAT, 0.25f, 12, "PI: integral time (h)"),
-    F(pi_deadband_k, CT_FLOAT, 0, 0.5f, "PI: no integration within ± this error (K)"),
+    F(pi_deadband_k, CT_FLOAT, 0, 0.5f, "PI: no integration within +/- this error (K)"),
     F(pi_i_limit_k, CT_FLOAT, 0, 30, "PI: integral limit (K of flow)"),
     F(rate_k_per_min, CT_FLOAT, 0, 10, "flow setpoint slew limit (K/min, 0 = off)"),
     F(hold_on, CT_BOOL, 0, 1, "minimum-fire hold on/off"),
-    F(hold_k, CT_FLOAT, 0, 10, "minimum-fire hold: setpoint = flow − this (K)"),
+    F(hold_k, CT_FLOAT, 0, 10, "minimum-fire hold: setpoint = flow - this (K)"),
     F(duty_on, CT_BOOL, 0, 1, "duty cycling below the minimum-fire flow on/off"),
     F(duty_min_burn_s, CT_U16, 180, 1800, "duty: shortest planned burn (s)"),
     F(duty_min_off_s, CT_U16, 60, 3600, "duty: shortest pause (s)"),
@@ -44,7 +44,7 @@ static const ct_field_t FIELDS[] = {
     F(frost_on, CT_BOOL, 0, 1, "frost floor on/off (heats in any mode below frost_room_c)"),
     F(frost_room_c, CT_FLOAT, 2, 12, "frost floor: room temperature (°C)"),
     F(frost_flow_c, CT_FLOAT, 25, 60, "frost floor: flow setpoint (°C)"),
-    F(ufh_on, CT_BOOL, 0, 1, "underfloor floor on/off (flow ≥ mixer + margin while heating)"),
+    F(ufh_on, CT_BOOL, 0, 1, "underfloor floor on/off (flow >= mixer + margin while heating)"),
     F(ufh_mixer_c, CT_FLOAT, 20, 55, "underfloor: thermostatic mixer setting (°C)"),
     F(ufh_margin_k, CT_FLOAT, 0, 15, "underfloor: margin above the mixer setting (K)"),
 };
@@ -84,6 +84,11 @@ int ctrl_config_count(void)
 const char *ctrl_config_name(int idx)
 {
     return idx >= 0 && idx < NFIELDS ? FIELDS[idx].name : NULL;
+}
+
+const struct ct_field *ctrl_config_field(int idx)
+{
+    return idx >= 0 && idx < NFIELDS ? &FIELDS[idx] : NULL;
 }
 
 const char *ctrl_config_help(int idx)
