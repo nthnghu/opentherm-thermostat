@@ -1,4 +1,4 @@
-# Thermostat test firmware v2 (Guition JC4880P443C, ESP32-P4)
+# Thermostat firmware (Guition JC4880P443C, ESP32-P4)
 
 ESP-IDF 5.5 + LVGL 9 firmware: thermostat (always running, core 1), app launcher, Home Assistant cards,
 calculator, Blocks, setup on the device and on a password-protected web page.
@@ -29,7 +29,7 @@ The C6 ships with ESP-Hosted 2.3.2; the host is 3.1.0 (works, but warns). To upd
 
 ```sh
 cd ../c6-coprocessor && idf.py build            # ESP-Hosted 3.1.0 coprocessor for esp32c6
-cd ../test-firmware-v2
+cd ../firmware
 tools/flash_c6fw.sh ../c6-coprocessor/build/eh_cp_ota_coprocessor_ota.bin
 ```
 

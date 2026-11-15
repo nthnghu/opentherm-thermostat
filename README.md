@@ -13,7 +13,7 @@ OpenTherm side runs against a built-in simulated boiler until the real boiler is
 
 | Folder | What it is |
 |---|---|
-| [`test-firmware-v2/`](test-firmware-v2/) | Current firmware (ESP-IDF 5.5 + LVGL 9). See its [README](test-firmware-v2/README.md). |
+| [`firmware/`](firmware/) | Firmware (ESP-IDF 5.5 + LVGL 9). See its [README](firmware/README.md). |
 | [`c6-coprocessor/`](c6-coprocessor/) | ESP-Hosted 3.1.0 coprocessor firmware for the on-board ESP32-C6 (Wi-Fi). |
 | [`test-firmware/`](test-firmware/) | First hardware test firmware (display, touch, audio, Wi-Fi). Kept for reference. |
 
@@ -46,7 +46,7 @@ OpenTherm side runs against a built-in simulated boiler until the real boiler is
 
 ```sh
 . ~/esp/esp-idf/export.sh          # ESP-IDF 5.5
-cd test-firmware-v2
+cd firmware
 idf.py build
 idf.py -p /dev/cu.usbmodem* flash
 ```
