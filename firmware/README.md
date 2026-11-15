@@ -11,7 +11,7 @@ idf.py build
 idf.py -p /dev/cu.usbmodem* flash        # NVS (Wi-Fi, HA, settings) is kept
 ```
 
-Later updates can go over Wi-Fi: web page → Firmware → upload `build/p4_test_v2.bin`.
+Later updates can go over Wi-Fi: web page → Firmware → upload `build/thermostat.bin`.
 A new image is kept only if the boot hardware check passes; otherwise the device rolls back.
 
 ## Hardware used
