@@ -68,8 +68,8 @@ static void update_main(void)
 
     lv_obj_set_style_text_color(s_room, ui_c(st.sensor_age_s >= 6 ? 0x607D8B : 0xE6EDF3), 0);
     if (st.sensor_ok) {
-        lv_label_set_text_fmt(s_room, "%.1f°", st.room_c);
-        lv_label_set_text_fmt(s_hum, "%.0f %% humidity", st.humidity);
+        lv_label_set_text_fmt(s_room, "%.1f°", st.room_shown);
+        lv_label_set_text_fmt(s_hum, "%.0f %% humidity", st.humidity_shown);
     } else {
         lv_label_set_text(s_room, "--.-°");
         lv_label_set_text_fmt(s_hum, "#%06lX sensor error#", (unsigned long)ui_hex(UI_ERR));

@@ -40,8 +40,8 @@ static void debug_task(void *arg)
         if (strcmp(line, "STAT") == 0) {
             thermo_state_t st;
             thermo_get(&st);
-            printf("STAT sensor_ok=%d room=%.2f hum=%.1f errors=%lu sp=%.1f demand=%d loops=%lu\n", st.sensor_ok, st.room_c,
-                   st.humidity, (unsigned long)st.sensor_errors, st.setpoint, st.demand, (unsigned long)st.loops);
+            printf("STAT sensor_ok=%d raw=%.2f smooth=%.3f shown=%.1f hum=%.1f errors=%lu sp=%.1f demand=%d loops=%lu\n",
+                   st.sensor_ok, st.room_raw, st.room_c, st.room_shown, st.humidity, (unsigned long)st.sensor_errors, st.setpoint, st.demand, (unsigned long)st.loops);
             motion_debug_t m;
             motion_debug(&m);
             printf("MOT on=%d state=%s mean=%d contrast=%d changed=%d/576 delta=%d.%02d frames=%d grab_fail=%d "

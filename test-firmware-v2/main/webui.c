@@ -372,7 +372,7 @@ static esp_err_t get_status(httpd_req_t *req)
     sendf(req,
           "{\"sensor_ok\":%s,\"room\":%.2f,\"humidity\":%.1f,\"setpoint\":%.1f,\"mode\":\"%s\",\"demand\":%s,"
           "\"flow_setpoint\":%.1f,",
-          st.sensor_ok ? "true" : "false", st.room_c, st.humidity, st.setpoint,
+          st.sensor_ok ? "true" : "false", st.room_shown, st.humidity_shown, st.setpoint,
           st.mode == THERMO_MODE_HEAT ? "heat" : "off", st.demand ? "true" : "false", st.flow_setpoint);
     sendf(req,
           "\"boiler_sim\":%s,\"boiler_online\":%s,\"flame\":%s,\"flow\":%.1f,\"mod\":%.1f,\"offset\":%.1f,"

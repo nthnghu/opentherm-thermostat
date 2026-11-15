@@ -15,8 +15,11 @@ typedef struct {
     // Sensor
     bool sensor_ok;         // a fresh reading within THERMO_SENSOR_STALE_S
     int sensor_age_s;       // seconds since the last good reading (-1 = none yet)
-    float room_c;           // with the calibration offset applied
-    float humidity;
+    float room_c;           // smoothed (~30 s average), offset applied; used for control
+    float humidity;         // smoothed
+    float room_raw;         // last single reading, offset applied
+    float room_shown;       // what the screens show: 0.1 °C steps with a dead band, so it doesn't flap
+    float humidity_shown;   // whole percent with a dead band
     uint32_t sensor_errors;
     // Control
     float setpoint;

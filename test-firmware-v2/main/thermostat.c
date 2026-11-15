@@ -27,6 +27,9 @@ static const char *TAG = "thermo";
 #define FLOW_MAX         60.0f
 #define FLOW_OFF         10.0f
 #define OT_OFFLINE_AFTER 5   // failed exchanges in a row
+#define SMOOTH_ALPHA     (2.0f / 30.0f)  // reading every 2 s -> ~30 s exponential average
+#define SHOW_BAND_C      0.08f           // shown temperature moves only past this from the smoothed value
+#define SHOW_BAND_RH     0.8f
 
 static SemaphoreHandle_t s_lock;
 static thermo_state_t s_st;
@@ -210,8 +213,24 @@ static void thermo_task(void *arg)
             }
             LOCK();
             if (err == ESP_OK && t > -20 && t < 60) {
-                s_st.room_c = t + s_st.offset;
-                s_st.humidity = h;
+                float raw = t + s_st.offset;
+                s_st.room_raw = raw;
+                // Smooth the sensor noise; restart the average after a gap (sensor was missing).
+                bool restart = !s_last_reading_us || now - s_last_reading_us > SENSOR_STALE_US;
+                if (restart) {
+                    s_st.room_c = raw;
+                    s_st.humidity = h;
+                } else {
+                    s_st.room_c += SMOOTH_ALPHA * (raw - s_st.room_c);
+                    s_st.humidity += SMOOTH_ALPHA * (h - s_st.humidity);
+                }
+                // Dead band for the display: a value sitting on a 0.05 border no longer flips back and forth.
+                if (restart || fabsf(s_st.room_c - s_st.room_shown) >= SHOW_BAND_C) {
+                    s_st.room_shown = roundf(s_st.room_c * 10) / 10;
+                }
+                if (restart || fabsf(s_st.humidity - s_st.humidity_shown) >= SHOW_BAND_RH) {
+                    s_st.humidity_shown = roundf(s_st.humidity);
+                }
                 s_last_reading_us = now;
             } else {
                 s_st.sensor_errors++;
@@ -323,7 +342,10 @@ void thermo_set_offset(float c)
 {
     c = fminf(fmaxf(roundf(c * 10) / 10, -5.0f), 5.0f);
     LOCK();
-    s_st.room_c += c - s_st.offset;
+    float d = c - s_st.offset;
+    s_st.room_c += d;
+    s_st.room_raw += d;
+    s_st.room_shown = roundf((s_st.room_shown + d) * 10) / 10;
     s_st.offset = c;
     UNLOCK();
     mark_dirty();
