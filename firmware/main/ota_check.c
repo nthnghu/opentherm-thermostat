@@ -1,6 +1,8 @@
 #include "ota_check.h"
 #include <stdio.h>
-#include "esp_http_client.h"
+#include <errno.h>
+#include "lwip/sockets.h"
+#include "webui.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
@@ -12,18 +14,27 @@ static const char *TAG = "ota";
 static volatile ota_st_t s_state = OTA_ST_VALID;
 static char s_text[96] = "accepted";
 
-// Any HTTP answer (401 without a login is fine) proves the web server runs.
+// The web server works when it has handled a request since the restart (tools/ota.sh and the web page poll it),
+// or when a TCP connection to its port succeeds over loopback.
 static bool web_answers(void)
 {
-    esp_http_client_config_t cfg = {.url = "http://127.0.0.1/api/status", .timeout_ms = 3000};
-    esp_http_client_handle_t h = esp_http_client_init(&cfg);
-    if (!h) {
+    if (webui_requests() > 0) {
+        return true;
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
         return false;
     }
-    esp_err_t err = esp_http_client_perform(h);
-    int status = esp_http_client_get_status_code(h);
-    esp_http_client_cleanup(h);
-    return err == ESP_OK && status > 0;
+    struct timeval tv = {.tv_sec = 3};
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(80)};
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    bool ok = connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0;
+    if (!ok) {
+        ESP_LOGW(TAG, "trial: loopback connect to the web server failed (errno %d)", errno);
+    }
+    close(fd);
+    return ok;
 }
 
 static void trial_task(void *arg)

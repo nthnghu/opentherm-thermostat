@@ -29,11 +29,13 @@ if [ $BUILD = 1 ]; then
     idf.py build | tail -2
 fi
 BIN=build/thermostat.bin
-WANT=$(shasum -a 256 build/thermostat.elf | cut -c1-16)
+WANT=$(shasum -a 256 build/thermostat.elf | cut -c1-64)
+# The device reports the first CONFIG_APP_RETRIEVE_LEN_ELF_SHA characters (9): compare that prefix.
+same() { [ -n "$1" ] && [ "${WANT#"$1"}" != "$WANT" ]; }
 
 before=$(api /api/version) || { echo "Device not reachable at $HOST (or wrong login)"; exit 1; }
 echo "Running now: $(echo "$before" | field version) build $(echo "$before" | field elf_sha) ($(echo "$before" | field ota))"
-if [ "$(echo "$before" | field elf_sha)" = "$WANT" ]; then echo "This build is already running."; exit 0; fi
+if same "$(echo "$before" | field elf_sha)"; then echo "This build is already running."; exit 0; fi
 
 echo "Uploading $BIN ($(($(stat -f%z "$BIN") / 1024)) KB) to $HOST ..."
 curl -sS --max-time 300 "${AUTH[@]}" --data-binary "@$BIN" -H "Content-Type: application/octet-stream" \
@@ -47,11 +49,11 @@ while [ $SECONDS -lt $deadline ]; do
     v=$(api /api/version 5 2>/dev/null) || continue
     sha=$(echo "$v" | field elf_sha)
     state=$(echo "$v" | field ota)
-    if [ "$sha" = "$WANT" ] && [ "$state" = "accepted" ]; then
+    if same "$sha" && [ "$state" = "accepted" ]; then
         echo "OK: build $sha is running and accepted."
         exit 0
     fi
-    if [ "$sha" != "$WANT" ] && [ "$(echo "$v" | sed -n 's/.*"uptime_s":\([0-9]*\).*/\1/p')" -lt 120 ] 2>/dev/null; then
+    if ! same "$sha" && [ "$(echo "$v" | sed -n 's/.*"uptime_s":\([0-9]*\).*/\1/p')" -lt 120 ] 2>/dev/null; then
         echo "FAILED: the device restarted on the old build $sha (rolled back). See: curl ... /api/log"
         exit 1
     fi

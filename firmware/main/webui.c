@@ -155,8 +155,16 @@ static bool form_get(const char *body, const char *key, char *out, size_t size)
 /* ------------------------------------------------------------------ auth */
 
 // Returns true when the request carries valid Basic credentials; otherwise sends 401/403.
+static volatile uint32_t s_served;  // requests that reached a handler since start (OTA trial check)
+
+uint32_t webui_requests(void)
+{
+    return s_served;
+}
+
 static bool check_auth(httpd_req_t *req)
 {
+    s_served++;
     if (!settings_web_configured()) {
         httpd_resp_set_status(req, "403 Forbidden");
         httpd_resp_set_type(req, "text/html");

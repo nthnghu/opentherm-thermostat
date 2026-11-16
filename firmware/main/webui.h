@@ -4,3 +4,5 @@
 #include "esp_err.h"
 
 esp_err_t webui_start(void);
+#include <stdint.h>
+uint32_t webui_requests(void);  // requests handled since start (any client, with or without login)
