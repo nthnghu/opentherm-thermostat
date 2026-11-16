@@ -28,7 +28,7 @@ static const ct_field_t FIELDS[] = {
     F(prog_on, CT_BOOL, 0, 1, "weekly Comfort/Eco program on/off (off = constant setpoint); edit with PROG"),
     F(eco_setback_k, CT_FLOAT, 0.5f, 6, "Eco = Comfort - this (K)"),
     F(boost_on, CT_BOOL, 0, 1, "boost feature on/off"),
-    F(boost_k, CT_FLOAT, 0.5f, 3, "boost: Comfort + this (K)"),
+    F(boost_k, CT_FLOAT, 0.5f, 3, "boost: the higher of Comfort and the target in force + this (K)"),
     F(boost_min, CT_U16, 10, 240, "boost: length (min)"),
     F(away_on, CT_BOOL, 0, 1, "away/holiday feature on/off"),
     F(away_c, CT_FLOAT, 5, 20, "away: room target (°C)"),
@@ -568,6 +568,7 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in)
         s->ovr = false;  // program off or no clock: the dial sets the setpoint itself
     }
     o->override_until = s->ovr ? s->ovr_until : 0;
+    float before_away = o->target_c;  // program / override / setpoint: what a boost adds to
     if (s->away) {
         o->target_c = k->away_c;
         o->src = SCHED_SRC_AWAY;
@@ -575,7 +576,8 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in)
     bool boost = s->boost_until_s > now;
     o->boost_left_s = boost ? (int)(s->boost_until_s - now) : 0;
     if (boost) {
-        o->target_c = comfort + k->boost_k;  // an explicit request: wins over away and summer
+        // An explicit request: wins over away and summer; never below the target in force (a 24 °C program point)
+        o->target_c = fmaxf(before_away, comfort) + k->boost_k;
         o->src = SCHED_SRC_BOOST;
     }
     o->ch_allowed = !s->summer || boost;

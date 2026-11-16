@@ -23,7 +23,7 @@ static void refresh(void)
     lv_slider_set_value(s_bright, c->bright, LV_ANIM_OFF);
     lv_buttonmatrix_set_button_ctrl_all(s_theme, LV_BUTTONMATRIX_CTRL_CHECKABLE);
     lv_buttonmatrix_set_selected_button(s_theme, c->theme_mode);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (i == c->theme_mode) {
             lv_buttonmatrix_set_button_ctrl(s_theme, i, LV_BUTTONMATRIX_CTRL_CHECKED);
         } else {
@@ -218,12 +218,12 @@ void quickpanel_create(void)
 
     // Theme
     label(s_panel, LV_SYMBOL_EYE_OPEN "  Theme", 20, 150);
-    static const char *map[] = {"Auto", "Light", "Dark", ""};
+    static const char *map[] = {"Sun", "Light", "Dark", "Hours", ""};
     s_theme = lv_buttonmatrix_create(s_panel);
     lv_buttonmatrix_set_map(s_theme, map);
     lv_buttonmatrix_set_one_checked(s_theme, true);
-    lv_obj_set_size(s_theme, 300, 60);
-    lv_obj_set_pos(s_theme, 160, 132);
+    lv_obj_set_size(s_theme, 330, 60);
+    lv_obj_set_pos(s_theme, 130, 132);
     lv_obj_set_style_pad_all(s_theme, 4, 0);
     lv_obj_add_event_cb(s_theme, theme_cb, LV_EVENT_VALUE_CHANGED, NULL);
 

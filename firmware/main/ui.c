@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "board.h"
+#include "esp_timer.h"
 #include "settings.h"
 #include "thermostat.h"
 #include "timekeep.h"
@@ -349,10 +350,17 @@ void ui_theme_update(void)
         dark = false;
     } else if (c->theme_mode == 2) {
         dark = true;
+    } else if (c->theme_mode == 3) {  // by the hours only
+        dark = timekeep_valid() ? !in_window(true, c->day_start, c->day_end) : ui_theme_is_dark();
     } else {
         bool up;
+        // HA set up but its sun state not in yet (first ~10 s after a start): keep the theme we had, for up to
+        // 2 min, instead of guessing from the hours first and flipping again when HA answers.
+        bool ha_set = c->ha_url[0] && c->ha_token[0];
         if (ha_sun_is_up(&up)) {
             dark = !up;
+        } else if (ha_set && esp_timer_get_time() < 120LL * 1000000) {
+            dark = ui_theme_is_dark();
         } else if (timekeep_valid()) {
             dark = !in_window(true, c->day_start, c->day_end);
         } else {
@@ -438,7 +446,8 @@ void ui_debug_go(const char *what)
     if (strncmp(what, "theme ", 6) == 0) {  // "theme auto|light|dark": sets the theme setting
         static settings_t c;
         settings_copy(&c);
-        c.theme_mode = strcmp(what + 6, "light") == 0 ? 1 : strcmp(what + 6, "dark") == 0 ? 2 : 0;
+        c.theme_mode = strcmp(what + 6, "light") == 0 ? 1 : strcmp(what + 6, "dark") == 0 ? 2
+                       : strcmp(what + 6, "hours") == 0 ? 3 : 0;
         settings_save(&c);
         ui_theme_update();
         return;

@@ -64,8 +64,9 @@ static const cfgtext_t T[] = {
      "Shows the Boost button (Schedule page, Home Assistant): the target is raised for a while, then the normal "
      "program continues.",
      "", NULL, NOOPTS},
-    {"boost_k", CG_PROGRAM, "Boost: extra warmth", "Added to your setpoint during a boost",
-     "How much warmer than your setpoint a boost makes the room.", "°C", "boost_on", NOOPTS},
+    {"boost_k", CG_PROGRAM, "Boost: extra warmth", "Added during a boost",
+     "How much warmer a boost makes the room: added to the current target (a program temperature or a manual "
+     "setting) or to Comfort, whichever is higher.", "°C", "boost_on", NOOPTS},
     {"boost_min", CG_PROGRAM, "Boost: length", "How long a boost lasts",
      "After this time the normal program continues by itself.", "min", "boost_on", NOOPTS},
     {"away_on", CG_PROGRAM, "Away mode", "Allow a low holiday temperature",

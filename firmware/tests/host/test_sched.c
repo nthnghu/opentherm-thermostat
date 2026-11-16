@@ -555,7 +555,12 @@ static void test_override(void)
     CHECK(o->src == SCHED_SRC_MANUAL, "manual again");
     sched_boost(&s, in.now_s, true);
     o = sched_step(&s, &in);
-    CHECK(o->src == SCHED_SRC_BOOST, "boost wins");
+    CHECK(o->src == SCHED_SRC_BOOST && NEAR(o->target_c, 23, 0.01), "boost wins: Comfort 22 + 1 over manual 19 (%.1f)",
+          o->target_c);
+    sched_override(&s, true, 24);
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_BOOST && NEAR(o->target_c, 25, 0.01), "boost on 24 gives 25, not lower (%.1f)",
+          o->target_c);
     sched_boost(&s, in.now_s, false);
     sched_override(&s, false, 0);
     o = sched_step(&s, &in);

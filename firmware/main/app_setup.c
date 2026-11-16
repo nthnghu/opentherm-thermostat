@@ -976,12 +976,13 @@ static lv_obj_t *build_display(void)
     label(p, "The first touch on a dimmed or dark screen only wakes it up.", 16, 1080, 448, 0x607D8B);
 
     section(p, "Theme (day / night)", 1140);
-    s_theme_dd = dropdown(p, "Theme", "Auto\nLight\nDark", 230, 1170, 220);
+    s_theme_dd = dropdown(p, "Theme", "Sunset (HA)\nLight\nDark\nBy the hours", 230, 1170, 220);
     label(p, "Day (light) from", 16, 1242, 0, 0x90A4AE);
     s_d_st = dropdown(p, NULL, halfhours, 230, 1230, 220);
     label(p, "until", 16, 1302, 0, 0x90A4AE);
     s_d_en = dropdown(p, NULL, halfhours, 230, 1290, 220);
-    label(p, "Auto follows sunrise and sunset from Home Assistant (sun.sun); without HA it uses these hours. "
+    label(p, "Sunset (HA): light while the sun is up (Home Assistant sun.sun; without HA these hours). "
+             "By the hours: light between these times. "
              "Also in the quick panel: tap the status bar.",
           16, 1350, 448, 0x607D8B);
     lv_timer_create(motion_tick_cb, 1000, NULL);
