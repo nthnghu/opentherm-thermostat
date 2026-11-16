@@ -1354,7 +1354,9 @@ static esp_err_t get_devlog(httpd_req_t *req)
     if (!buf) {
         return httpd_resp_send_500(req);
     }
-    size_t n = logring_read(buf, LOGRING_SIZE + 1);
+    char q[16] = "";
+    httpd_req_get_url_query_str(req, q, sizeof(q));
+    size_t n = strstr(q, "prev=1") ? logring_read_prev(buf, LOGRING_SIZE + 1) : logring_read(buf, LOGRING_SIZE + 1);
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     httpd_resp_send(req, buf, n);
     free(buf);

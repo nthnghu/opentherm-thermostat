@@ -26,8 +26,72 @@
 #include <time.h>
 
 // Runs one command line and writes its answer to o (the serial console, or a web request: /api/cmd).
+
+#define TS_MAX 48
+static struct {
+    TaskHandle_t h;
+    configRUN_TIME_COUNTER_TYPE rt;
+} s_ts_prev[TS_MAX];
+static configRUN_TIME_COUNTER_TYPE s_ts_prev_total;
+static int s_ts_prev_n;
+
+void debug_task_stats(char *out, size_t size)
+{
+#if configGENERATE_RUN_TIME_STATS && configUSE_TRACE_FACILITY
+    static TaskStatus_t st[TS_MAX];
+    static float pct[TS_MAX];
+    configRUN_TIME_COUNTER_TYPE total;
+    int n = (int)uxTaskGetSystemState(st, TS_MAX, &total);
+    configRUN_TIME_COUNTER_TYPE span = (total - s_ts_prev_total) * 2;  // two cores
+    for (int i = 0; i < n; i++) {
+        configRUN_TIME_COUNTER_TYPE before = 0;
+        for (int j = 0; j < s_ts_prev_n; j++) {
+            if (s_ts_prev[j].h == st[i].xHandle) {
+                before = s_ts_prev[j].rt;
+                break;
+            }
+        }
+        pct[i] = span ? 100.0f * (float)(st[i].ulRunTimeCounter - before) / (float)span : 0;
+    }
+    for (int i = 0; i < n; i++) {
+        s_ts_prev[i].h = st[i].xHandle;
+        s_ts_prev[i].rt = st[i].ulRunTimeCounter;
+    }
+    s_ts_prev_n = n;
+    s_ts_prev_total = total;
+    size_t len = 0;
+    out[0] = 0;
+    for (int k = 0; k < n && len < size; k++) {  // busiest first: pick the maximum each time
+        int b = -1;
+        for (int i = 0; i < n; i++) {
+            if (pct[i] >= 0 && (b < 0 || pct[i] > pct[b])) {
+                b = i;
+            }
+        }
+        if (b < 0 || (pct[b] < 0.5f && k >= 8)) {
+            break;
+        }
+        int core = (int)xTaskGetCoreID(st[b].xHandle);
+        len += (size_t)snprintf(out + len, size - len, "%s%s c%c %.1f%%", k ? ", " : "", st[b].pcTaskName,
+                                core < 0 || core > 1 ? '*' : (char)('0' + core), pct[b]);
+        pct[b] = -1;
+    }
+#else
+    snprintf(out, size, "n/a (run-time stats off)");
+#endif
+}
+
 void debug_exec(const char *line, FILE *o)
 {
+    if (strcmp(line, "TASKS") == 0) {  // CPU per task since the last TASKS
+        char *b = malloc(1536);
+        if (b) {
+            debug_task_stats(b, 1536);
+            fprintf(o, "TASKS %s\n", b);
+            free(b);
+        }
+        return;
+    }
     if (strncmp(line, "GO ", 3) == 0) {
         lvgl_port_lock(0);
         lv_display_trigger_activity(NULL);  // or the idle timer jumps straight back to the thermostat

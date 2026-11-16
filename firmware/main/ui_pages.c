@@ -19,6 +19,9 @@ static lv_obj_t *s_thermo_scr;
 static const char *DAYS[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 #define C_COMFORT 0xFF7043
 #define C_ECO     0x1565C0
+#define C_FIXED_LO 0x9575CD  // fixed temperatures: violet, light (16 °C or less) to deep (23 °C+)
+#define C_FIXED_HI 0x4527A0
+#define C_FIXED   0x7E57C2
 
 /* ------------------------------------------------------------- helpers */
 
@@ -481,7 +484,7 @@ static lv_obj_t *s_week[7], *s_prog_btn, *s_boost_btn, *s_away_btn, *s_dhw_btn, 
 static sched_config_t s_week_cache;
 static bool s_week_valid;
 
-// Colour of a level: Comfort orange, Eco blue, fixed temperatures from blue (16 °C or less) to orange (23 °C+).
+// Colour of a level: Comfort orange, Eco blue, fixed temperatures violet (lighter = cooler, deeper = warmer).
 static uint32_t level_color(uint8_t level)
 {
     if (!sched_level_is_fixed(level)) {
@@ -489,7 +492,7 @@ static uint32_t level_color(uint8_t level)
     }
     float f = (level / 4.0f - 16) / 7;
     f = f < 0 ? 0 : (f > 1 ? 1 : f);
-    uint32_t a = C_ECO, b = C_COMFORT, out = 0;
+    uint32_t a = C_FIXED_LO, b = C_FIXED_HI, out = 0;
     for (int sh = 0; sh <= 16; sh += 8) {
         int ca = (a >> sh) & 0xFF, cb = (b >> sh) & 0xFF;
         out |= (uint32_t)(ca + (cb - ca) * f) << sh;
@@ -857,7 +860,7 @@ static void day_editor_open(int d)
         s_lp = ui_overlay(c);
         s_lp_title = label(s_lp, "", 20, 16, 440, UI_TEXT, &lv_font_montserrat_28);
         for (int k = 0; k < 3; k++) {
-            uint32_t col = k == 0 ? C_COMFORT : (k == 1 ? C_ECO : 0x6D4C41);
+            uint32_t col = k == 0 ? C_COMFORT : (k == 1 ? C_ECO : C_FIXED);
             s_lp_btn[k] = button(s_lp, "", col, lp_pick_cb, (void *)(intptr_t)k, 20, 100 + k * 104, 440, 92);
             lv_obj_set_style_border_color(s_lp_btn[k], ui_c(UI_TEXT), 0);
             lv_label_set_recolor(lv_obj_get_child(s_lp_btn[k], 0), true);

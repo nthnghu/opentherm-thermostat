@@ -25,7 +25,10 @@
 #include "esp_timer.h"
 #include "driver/ledc.h"
 #include "settings.h"
+#include "debug.h"
 #include "nvs.h"
+#include "esp_netif_net_stack.h"
+#include "lwip/dhcp.h"
 #include "esp_system.h"
 
 static const char *TAG = "board";
@@ -340,7 +343,14 @@ static uint32_t s_wd_restarts;        // Wi-Fi watchdog restarts so far (NVS)
 static void wifi_mon_task(void *arg);
 static char s_wifi_status[96] = "Wi-Fi off";
 static char s_ip[16];
-static esp_timer_handle_t s_reconnect_timer;
+// Reconnect is done by wifi_mon_task, never in the esp_timer or event-loop task: a call into a slow or stuck Wi-Fi
+// chip would stall every esp_timer (the LVGL tick among them) and make the screen crawl.
+static volatile int64_t s_reconnect_at_us;  // 0 = none due
+
+static void reconnect_in(int ms)
+{
+    s_reconnect_at_us = esp_timer_get_time() + (int64_t)ms * 1000 + 1;
+}
 
 static void set_wifi_status(const char *fmt, ...)
 {
@@ -365,19 +375,12 @@ static const char *reason_text(int reason)
     }
 }
 
-static void reconnect_cb(void *arg)
-{
-    if (settings_wifi_configured() && !s_wifi_up) {
-        esp_wifi_connect();
-    }
-}
-
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         if (settings_wifi_configured()) {
             set_wifi_status("Connecting to %s...", settings_get()->ssid);
-            esp_wifi_connect();
+            reconnect_in(0);
         } else {
             set_wifi_status("Wi-Fi not set up");
         }
@@ -388,8 +391,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_ip[0] = 0;
         if (settings_wifi_configured()) {
             set_wifi_status("%s: %s (%d)", settings_get()->ssid, reason_text(d->reason), d->reason);
-            esp_timer_stop(s_reconnect_timer);
-            esp_timer_start_once(s_reconnect_timer, 3000 * 1000);
+            reconnect_in(3000);
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
@@ -406,8 +408,6 @@ esp_err_t board_wifi_start(void)
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop");
     esp_netif_create_default_wifi_sta();
 
-    const esp_timer_create_args_t targs = {.callback = reconnect_cb, .name = "wifi_rc"};
-    esp_timer_create(&targs, &s_reconnect_timer);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t err = esp_wifi_init(&cfg);
@@ -448,11 +448,11 @@ int board_wifi_scan(wifi_ap_record_t *out, int max)
     if (err != ESP_OK) {
         // A connection attempt in progress blocks scanning: pause it and retry once.
         ESP_LOGW(TAG, "scan failed (%s), retrying", esp_err_to_name(err));
-        esp_timer_stop(s_reconnect_timer);
+        s_reconnect_at_us = 0;
         esp_wifi_disconnect();
         vTaskDelay(pdMS_TO_TICKS(300));
         err = esp_wifi_scan_start(&sc, true);
-        esp_timer_start_once(s_reconnect_timer, 3000 * 1000);
+        reconnect_in(3000);
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "scan failed: %s", esp_err_to_name(err));
@@ -483,7 +483,7 @@ esp_err_t board_wifi_connect(const char *ssid, const char *pass)
     wifi_config_t wc = {0};
     strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
     strlcpy((char *)wc.sta.password, pass, sizeof(wc.sta.password));
-    esp_timer_stop(s_reconnect_timer);
+    s_reconnect_at_us = 0;
     esp_wifi_disconnect();
     s_wifi_up = false;
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wc), TAG, "config");
@@ -573,14 +573,40 @@ void board_wifi_hang_log(char *out, size_t size)
 
 static void wifi_mon_task(void *arg)
 {
-    int64_t last_rssi_us = 0, ok_epoch = 0;
+    int64_t last_rssi_us = 0, ok_epoch = 0, next_check_us = 0;
+    bool lease_logged = false;
     int ok_rssi = 0;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(500));
         if (!s_wifi_inited) {
             continue;
         }
         int64_t now = esp_timer_get_time();
+        int64_t rc = s_reconnect_at_us;
+        if (rc && now >= rc) {
+            s_reconnect_at_us = 0;
+            if (settings_wifi_configured() && !s_wifi_up) {
+                esp_wifi_connect();
+            }
+            now = esp_timer_get_time();
+        }
+        if (now < next_check_us) {
+            continue;
+        }
+        next_check_us = now + 5000000;
+        if (s_wifi_up && !lease_logged) {  // look for timing patterns (hangs seen ~42 min after start)
+            esp_netif_t *nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            struct netif *ln = nif ? esp_netif_get_netif_impl(nif) : NULL;
+            struct dhcp *dh = ln ? netif_dhcp_data(ln) : NULL;
+            if (dh) {
+                ESP_LOGI(TAG, "DHCP lease %lu s (renew after %lu s, rebind after %lu s), uptime %lld s",
+                         (unsigned long)dh->offered_t0_lease, (unsigned long)dh->offered_t1_renew,
+                         (unsigned long)dh->offered_t2_rebind, now / 1000000);
+            }
+            lease_logged = true;
+        } else if (!s_wifi_up) {
+            lease_logged = false;
+        }
         bool answered = false;
         if (s_wifi_up) {
             wifi_ap_record_t ap;
@@ -607,6 +633,14 @@ static void wifi_mon_task(void *arg)
         }
         int64_t silent_s = (now - s_cp_ok_us) / 1000000;
         uint16_t wd = settings_get()->wifi_wd_min;
+        if (silent_s >= 15 && silent_s < 21) {  // what runs while the chip is silent (lag hunt)
+            char *ts = malloc(1024);
+            if (ts) {
+                debug_task_stats(ts, 1024);
+                ESP_LOGW(TAG, "Wi-Fi chip silent %lld s; CPU: %s", silent_s, ts);
+                free(ts);
+            }
+        }
         if (silent_s >= 60 && silent_s % 60 < 6) {
             ESP_LOGW(TAG, "Wi-Fi chip not answering for %lld s (restart after %u min)", silent_s, wd);
         }
