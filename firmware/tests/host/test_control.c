@@ -288,8 +288,56 @@ static void test_set_integral(void)
     CHECK(NEAR(k.i, -c.pi_i_limit_k, 1e-6), "clamped low %.2f", k.i);
 }
 
+// The user changes the setpoint: the burner decision follows within seconds, not after the slew ramp or a duty wait.
+static void test_setpoint_step(void)
+{
+    ctrl_config_t c;
+    ctrl_default_config(&c);
+    ctrl_t k;
+    ctrl_init(&k, &c);
+    ctrl_in_t in = {.heat_mode = true, .room_ok = true, .boiler_ok = true, .room_c = 20.4f, .flow_valid = true,
+                    .flow_c = 25};
+    const ctrl_out_t *o = NULL;
+    int t = 0;
+    for (; t < 7200; t++) {  // satisfied at 20.0 for 2 h: idle
+        in.now_s = t;
+        in.target_c = 20.0f;
+        o = ctrl_step(&k, &in);
+    }
+    CHECK(!o->ch_enable, "satisfied: idle (%s)", ctrl_state_name(o->state));
+    in.target_c = 21.5f;
+    for (int s = 0; s < 5; s++, t++) {
+        in.now_s = t;
+        o = ctrl_step(&k, &in);
+    }
+    CHECK(o->ch_enable && o->tset > c.flow_min_c, "raised 1.5 K: heats within 5 s (tset %.1f, %s)", o->tset,
+          ctrl_state_name(o->state));
+    for (int s = 0; s < 1800; s++, t++) {  // heat for 30 min, room unchanged
+        in.now_s = t;
+        in.flame = o->ch_enable;
+        in.flow_c = o->ch_enable ? 45 : 25;
+        o = ctrl_step(&k, &in);
+    }
+    in.target_c = 19.0f;
+    for (int s = 0; s < 5; s++, t++) {
+        in.now_s = t;
+        o = ctrl_step(&k, &in);
+    }
+    CHECK(!o->ch_enable, "lowered below the room: stops within 5 s (%s, tset %.1f)", ctrl_state_name(o->state),
+          o->tset);
+    for (int s = 0; s < 3600; s++, t++) {
+        in.now_s = t;
+        o = ctrl_step(&k, &in);
+        if (o->ch_enable) {
+            break;
+        }
+    }
+    CHECK(!o->ch_enable, "room 1.4 K above the setpoint: no duty burn for 1 h");
+}
+
 int main(void)
 {
+    test_setpoint_step();
     test_set_integral();
     test_config_table();
     test_sensor_loss();

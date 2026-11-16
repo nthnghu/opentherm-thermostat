@@ -15,6 +15,7 @@
 #define LOSS_PERIOD_S   1800.0
 #define FROST_HYST_K    0.5f
 #define BOILER_T0       25.0f   // lowest flow target a boiler accepts
+#define OVER_K          0.3f    // room this far above the setpoint: no duty burns
 
 /* ------------------------------------------------------------- config */
 
@@ -175,8 +176,8 @@ static float clampf(float v, float lo, float hi)
     return fminf(fmaxf(v, lo), hi);
 }
 
-// PI update (every 60 s); returns the requested flow.
-static void pi_update(ctrl_t *c, const ctrl_in_t *in)
+// PI update (every 60 s, and at once without integrating when the setpoint changes); sets the requested flow.
+static void pi_update(ctrl_t *c, const ctrl_in_t *in, bool integrate)
 {
     const ctrl_config_t *k = &c->cfg;
     float e = in->target_c - in->room_c;
@@ -184,7 +185,7 @@ static void pi_update(ctrl_t *c, const ctrl_in_t *in)
     float p = k->pi_kp * e;
     float u0 = k->pi_base_c + p + c->i;
     bool sat = (u0 >= k->flow_max_c && e > 0) || (u0 <= 20 && e < 0);
-    if (!freeze && !sat && fabsf(e) > k->pi_deadband_k && k->pi_ti_h > 0) {
+    if (integrate && !freeze && !sat && fabsf(e) > k->pi_deadband_k && k->pi_ti_h > 0) {
         c->i += k->pi_kp / (k->pi_ti_h * 3600.0f) * e * (float)PI_PERIOD_S;
         c->i = clampf(c->i, -k->pi_i_limit_k, k->pi_i_limit_k);
     }
@@ -229,7 +230,20 @@ static void low_load(ctrl_t *c, const ctrl_in_t *in, float r)
 
     // Duty cycling
     float d = o > in->room_c ? clampf(powf(fmaxf(0, (r - in->room_c) / (o - in->room_c)), 1.3f), 0, 1) : 1;
+    if (in->room_c > in->target_c + OVER_K) {
+        d = 0;  // warm enough already, whatever the long-term correction says
+    }
     c->out.duty = d;
+    if (c->replan) {  // setpoint changed: do not sit out an idle wait or a burn planned for the old setpoint
+        c->replan = false;
+        if (c->phase == CTRL_ST_DUTY_OFF && now < c->phase_until_s) {
+            c->phase_until_s = now;  // the starts-per-hour limit is still checked below
+        } else if (c->phase == CTRL_ST_DUTY_ON && d < DUTY_MIN_FRAC) {
+            c->phase = CTRL_ST_DUTY_OFF;
+            c->phase_until_s = now;
+            c->burn_end_s = now;
+        }
+    }
     if (modulating || c->phase == CTRL_ST_OFF) {
         c->phase = CTRL_ST_DUTY_OFF;
         c->phase_until_s = now;  // decide now
@@ -345,16 +359,25 @@ const ctrl_out_t *ctrl_step(ctrl_t *c, const ctrl_in_t *in)
         }
         c->out.req_c = c->out.tset;
     } else {
+        bool changed = c->have_target && fabsf(in->target_c - c->last_target) >= 0.05f;
+        c->last_target = in->target_c;
+        c->have_target = true;
         if (!c->pi_started || now - c->last_pi_s >= PI_PERIOD_S) {
             if (!c->pi_started) {
                 c->u_limited = c->u > 0 ? c->u : k->pi_base_c;
             }
             c->pi_started = true;
             c->last_pi_s = now;
-            pi_update(c, in);
+            pi_update(c, in, true);
+        } else if (changed) {
+            pi_update(c, in, false);
         }
-        // Slew limit, applied every second
-        if (k->rate_k_per_min > 0) {
+        if (changed) {
+            c->replan = true;
+        }
+        // Slew limit, applied every second, only to rises while the boiler heats for us: the decision to heat
+        // or stop and every drop act at once.
+        if (k->rate_k_per_min > 0 && c->out.ch_enable && c->u > c->u_limited) {
             float step = k->rate_k_per_min * (float)dt / 60.0f;
             c->u_limited += clampf(c->u - c->u_limited, -step, step);
         } else {

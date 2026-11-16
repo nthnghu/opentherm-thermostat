@@ -203,8 +203,9 @@ static const cfgtext_t T[] = {
      "Modulating: the long-term correction never moves the water temperature more than this.", "°C", "strategy=1",
      NOOPTS},
     {"rate_k_per_min", CG_TUNING, "Water temp change limit", "Fastest change per minute (0 = no limit)",
-     "Modulating: the water temperature asked for changes at most this much per minute. Smooth changes "
-     "avoid burner starts and overshoot.",
+     "Modulating: while the boiler heats, the water temperature asked for rises at most this much per "
+     "minute, to avoid overshoot. Starting, stopping and lowering act at once when you change the "
+     "temperature.",
      "°C", "strategy=1", NOOPTS},
     {"hold_on", CG_TUNING, "Keep the small flame", "Avoid stop-start at the smallest flame",
      "On: when the boiler burns at its smallest flame, the thermostat asks for slightly less than the actual "

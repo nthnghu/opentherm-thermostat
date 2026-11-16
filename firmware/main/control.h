@@ -101,6 +101,8 @@ typedef struct {
     double last_pi_s;
     float i, p, u, u_limited;
     bool pi_started;
+    float last_target;   // to react at once when the setpoint changes
+    bool have_target, replan;
     // Low load
     int phase;           // ctrl_state_t of the low-load manager
     double phase_until_s, burn_end_s;
