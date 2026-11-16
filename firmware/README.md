@@ -248,6 +248,8 @@ The bus flags (`ca`, `mirror57`, `explicitoff`) are now saved in NVS: by Apply a
 
 The titles, explanations, units and choice names live in `cfgtext.c` (host-tested: every setting has one, no internal names, texts fit the screen). Internal names stay for the serial `CFG` command and JSON. The alert switch for a failed hot cycle is `alert_pasteur_on` (it used to clash with the schedule's `pasteur_on`).
 
+**Wi-Fi chip watchdog:** the Wi-Fi radio is a separate ESP32-C6, asked over SDIO; when it hangs every request blocks for 5 s. Only the background task `wifi_mon` (board.c) asks it, every 5 s, and caches the signal strength, so the screen and MQTT never wait on it. When the C6 has not answered for `wifi_wd_min` minutes (web page, Wi-Fi section, or serial `WIFIWD <min>`; default 10, 0 = never) the device restarts, which resets the C6. Heating pauses for a few seconds. `STAT` prints a `WIFI` line (seconds since the chip last answered, restarts so far).
+
 After the "Back to thermostat" time without a touch, the device returns to the thermostat's main page, also from pages 2-5 and from the editors.
 
 All editors use `cfgall.c`, one index over the control, schedule, alert and service tables. The serial `CFG`, the web form and JSON import use the same index. `CFG defaults` keeps the weekly program.

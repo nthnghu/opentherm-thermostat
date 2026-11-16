@@ -43,7 +43,9 @@ esp_err_t board_wifi_connect(const char *ssid, const char *pass);
 bool board_wifi_connected(void);
 const char *board_wifi_status(void);
 const char *board_wifi_ip(void);  // "" when not connected
-int board_wifi_rssi(void);        // 0 when not connected
+int board_wifi_rssi(void);        // 0 when not connected; cached, never blocks
+int board_wifi_cp_silent_s(void); // seconds since the Wi-Fi chip (C6) last answered (normally < 10)
+uint32_t board_wifi_wd_restarts(void);  // restarts by the Wi-Fi watchdog so far
 
 #include "driver/i2c_master.h"
 // Shared I2C bus (GPIO7/8): GT911, ES8311, SHT40, camera SCCB.

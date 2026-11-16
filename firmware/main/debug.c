@@ -74,6 +74,9 @@ static void debug_task(void *arg)
             mqtt_ha_status(mst, sizeof(mst));
             printf("ALERT count=%u bits=%04x text=%s | MQTT %s\n", st.alert_count, st.alerts,
                    st.alert_text[0] ? st.alert_text : "none", mst);
+            printf("WIFI up=%d rssi=%d chip_silent_s=%d wd_min=%u wd_restarts=%lu\n", board_wifi_connected(),
+                   board_wifi_rssi(), board_wifi_cp_silent_s(), settings_get()->wifi_wd_min,
+                   (unsigned long)board_wifi_wd_restarts());
             motion_debug_t m;
             motion_debug(&m);
             printf("MOT on=%d state=%s mean=%d contrast=%d changed=%d/576 delta=%d.%02d frames=%d grab_fail=%d "
@@ -202,6 +205,14 @@ static void debug_task(void *arg)
             char why[96];
             bool ok = id >= 0 && id < 128 && (!w || vs[0]) && thermo_svc_manual(w, (uint8_t)id, data, why, sizeof(why));
             printf("OT %s %d: %s (answer: SVC)\n", w ? "write" : "read", id, ok ? "queued" : (id < 0 ? "bad id" : why));
+            continue;
+        }
+        if (strncmp(line, "WIFIWD ", 7) == 0) {  // minutes, 0 = never
+            static settings_t c;
+            settings_copy(&c);
+            c.wifi_wd_min = (uint16_t)atoi(line + 7);
+            settings_save(&c);
+            printf("WIFI wd_min=%u\n", c.wifi_wd_min);
             continue;
         }
         if (strcmp(line, "MQTT") == 0) {

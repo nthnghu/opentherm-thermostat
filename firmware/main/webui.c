@@ -230,6 +230,12 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     SEND(req, "<label for=pass>Password</label><input id=pass name=pass type=password placeholder='unchanged if empty'>"
               "<p class=hint>The device reconnects after saving; this page may need reloading at its new address.</p>"
               "<button>Save Wi-Fi</button></form>");
+    sendf(req, "<form method=post action=/save/wifiwd><label for=wdmin>Restart when the Wi-Fi chip stops answering "
+               "(minutes, 0 = never)</label><input id=wdmin name=min value='%u'><p class=hint>The Wi-Fi chip is a "
+               "separate processor. If it hangs, the thermostat keeps heating but loses the network; only a restart "
+               "brings it back (heating pauses for a few seconds). Now: last answer %d s ago, watchdog restarts so "
+               "far: %lu.</p><button>Save</button></form>",
+          c->wifi_wd_min, board_wifi_cp_silent_s(), (unsigned long)board_wifi_wd_restarts());
 
     // Home Assistant
     SEND(req, "<h2>Home Assistant</h2><form method=post action=/save/ha>");
@@ -983,6 +989,18 @@ static esp_err_t post_save(httpd_req_t *req)
         } else {
             msg = "SSID missing";
             ok = false;
+        }
+    } else if (strcmp(section, "wifiwd") == 0) {
+        int m = form_get(body, "min", v, 512) ? atoi(v) : -1;
+        if (m < 0 || m > 240) {
+            msg = "Enter 0 to 240 minutes";
+            ok = false;
+        } else {
+            c->wifi_wd_min = (uint16_t)m;
+            if (settings_save(c) != ESP_OK) {
+                msg = "Could not save";
+                ok = false;
+            }
         }
     } else if (strcmp(section, "ha") == 0) {
         if (form_get(body, "url", v, 512)) {

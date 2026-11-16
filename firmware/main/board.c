@@ -24,6 +24,8 @@
 #include "esp_timer.h"
 #include "driver/ledc.h"
 #include "settings.h"
+#include "nvs.h"
+#include "esp_system.h"
 
 static const char *TAG = "board";
 
@@ -332,6 +334,9 @@ esp_codec_dev_handle_t board_audio(void)
 
 static volatile bool s_wifi_up;
 static volatile bool s_wifi_inited;
+static volatile int64_t s_cp_ok_us;   // last time the Wi-Fi chip (C6) answered
+static uint32_t s_wd_restarts;        // Wi-Fi watchdog restarts so far (NVS)
+static void wifi_mon_task(void *arg);
 static char s_wifi_status[96] = "Wi-Fi off";
 static char s_ip[16];
 static esp_timer_handle_t s_reconnect_timer;
@@ -421,7 +426,14 @@ esp_err_t board_wifi_start(void)
         esp_wifi_set_config(WIFI_IF_STA, &wc);
     }
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u32(h, "wd_rst", &s_wd_restarts);
+        nvs_close(h);
+    }
+    s_cp_ok_us = esp_timer_get_time();
     s_wifi_inited = true;
+    xTaskCreatePinnedToCore(wifi_mon_task, "wifi_mon", 4096, NULL, 2, NULL, 0);
     return ESP_OK;
 }
 
@@ -498,26 +510,74 @@ i2c_master_bus_handle_t board_i2c_bus(void)
     return s_i2c;
 }
 
-// The AP info comes from the C6 over SDIO (an RPC). Several tasks ask (status bar, MQTT): answer from a
-// 2-second cache, and keep the last good value for 30 s when a read fails (it showed "0" otherwise).
+// Everything about the Wi-Fi link that needs the C6 (an RPC over SDIO, up to 5 s when the C6 hangs) is asked
+// here, in one background task, and cached. The UI and MQTT only read the cache, so a stuck Wi-Fi chip can
+// never freeze the screen. The same task is the Wi-Fi watchdog: when the C6 has not answered any request for
+// settings wifi_wd_min minutes, the device restarts (the C6 is reset at start-up); 0 = never.
+static volatile int s_rssi;
+
+static void wifi_mon_task(void *arg)
+{
+    int64_t last_rssi_us = 0;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (!s_wifi_inited) {
+            continue;
+        }
+        int64_t now = esp_timer_get_time();
+        bool answered = false;
+        if (s_wifi_up) {
+            wifi_ap_record_t ap;
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                answered = true;
+                if (ap.rssi != 0) {
+                    s_rssi = ap.rssi;
+                    last_rssi_us = now;
+                }
+            }
+        } else {
+            wifi_mode_t m;
+            answered = esp_wifi_get_mode(&m) == ESP_OK;
+        }
+        now = esp_timer_get_time();
+        if (answered) {
+            s_cp_ok_us = now;
+        }
+        if (!s_wifi_up || now - last_rssi_us > 30000000) {
+            s_rssi = 0;
+        }
+        int64_t silent_s = (now - s_cp_ok_us) / 1000000;
+        uint16_t wd = settings_get()->wifi_wd_min;
+        if (silent_s >= 60 && silent_s % 60 < 6) {
+            ESP_LOGW(TAG, "Wi-Fi chip not answering for %lld s (restart after %u min)", silent_s, wd);
+        }
+        if (wd && silent_s >= (int64_t)wd * 60) {
+            ESP_LOGE(TAG, "Wi-Fi chip silent for %lld s: restarting", silent_s);
+            nvs_handle_t h;
+            if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {
+                nvs_set_u32(h, "wd_rst", s_wd_restarts + 1);
+                nvs_commit(h);
+                nvs_close(h);
+            }
+            vTaskDelay(pdMS_TO_TICKS(200));
+            esp_restart();
+        }
+    }
+}
+
 int board_wifi_rssi(void)
 {
-    static int last;
-    static int64_t last_us;
-    if (!s_wifi_up) {
-        return 0;
-    }
-    int64_t now = esp_timer_get_time();
-    if (last && now - last_us < 2000000) {
-        return last;
-    }
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK && ap.rssi != 0) {
-        last = ap.rssi;
-        last_us = now;
-        return last;
-    }
-    return now - last_us < 30000000 ? last : 0;
+    return s_wifi_up ? s_rssi : 0;
+}
+
+int board_wifi_cp_silent_s(void)
+{
+    return s_wifi_inited ? (int)((esp_timer_get_time() - s_cp_ok_us) / 1000000) : 0;
+}
+
+uint32_t board_wifi_wd_restarts(void)
+{
+    return s_wd_restarts;
 }
 
 bool board_touch_ok(void)

@@ -51,6 +51,8 @@ typedef struct {
     // Service-mode PIN for the device (set on the web page); empty hash = device service menu locked
     char svc_salt[33];
     char svc_hash[65];
+    // Restart the device when the Wi-Fi chip (ESP32-C6) has not answered for this long (0 = never)
+    uint16_t wifi_wd_min;
 } settings_t;
 
 void settings_load(void);

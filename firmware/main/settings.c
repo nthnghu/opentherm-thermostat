@@ -69,6 +69,7 @@ void settings_load(void)
     load_u8(h, "night_lvl", &c->night_level, 5);
     load_u16(h, "home_s", &c->home_after_s, 60);
     load_u16(h, "off_s", &c->off_after_s, 0);
+    load_u16(h, "wifiwd", &c->wifi_wd_min, 10);
     uint8_t b8;
     load_u8(h, "keep_on", &b8, 0);
     c->keep_on = b8;
@@ -147,6 +148,7 @@ esp_err_t settings_save(const settings_t *s)
     CHK(nvs_set_u8(h, "night_lvl", s->night_level));
     CHK(nvs_set_u16(h, "home_s", s->home_after_s));
     CHK(nvs_set_u16(h, "off_s", s->off_after_s));
+    CHK(nvs_set_u16(h, "wifiwd", s->wifi_wd_min));
     CHK(nvs_set_u8(h, "keep_on", s->keep_on));
     CHK(nvs_set_u16(h, "keep_st", s->keep_on_start));
     CHK(nvs_set_u16(h, "keep_en", s->keep_on_end));
