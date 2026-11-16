@@ -8,6 +8,8 @@
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_system.h"
 #include "board.h"
 #include "debug.h"
 #include "esp_lvgl_port.h"
@@ -160,6 +162,29 @@ void debug_exec(const char *line, FILE *o)
     if (strcmp(line, "MODE heat") == 0 || strcmp(line, "MODE off") == 0) {
         thermo_set_mode(line[5] == 'h' ? THERMO_MODE_HEAT : THERMO_MODE_OFF);
         fprintf(o, "MODE %s\n", line + 5);
+        return;
+    }
+    if (strcmp(line, "RESTART") == 0) {  // restarts 1 s later, after the answer went out
+        static esp_timer_handle_t t;
+        if (!t) {
+            const esp_timer_create_args_t a = {.callback = (esp_timer_cb_t)esp_restart, .name = "restart"};
+            esp_timer_create(&a, &t);
+        }
+        esp_timer_start_once(t, 1000 * 1000);
+        fprintf(o, "RESTART in 1 s\n");
+        return;
+    }
+    if (strncmp(line, "TARGET ", 7) == 0 || strcmp(line, "RESUME") == 0) {  // as the main-page dial / Program button
+        if (line[0] == 'T') {
+            thermo_set_target(strtof(line + 7, NULL));
+        } else {
+            thermo_resume_program();
+        }
+        vTaskDelay(pdMS_TO_TICKS(1200));  // one control step
+        thermo_state_t st;
+        thermo_get(&st);
+        fprintf(o, "TARGET %.1f src=%s until=%lld\n", st.target_c, sched_src_name(st.sched_src),
+                (long long)st.override_until);
         return;
     }
     if (strncmp(line, "SP ", 3) == 0) {

@@ -521,8 +521,57 @@ static void test_fixed_levels(void)
     CHECK(strcmp(sched_src_name(SCHED_SRC_FIXED), "program") == 0, "name");
 }
 
+// Dial while the program runs: hold until the next switch, then the program again
+static void test_override(void)
+{
+    sched_config_t c;
+    sched_default_config(&c);
+    sched_t s;
+    sched_init(&s, &c);
+    CHECK(!sched_override(&s, true, 23), "program off: no override");
+    c.prog_on = true;
+    sched_prog_parse(&c, 0, "06:00=c 08:00=18.5 17:00=21 22:30=e");
+    sched_set_config(&s, &c);
+    sched_in_t in = at(hm(0, 12, 0));
+    in.comfort_c = 22;
+    sched_step(&s, &in);
+    CHECK(sched_override(&s, true, 20.5f), "override accepted");
+    const sched_out_t *o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_MANUAL && NEAR(o->target_c, 20.5, 0.01), "manual 20.5 (%s %.2f)",
+          sched_src_name(o->src), o->target_c);
+    CHECK(o->override_until == in.epoch - in.epoch % 60 + 300 * 60, "until 17:00");
+    in = at(hm(0, 16, 59));
+    in.comfort_c = 22;
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_MANUAL, "still manual at 16:59");
+    in = at(hm(0, 17, 0));
+    in.comfort_c = 22;
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_FIXED && NEAR(o->target_c, 21, 0.01) && o->override_until == 0,
+          "17:00: program again (%s %.2f)", sched_src_name(o->src), o->target_c);
+    // Cancel early; boost wins over an override
+    sched_override(&s, true, 19);
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_MANUAL, "manual again");
+    sched_boost(&s, in.now_s, true);
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_BOOST, "boost wins");
+    sched_boost(&s, in.now_s, false);
+    sched_override(&s, false, 0);
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_FIXED, "back to the program");
+    // Program switched off: override dropped
+    sched_override(&s, true, 25);
+    c.prog_on = false;
+    sched_set_config(&s, &c);
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_CONSTANT && NEAR(o->target_c, 22, 0.01), "program off: the setpoint");
+    CHECK(strcmp(sched_src_name(SCHED_SRC_MANUAL), "manual") == 0, "name");
+}
+
 int main(void)
 {
+    test_override();
     test_fixed_levels();
     test_step();
     test_program();

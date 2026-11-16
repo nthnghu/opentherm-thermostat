@@ -492,6 +492,7 @@ static void thermo_task(void *arg)
         s_st.boost_left_s = so->boost_left_s;
         s_st.away = so->away;
         s_st.away_until = so->away_until;
+        s_st.override_until = so->override_until;
         s_st.summer = so->summer;
         s_st.outside_mean_valid = so->outside_mean_valid;
         s_st.outside_mean_c = so->outside_mean_c;
@@ -813,6 +814,47 @@ void thermo_set_sched_config(const sched_config_t *c)
 static double now_s(void)
 {
     return esp_timer_get_time() / 1e6;
+}
+
+void thermo_set_target(float c)
+{
+    c = roundf(c * 2) / 2;
+    c = fminf(fmaxf(c, THERMO_SP_MIN), THERMO_SP_MAX);
+    LOCK();
+    sched_boost(&s_sched, now_s(), false);
+    bool was_away = s_sched.away;
+    if (was_away) {
+        sched_away(&s_sched, false, 0);
+        s_st.away = false;
+        s_st.away_until = 0;
+    }
+    bool program = s_sched.cfg.prog_on && timekeep_valid();
+    if (program) {
+        sched_override(&s_sched, true, c);
+        s_st.target_c = c;  // shown at once; the next step confirms it
+        s_st.sched_src = SCHED_SRC_MANUAL;
+    }
+    UNLOCK();
+    if (!program) {
+        thermo_set_setpoint(c);
+    } else if (was_away) {
+        mark_dirty();
+    }
+}
+
+void thermo_adjust_target(float delta)
+{
+    LOCK();
+    float c = s_st.target_c;
+    UNLOCK();
+    thermo_set_target(c + delta);
+}
+
+void thermo_resume_program(void)
+{
+    LOCK();
+    sched_override(&s_sched, false, 0);
+    UNLOCK();
 }
 
 bool thermo_boost(bool on)

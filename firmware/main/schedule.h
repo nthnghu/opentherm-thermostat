@@ -113,6 +113,7 @@ typedef enum {
     SCHED_SRC_AWAY,
     SCHED_SRC_SUMMER,            // CH off
     SCHED_SRC_FIXED,             // program, a fixed-temperature switch point
+    SCHED_SRC_MANUAL,            // program on, temporarily overridden by hand until the next switch
 } sched_src_t;
 
 typedef enum {
@@ -135,6 +136,7 @@ typedef struct {
     int boost_left_s;            // 0 = no boost
     bool away;
     int64_t away_until;          // 0 = until cancelled
+    int64_t override_until;      // epoch the hand override ends (0 = none)
     bool summer;
     bool outside_mean_valid;
     float outside_mean_c;        // 24 h mean
@@ -153,6 +155,10 @@ typedef struct {
     double boost_until_s, dhw_boost_until_s;
     bool away;
     int64_t away_until;
+    // Hand override of the program: ovr_c until ovr_until (epoch; 0 = set at the next step)
+    bool ovr;
+    float ovr_c;
+    int64_t ovr_until;
     // Summer: 24 hourly buckets of the outdoor temperature
     float out_sum[24];
     uint16_t out_n[24];
@@ -182,6 +188,9 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in);
 bool sched_boost(sched_t *s, double now_s, bool on);
 bool sched_dhw_boost(sched_t *s, double now_s, bool on);
 bool sched_away(sched_t *s, bool on, int64_t until);  // until = epoch, 0 = until cancelled
+// Program on: hold target_c until the program's next switch (24 h if it has none), then the program again.
+// on = false goes back to the program now. Returns false when the program is off (or the clock is not set).
+bool sched_override(sched_t *s, bool on, float target_c);
 bool sched_pasteur_now(sched_t *s, bool on);           // start (or cancel) a pasteurisation run now
 
 // Level of the program at day/minute (day 0 = Monday); the last point before it, wrapping back over the week.

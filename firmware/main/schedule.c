@@ -360,6 +360,17 @@ bool sched_boost(sched_t *s, double now_s, bool on)
     return true;
 }
 
+bool sched_override(sched_t *s, bool on, float target_c)
+{
+    if (on && !s->cfg.prog_on) {
+        return false;
+    }
+    s->ovr = on;
+    s->ovr_c = clampf(target_c, 5, 30);
+    s->ovr_until = 0;  // the end is fixed at the next step, from the program's next switch
+    return true;
+}
+
 bool sched_dhw_boost(sched_t *s, double now_s, bool on)
 {
     if (on && (s->cfg.dhw_boost_min == 0 || s->cfg.dhw_mode == DHW_OFF)) {
@@ -542,7 +553,21 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in)
         o->src = sched_level_is_fixed(l) ? SCHED_SRC_FIXED : (l == SCHED_COMFORT ? SCHED_SRC_COMFORT : SCHED_SRC_ECO);
         o->target_c = sched_level_temp(l, comfort, k->eco_setback_k);
         o->next_change_min = next_change(k, in->wday, in->min_of_day, l, &o->next_level);
+        if (s->ovr && !s->ovr_until) {
+            int64_t minute = in->epoch - in->epoch % 60;
+            s->ovr_until = minute + (o->next_change_min > 0 ? o->next_change_min : 24 * 60) * 60LL;
+        }
+        if (s->ovr && in->epoch >= s->ovr_until) {
+            s->ovr = false;  // the program's next switch: back to the program
+        }
+        if (s->ovr) {
+            o->target_c = s->ovr_c;
+            o->src = SCHED_SRC_MANUAL;
+        }
+    } else {
+        s->ovr = false;  // program off or no clock: the dial sets the setpoint itself
     }
+    o->override_until = s->ovr ? s->ovr_until : 0;
     if (s->away) {
         o->target_c = k->away_c;
         o->src = SCHED_SRC_AWAY;
@@ -638,8 +663,8 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in)
 
 const char *sched_src_name(sched_src_t s)
 {
-    static const char *n[] = {"constant", "comfort", "eco", "boost", "away", "summer", "program"};
-    return s <= SCHED_SRC_FIXED ? n[s] : "?";
+    static const char *n[] = {"constant", "comfort", "eco", "boost", "away", "summer", "program", "manual"};
+    return s <= SCHED_SRC_MANUAL ? n[s] : "?";
 }
 
 const char *sched_dhw_reason_name(sched_dhw_reason_t r)

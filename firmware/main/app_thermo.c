@@ -18,23 +18,106 @@ static lv_obj_t *s_scr, *s_tv;
 LV_FONT_DECLARE(font_room_75);  // tools/gen_font.py: digits . - ° only
 
 static lv_obj_t *s_time, *s_date, *s_room, *s_hum, *s_arc, *s_set, *s_mode_btn, *s_mode_lbl, *s_info;
+static lv_obj_t *s_src, *s_boost_btn, *s_away_btn, *s_prog_btn;
 static lv_obj_t *s_dots[5];
 
 /* ------------------------------------------------------------- main page */
 
+// The dial and -/+ set the target: with the program on, a hand override until its next switch.
 static void minus_cb(lv_event_t *e)
 {
-    thermo_adjust_setpoint(-0.5f);
+    thermo_adjust_target(-0.5f);
 }
 
 static void plus_cb(lv_event_t *e)
 {
-    thermo_adjust_setpoint(0.5f);
+    thermo_adjust_target(0.5f);
 }
 
 static void arc_cb(lv_event_t *e)
 {
-    thermo_set_setpoint(lv_arc_get_value(s_arc) / 2.0f);
+    thermo_set_target(lv_arc_get_value(s_arc) / 2.0f);
+}
+
+static void boost_cb(lv_event_t *e)
+{
+    thermo_state_t st;
+    thermo_get(&st);
+    thermo_boost(st.boost_left_s <= 0);
+}
+
+static void away_cb(lv_event_t *e)
+{
+    thermo_state_t st;
+    thermo_get(&st);
+    thermo_away(!st.away, 0);
+}
+
+static void prog_cb(lv_event_t *e)
+{
+    thermo_resume_program();
+}
+
+// "until 17:00", or "until Tue 06:00" when it is not today
+static void until_text(int64_t epoch, char *out, size_t size)
+{
+    time_t u = (time_t)epoch, now = time(NULL);
+    struct tm t, n;
+    localtime_r(&u, &t);
+    localtime_r(&now, &n);
+    if (t.tm_yday == n.tm_yday && t.tm_year == n.tm_year) {
+        strftime(out, size, "until %H:%M", &t);
+    } else {
+        strftime(out, size, "until %a %H:%M", &t);
+    }
+}
+
+// What sets the target now, in words and colour, shown in the dial above the target.
+static void source_text(const thermo_state_t *st, char *out, size_t size, uint32_t *col)
+{
+    char until[32] = "";
+    if (st->next_change_min >= 0) {
+        until_text(time(NULL) + st->next_change_min * 60LL, until, sizeof(until));
+    }
+    *col = 0x90A4AE;
+    switch (st->sched_src) {
+    case SCHED_SRC_COMFORT:
+        snprintf(out, size, "Comfort %s", until);
+        *col = 0xFF7043;
+        break;
+    case SCHED_SRC_ECO:
+        snprintf(out, size, "Eco %s", until);
+        *col = 0x42A5F5;
+        break;
+    case SCHED_SRC_FIXED:
+        snprintf(out, size, "Program %s", until);
+        *col = 0x9575CD;
+        break;
+    case SCHED_SRC_MANUAL:
+        until_text(st->override_until, until, sizeof(until));
+        snprintf(out, size, "Manual %s", until);
+        *col = 0xFFB300;
+        break;
+    case SCHED_SRC_BOOST:
+        snprintf(out, size, "Boost, %d min left", (st->boost_left_s + 59) / 60);
+        *col = 0xFF5722;
+        break;
+    case SCHED_SRC_AWAY:
+        if (st->away_until) {
+            until_text(st->away_until, until, sizeof(until));
+            snprintf(out, size, "Away %s", until);
+        } else {
+            snprintf(out, size, "Away");
+        }
+        *col = 0x26A69A;
+        break;
+    case SCHED_SRC_SUMMER:
+        snprintf(out, size, "Summer: heating off");
+        break;
+    default:
+        snprintf(out, size, "Set to");
+        break;
+    }
 }
 
 static void mode_cb(lv_event_t *e)
@@ -81,11 +164,27 @@ static void update_main(void)
         lv_label_set_text_fmt(s_hum, "#%06lX sensor error#", (unsigned long)ui_hex(UI_ERR));
     }
 
-    lv_label_set_text_fmt(s_set, "%.1f °C", st.setpoint);
-    if (!lv_obj_has_state(s_arc, LV_STATE_PRESSED)) {
-        lv_arc_set_value(s_arc, (int)lroundf(st.setpoint * 2));
-    }
     bool heat = st.mode == THERMO_MODE_HEAT;
+    char src[48];
+    uint32_t src_col;
+    source_text(&st, src, sizeof(src), &src_col);
+    lv_label_set_text(s_src, heat ? src : "Heating off");
+    lv_obj_set_style_text_color(s_src, ui_c(heat ? src_col : 0x90A4AE), 0);
+    lv_label_set_text_fmt(s_set, "%.1f °C", st.target_c);
+    if (!lv_obj_has_state(s_arc, LV_STATE_PRESSED)) {
+        lv_arc_set_value(s_arc, (int)lroundf(st.target_c * 2));
+    }
+    // Boost / Away / back-to-program buttons (hidden when the feature is switched off)
+    sched_config_t sc;
+    thermo_get_sched_config(&sc);
+    bool boost = st.boost_left_s > 0;
+    lv_obj_set_hidden(s_boost_btn, !sc.boost_on || !heat);
+    lv_label_set_text(lv_obj_get_child(s_boost_btn, 0), boost ? LV_SYMBOL_CLOSE " Boost" : LV_SYMBOL_UP " Boost");
+    lv_obj_set_style_bg_color(s_boost_btn, ui_c(boost ? 0xFF5722 : 0x455A64), 0);
+    lv_obj_set_hidden(s_away_btn, !sc.away_on || !heat);
+    lv_label_set_text(lv_obj_get_child(s_away_btn, 0), st.away ? LV_SYMBOL_HOME " I'm back" : LV_SYMBOL_GPS " Away");
+    lv_obj_set_style_bg_color(s_away_btn, ui_c(st.away ? 0x26A69A : 0x455A64), 0);
+    lv_obj_set_hidden(s_prog_btn, st.sched_src != SCHED_SRC_MANUAL);
     lv_label_set_text(s_mode_lbl, heat ? LV_SYMBOL_POWER " Heat" : LV_SYMBOL_POWER " Off");
     lv_obj_set_style_bg_color(s_mode_btn, ui_c(heat ? 0xD84315 : 0x455A64), 0);
     lv_obj_set_style_arc_color(s_arc, ui_c(heat ? 0xFF7043 : 0x607D8B), LV_PART_INDICATOR);
@@ -97,8 +196,8 @@ static void update_main(void)
     } else {
         snprintf(boiler, sizeof(boiler), "%s", st.boiler_sim ? "sim. boiler offline" : "no boiler connected");
     }
-    // Schedule hint: "Eco 19.0 °C until 05:30  /  "
-    char plan[64] = "";
+    char plan[1] = "";  // the program state is shown in the dial now
+#if 0
     if (st.sched_src == SCHED_SRC_BOOST) {
         snprintf(plan, sizeof(plan), "Boost %.1f °C, %d min left  /  ", st.target_c, (st.boost_left_s + 59) / 60);
     } else if (st.sched_src == SCHED_SRC_AWAY) {
@@ -124,6 +223,7 @@ static void update_main(void)
             snprintf(plan, sizeof(plan), "%s %.1f °C  /  ", lvl, st.target_c);
         }
     }
+#endif
     ctrl_config_t cfg;
     thermo_get_ctrl_config(&cfg);
     char loss[64];
@@ -175,8 +275,8 @@ static void build_main(lv_obj_t *p)
     lv_obj_align(apps, LV_ALIGN_TOP_RIGHT, -16, 16);
 
     s_arc = lv_arc_create(p);
-    lv_obj_set_size(s_arc, 380, 380);
-    lv_obj_align(s_arc, LV_ALIGN_TOP_MID, 0, 104);
+    lv_obj_set_size(s_arc, 360, 360);
+    lv_obj_align(s_arc, LV_ALIGN_TOP_MID, 0, 96);
     lv_arc_set_rotation(s_arc, 135);
     lv_arc_set_bg_angles(s_arc, 0, 270);
     lv_arc_set_range(s_arc, (int)(THERMO_SP_MIN * 2), (int)(THERMO_SP_MAX * 2));
@@ -189,42 +289,57 @@ static void build_main(lv_obj_t *p)
     lv_obj_t *rl = lv_label_create(s_arc);
     lv_obj_set_style_text_color(rl, ui_c(0x90A4AE), 0);
     lv_label_set_text(rl, "Room");
-    lv_obj_align(rl, LV_ALIGN_CENTER, 0, -86);
+    lv_obj_align(rl, LV_ALIGN_CENTER, 0, -84);
     s_room = lv_label_create(s_arc);
     lv_obj_set_style_text_font(s_room, &font_room_75, 0);  // drawn at full size: scaling a 48 px font blurred it
-    lv_obj_align(s_room, LV_ALIGN_CENTER, 0, -22);
+    lv_obj_align(s_room, LV_ALIGN_CENTER, 0, -24);
     s_hum = lv_label_create(s_arc);
     lv_label_set_recolor(s_hum, true);
     lv_obj_set_style_text_color(s_hum, ui_c(0x4FC3F7), 0);
-    lv_obj_align(s_hum, LV_ALIGN_CENTER, 0, 44);
-    lv_obj_t *sl = lv_label_create(s_arc);
-    lv_obj_set_style_text_color(sl, ui_c(0x90A4AE), 0);
-    lv_label_set_text(sl, "Set to");
-    lv_obj_align(sl, LV_ALIGN_CENTER, 0, 92);
+    lv_obj_align(s_hum, LV_ALIGN_CENTER, 0, 38);
+    s_src = lv_label_create(s_arc);  // what sets the target: Comfort/Eco/Program/Manual until .., Boost, Away
+    lv_obj_set_style_text_color(s_src, ui_c(0x90A4AE), 0);
+    lv_obj_align(s_src, LV_ALIGN_CENTER, 0, 82);
     s_set = lv_label_create(s_arc);
     lv_obj_set_style_text_font(s_set, &lv_font_montserrat_28, 0);
-    lv_obj_align(s_set, LV_ALIGN_CENTER, 0, 124);
+    lv_obj_align(s_set, LV_ALIGN_CENTER, 0, 114);
 
     lv_obj_t *minus = ui_button(p, LV_SYMBOL_MINUS, ui_c(0x1565C0), minus_cb, NULL);
-    lv_obj_set_size(minus, 120, 80);
-    lv_obj_set_pos(minus, 20, 500);
+    lv_obj_set_size(minus, 120, 76);
+    lv_obj_set_pos(minus, 20, 466);
     lv_obj_set_style_text_font(lv_obj_get_child(minus, 0), &lv_font_montserrat_40, 0);
     lv_obj_t *plus = ui_button(p, LV_SYMBOL_PLUS, ui_c(0xD84315), plus_cb, NULL);
-    lv_obj_set_size(plus, 120, 80);
-    lv_obj_set_pos(plus, 340, 500);
+    lv_obj_set_size(plus, 120, 76);
+    lv_obj_set_pos(plus, 340, 466);
     lv_obj_set_style_text_font(lv_obj_get_child(plus, 0), &lv_font_montserrat_40, 0);
     s_mode_btn = ui_button(p, "", ui_c(0xD84315), mode_cb, NULL);
-    lv_obj_set_size(s_mode_btn, 172, 80);
-    lv_obj_set_pos(s_mode_btn, 154, 500);
+    lv_obj_set_size(s_mode_btn, 172, 76);
+    lv_obj_set_pos(s_mode_btn, 154, 466);
     s_mode_lbl = lv_obj_get_child(s_mode_btn, 0);
     lv_obj_set_style_text_font(s_mode_lbl, &lv_font_montserrat_28, 0);
+
+    // Boost / Away / back to the program: a centred row; hidden buttons leave no gap
+    lv_obj_t *row = lv_obj_create(p);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, 440, 60);
+    lv_obj_set_pos(row, 20, 554);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 12, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    s_boost_btn = ui_button(row, LV_SYMBOL_UP " Boost", ui_c(0x455A64), boost_cb, NULL);
+    lv_obj_set_size(s_boost_btn, 138, 60);
+    s_away_btn = ui_button(row, LV_SYMBOL_GPS " Away", ui_c(0x455A64), away_cb, NULL);
+    lv_obj_set_size(s_away_btn, 138, 60);
+    s_prog_btn = ui_button(row, LV_SYMBOL_REFRESH " Program", ui_c(0x5E35B1), prog_cb, NULL);
+    lv_obj_set_size(s_prog_btn, 138, 60);
 
     s_info = lv_label_create(p);
     lv_label_set_recolor(s_info, true);
     lv_obj_set_width(s_info, 440);
     lv_label_set_long_mode(s_info, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_info, 20, 600);
+    lv_obj_set_pos(s_info, 20, 626);
     lv_obj_add_flag(s_info, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_info, info_cb, LV_EVENT_CLICKED, NULL);
 }

@@ -1,4 +1,5 @@
 #include "ui_theme.h"
+#include "esp_attr.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -81,10 +82,15 @@ static void init_lvgl_theme(bool dark)
     lv_display_set_theme(disp, th);
 }
 
+// The theme in use, kept over a software restart (OTA, watchdog): starting dark and switching to light a few
+// seconds later, once the clock / HA's sun state is known, flashed the whole screen after every restart.
+#define THEME_MAGIC 0x54480000u
+static RTC_NOINIT_ATTR uint32_t s_saved_theme;
+
 void ui_theme_init(void)
 {
-    s_dark = true;
-    init_lvgl_theme(true);
+    s_dark = (s_saved_theme & 0xFFFF0000u) == THEME_MAGIC ? (s_saved_theme & 1) != 0 : true;
+    init_lvgl_theme(s_dark);
 }
 
 void ui_theme_apply(bool dark)
@@ -93,6 +99,7 @@ void ui_theme_apply(bool dark)
         return;
     }
     s_dark = dark;
+    s_saved_theme = THEME_MAGIC | (dark ? 1 : 0);
     init_lvgl_theme(dark);
     lv_obj_tree_walk(NULL, remap_cb, (void *)(intptr_t)dark);           // every screen
     lv_obj_tree_walk(lv_layer_top(), remap_cb, (void *)(intptr_t)dark); // status bar, quick panel

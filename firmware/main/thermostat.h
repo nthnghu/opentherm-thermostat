@@ -54,6 +54,7 @@ typedef struct {
     int boost_left_s;
     bool away;
     int64_t away_until;     // 0 = until cancelled
+    int64_t override_until; // program overridden by hand until this epoch (0 = no override)
     bool summer;
     bool outside_valid, outside_mean_valid;
     float outside_c, outside_mean_c;
@@ -115,6 +116,11 @@ void thermo_get(thermo_state_t *out);
 
 void thermo_set_setpoint(float c);
 void thermo_adjust_setpoint(float delta);
+// What the dial / -+ on the main page set: with the program running, a hand override until the next switch;
+// otherwise the setpoint. A boost or away period ends first (an explicit temperature choice wins).
+void thermo_set_target(float c);
+void thermo_adjust_target(float delta);
+void thermo_resume_program(void);  // drop the hand override now
 void thermo_set_mode(thermo_mode_t m);
 void thermo_set_offset(float c);
 void thermo_set_hysteresis(float c);
