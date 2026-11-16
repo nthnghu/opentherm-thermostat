@@ -213,6 +213,11 @@ static const char PAGE_HEAD[] =
     "background:#1565c0;color:#fff}.hint{color:#90a4ae;font-size:14px}.ok{color:#81c784}.err{color:#e57373}"
     ".warn{color:#ffb74d}a{color:#4fc3f7}table{border-collapse:collapse;width:100%}td{padding:4px 6px;border-bottom:1px solid #263238}"
     ".big{font-size:40px;font-weight:600}svg{width:100%;height:160px;background:#0d141b;border-radius:8px}"
+    "nav{position:sticky;top:0;display:flex;gap:6px;overflow-x:auto;background:#111a22;padding:8px 0;z-index:1}"
+    "nav a{padding:8px 12px;border-radius:8px;background:#1e2a38;color:#e6edf3;white-space:nowrap;cursor:pointer}"
+    "nav a.on{background:#1565c0}section>h2:first-child{border-top:0;margin-top:8px}"
+    "details{border:1px solid #263238;border-radius:8px;padding:0 12px;margin:10px 0}"
+    "summary{padding:12px 0;font-weight:600;font-size:16px;cursor:pointer}summary span{font-weight:400}"
     "</style></head><body>";
 
 static void send_msg(httpd_req_t *req, const char *msg, bool ok)
@@ -232,6 +237,12 @@ static void input(httpd_req_t *req, const char *label, const char *name, const c
     SEND(req, "\">");
 }
 
+// Starts a block that belongs to one tab of the page (the script shows one tab at a time; without script all show).
+static void tab(httpd_req_t *req, const char *id)
+{
+    sendf(req, "</section><section data-t=%s>", id);
+}
+
 static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
 {
     settings_t *c = malloc(sizeof(settings_t));
@@ -243,13 +254,18 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     SEND(req, PAGE_HEAD);
     SEND(req, "<h1>Thermostat</h1>");
     send_msg(req, msg, ok);
+    SEND(req, "<nav id=nav><a data-t=home>Overview</a><a data-t=heat>Heating</a><a data-t=prog>Schedule</a>"
+              "<a data-t=net>Network</a><a data-t=dev>Device</a><a data-t=svc>Service</a><a data-t=sys>System</a></nav>"
+              "<section>");
 
     // Thermostat (read-only, refreshed by script)
+    tab(req, "home");
     SEND(req, "<h2>Thermostat (view only)</h2><div class=big id=room>--</div>"
               "<div id=info class=hint>loading...</div><svg id=chart viewBox='0 0 1440 160' preserveAspectRatio=none></svg>"
               "<div class=hint>Last 24 h: room (blue), setpoint (orange), heating (red band).</div>");
 
     // Wi-Fi
+    tab(req, "net");
     SEND(req, "<h2>Wi-Fi</h2><form method=post action=/save/wifi>");
     input(req, "Network name (SSID)", "ssid", c->ssid, "text");
     SEND(req, "<label for=pass>Password</label><input id=pass name=pass type=password placeholder='unchanged if empty'>"
@@ -270,6 +286,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     }
 
     // Home Assistant
+    tab(req, "net");
     SEND(req, "<h2>Home Assistant</h2><form method=post action=/save/ha>");
     input(req, "HA URL", "url", c->ha_url, "text");
     sendf(req, "<label for=token>Long-lived access token</label><textarea id=token name=token spellcheck=false "
@@ -282,6 +299,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     SEND(req, "</p><button>Save and test</button></form>");
 
     // MQTT
+    tab(req, "net");
     SEND(req, "<h2>MQTT (Home Assistant, Grafana)</h2><form method=post action=/save/mqtt>");
     sendf(req, "<label><input type=checkbox name=on value=1%s> Connect</label>", c->mqtt_on ? " checked" : "");
     input(req, "Broker (mqtt://host:1883)", "uri", c->mqtt_uri, "text");
@@ -306,6 +324,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
         if (rec) {
             thermo_svc_get(rec, mt, sizeof(mt));
         }
+        tab(req, "svc");
         SEND(req, "<h2>Service (commissioning)</h2>");
         if (!st.svc_active) {
             SEND(req, "<p class=hint>Service mode runs the boiler test routines (docs/research ch. 10, \"Verify on the "
@@ -376,6 +395,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
 
     // All settings (cfgall: the same tables as the device editor and the serial CFG command)
     {
+        tab(req, "heat");
         SEND(req, "<h2>Thermostat settings</h2><p class=hint>The same settings as on the device "
                   "(Settings page). Indented settings belong to the one above them.</p>"
                   "<form method=post action=/save/cfg><input type=hidden name=cfgform value=1>");
@@ -388,9 +408,9 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
                 continue;
             }
             const ct_field_t *f = cfgall_field(i, NULL);
-            if ((int)t->group != last_g) {
-                sendf(req, "<h3>%s</h3><p class=hint>%s</p>", cfgtext_group_title(t->group),
-                      cfgtext_group_brief(t->group));
+            if ((int)t->group != last_g) {  // one collapsed block per group
+                sendf(req, "%s<details><summary>%s <span class=hint>&ndash; %s</span></summary>", last_g >= 0 ? "</details>" : "",
+                      cfgtext_group_title(t->group), cfgtext_group_brief(t->group));
                 last_g = (int)t->group;
             }
             cfgall_get(i, val, sizeof(val));
@@ -430,10 +450,11 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
             send_escaped(req, txt);
             SEND(req, ".</p></div>");
         }
-        SEND(req, "<button>Save settings</button></form>");
+        SEND(req, last_g >= 0 ? "</details><button>Save settings</button></form>" : "<button>Save settings</button></form>");
 
         sched_config_t sc;
         thermo_get_sched_config(&sc);
+        tab(req, "prog");
         SEND(req, "<h2>Weekly program</h2><form method=post action=/save/prog><p class=hint>Switch times per day, "
                   "e.g. <code>06:00=c 08:00=e 17:00=21.5 22:30=e</code> (c = Comfort = your setpoint, e = Eco, a number = that "
                   "temperature, 5-30 °C). Empty = "
@@ -446,6 +467,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
         }
         SEND(req, "<button>Save program</button></form>");
 
+        tab(req, "sys");
         SEND(req, "<h2>Export / import</h2><p class=hint><a href='/api/config?download=1'>Download the configuration "
                   "(JSON)</a>: all settings, the weekly program and the boiler flags. Paste a saved file below to "
                   "restore it; unknown keys are ignored, values are range-checked.</p>"
@@ -454,6 +476,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     }
 
     // Clock
+    tab(req, "dev");
     SEND(req, "<h2>Clock</h2><form method=post action=/save/clock>");
     sendf(req, "<label><input type=checkbox name=ntp value=1 %s> Use NTP</label>", c->ntp_on ? "checked" : "");
     input(req, "NTP server", "server", c->ntp_server, "text");
@@ -473,6 +496,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
               "<input id=manual name=manual type=datetime-local><button>Save clock</button></form>");
 
     // Display
+    tab(req, "dev");
     SEND(req, "<h2>Display</h2><form method=post action=/save/display>");
     sendf(req,
           "<label>Brightness %%</label><input name=bright type=number min=5 max=100 value=%u>"
@@ -521,6 +545,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     SEND(req, "<button>Save display</button></form>");
 
     // Web login
+    tab(req, "dev");
     SEND(req, "<h2>Web login</h2><form method=post action=/save/web>");
     input(req, "Username", "user", c->web_user, "text");
     SEND(req, "<label>New password (min. 8 characters)</label><input name=pw type=password autocomplete=new-password>"
@@ -529,6 +554,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     // Firmware
     const esp_app_desc_t *app = esp_app_get_description();
     const esp_partition_t *run = esp_ota_get_running_partition();
+    tab(req, "sys");
     sendf(req, "<h2>Firmware</h2><p class=hint>Running %s %s from %s.</p>", app->project_name, app->version,
           run ? run->label : "?");
     SEND(req, "<p class=hint>Update state: ");
@@ -539,6 +565,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
               "previous firmware by itself.</p>");
 
     // Remote diagnostics
+    tab(req, "sys");
     SEND(req, "<h2>Diagnostics</h2><p class=hint><a href=/api/log target=_blank>Device log</a> (last 64 KB) &middot; "
               "<a href=/api/screen.bmp target=_blank>Screenshot</a> &middot; <a href=/api/version target=_blank>Version"
               "</a></p><label for=cmd>Console (the serial commands: STAT, OTSTAT, CFG, SVC, ...)</label>"
@@ -546,6 +573,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
               "<button onclick='runcmd()'>Run</button><pre id=cmdout class=hint style='white-space:pre-wrap'></pre>");
 
     // Diagnostics
+    tab(req, "home");
     SEND(req, "<h2>Hardware check</h2><table>");
     const selftest_item_t *it;
     int n = selftest_items(&it);
@@ -562,7 +590,13 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), esp_timer_get_time() / 60000000);
 
     SEND(req,
-         "<script>"
+         "</section><script>"
+         "function show(t){document.querySelectorAll('section[data-t]').forEach(e=>e.style.display=e.dataset.t==t?'':'none');"
+         "document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.t==t));"
+         "try{localStorage.setItem('tab',t)}catch(e){}}"
+         "document.querySelectorAll('#nav a').forEach(a=>a.onclick=()=>{show(a.dataset.t);scrollTo(0,0)});"
+         "{let t='home';try{t=localStorage.getItem('tab')||t}catch(e){}"
+         "if(!document.querySelector('section[data-t='+t+']'))t='home';show(t);}"
          "async function upd(){try{const r=await fetch('/api/status');const s=await r.json();"
          "document.getElementById('room').textContent=s.sensor_ok?s.room.toFixed(1)+' \\u00b0C':'sensor error';"
          "document.getElementById('info').textContent='Set '+s.setpoint.toFixed(1)+' \\u00b0C \\u00b7 '+s.mode+"
