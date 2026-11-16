@@ -126,6 +126,12 @@ const char *ctrl_state_name(ctrl_state_t s)
     return s <= CTRL_ST_FROST ? n[s] : "?";
 }
 
+void ctrl_note_start(ctrl_t *c, double at_s)
+{
+    c->starts[c->start_head] = at_s;
+    c->start_head = (c->start_head + 1) % 16;
+}
+
 void ctrl_set_integral(ctrl_t *c, float i)
 {
     float lim = c->cfg.pi_i_limit_k;

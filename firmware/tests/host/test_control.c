@@ -286,6 +286,14 @@ static void test_set_integral(void)
     CHECK(NEAR(k.i, c.pi_i_limit_k, 1e-6), "clamped to the limit %.2f", k.i);
     ctrl_set_integral(&k, -99);
     CHECK(NEAR(k.i, -c.pi_i_limit_k, 1e-6), "clamped low %.2f", k.i);
+    // Starts from before a restart count towards the starts-per-hour limit
+    ctrl_init(&k, &c);
+    ctrl_note_start(&k, -1800);
+    ctrl_note_start(&k, -600);
+    ctrl_note_start(&k, -4000);  // older than an hour: not counted
+    ctrl_in_t in = {.now_s = 10, .heat_mode = true, .room_ok = true, .boiler_ok = true, .room_c = 21, .target_c = 21};
+    const ctrl_out_t *o = ctrl_step(&k, &in);
+    CHECK(o->starts_last_h == 2, "restored starts in the last hour: %u", o->starts_last_h);
 }
 
 // The user changes the setpoint: the burner decision follows within seconds, not after the slew ramp or a duty wait.

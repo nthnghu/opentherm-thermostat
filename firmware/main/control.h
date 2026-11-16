@@ -126,6 +126,9 @@ void ctrl_init(ctrl_t *c, const ctrl_config_t *cfg);
 void ctrl_set_config(ctrl_t *c, const ctrl_config_t *cfg);  // keeps the controller state
 // Sets the PI long-term correction (after a restart, from the last saved minute), within the integral limit.
 void ctrl_set_integral(ctrl_t *c, float i);
+// Adds a CH burner start at at_s (same clock as ctrl_in_t.now_s, may be negative = before this start), so the
+// starts-per-hour limit also counts burns from before a restart.
+void ctrl_note_start(ctrl_t *c, double at_s);
 // Call once per second.
 const ctrl_out_t *ctrl_step(ctrl_t *c, const ctrl_in_t *in);
 const char *ctrl_state_name(ctrl_state_t s);

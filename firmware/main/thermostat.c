@@ -457,6 +457,20 @@ static void thermo_task(void *arg)
                 ESP_LOGI(TAG, "PI correction restored: %.1f K (saved %lld s ago)", last.i_c10 / 10.0f,
                          (long long)(wall - last.t));
             }
+            // The starts-per-hour limit: CH burns of the last hour from the flash history (a burn cut short by
+            // the restart itself is not in it)
+            int nb = datalog_burn_count(&s_dl), back = 0;
+            for (int k = 0; k < nb; k++) {
+                dl_burn_t bu;
+                if (datalog_get_burn(&s_dl, k, &bu) && !bu.dhw && bu.t > 0 && wall - (time_t)bu.t >= 0 &&
+                    wall - (time_t)bu.t < 3600) {
+                    ctrl_note_start(&s_ctrl, now / 1e6 - (double)(wall - (time_t)bu.t));
+                    back++;
+                }
+            }
+            if (back) {
+                ESP_LOGI(TAG, "%d burner starts of the last hour restored (starts-per-hour limit)", back);
+            }
         }
         if (s_cfg_changed) {
             s_cfg_changed = false;
