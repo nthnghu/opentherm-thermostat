@@ -365,8 +365,8 @@ void ui_pages_boiler(lv_obj_t *p)
             lv_obj_set_y(s_bl_note[i], 84);
         }
     }
-    s_bl_gas = label(p, "", 20, 566, 440, UI_MUTED, NULL);
-    s_bl_alerts = label(p, "", 20, 598, 440, UI_OK, NULL);
+    s_bl_gas = label(p, "", 20, 562, 440, UI_MUTED, &lv_font_montserrat_14);
+    s_bl_alerts = label(p, "", 20, 606, 440, UI_OK, NULL);
 }
 
 // Plain words for the controller state and the hot water reason (the internal names go to MQTT and logs).
@@ -459,7 +459,7 @@ void ui_pages_boiler_update(void)
         lv_label_set_text(s_bl_note[5], "no burns yet");
     }
 
-    lv_label_set_text_fmt(s_bl_gas, "Gas used (estimate): %.1f kWh in 24 h, %.1f kWh in the last hour", k24.gas_kwh,
+    lv_label_set_text_fmt(s_bl_gas, "Gas used (estimate): %.1f kWh in 24 h, %.1f kWh last hour", k24.gas_kwh,
                           k1.gas_kwh);
     if (st.alert_count) {
         char a[300];
