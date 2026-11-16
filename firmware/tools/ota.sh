@@ -35,6 +35,9 @@ same() { [ -n "$1" ] && [ "${WANT#"$1"}" != "$WANT" ]; }
 
 before=$(api /api/version) || { echo "Device not reachable at $HOST (or wrong login)"; exit 1; }
 echo "Running now: $(echo "$before" | field version) build $(echo "$before" | field elf_sha) ($(echo "$before" | field ota))"
+if echo "$before" | grep -q '"hist":false'; then
+    echo "Note: the device has no history partition; flash once over USB (idf.py flash) to keep history across restarts."
+fi
 if same "$(echo "$before" | field elf_sha)"; then echo "This build is already running."; exit 0; fi
 
 echo "Uploading $BIN ($(($(stat -f%z "$BIN") / 1024)) KB) to $HOST ..."

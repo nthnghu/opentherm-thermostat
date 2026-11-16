@@ -28,7 +28,7 @@ static void test_closed_loop_kpis(void)
     dl_rec_t *recs = calloc(NREC, sizeof(dl_rec_t));
     dl_burn_t *burns = calloc(NBURN, sizeof(dl_burn_t));
     dl_t d;
-    datalog_init(&d, recs, NREC, burns, NBURN);
+    datalog_init(&d, recs, NREC, burns, NBURN, NULL, 0);
 
     plant_params_t pp;
     plant_default_params(&pp);
@@ -106,7 +106,7 @@ static void test_ring_wrap(void)
     dl_rec_t recs[10];
     dl_burn_t burns[4];
     dl_t d;
-    datalog_init(&d, recs, 10, burns, 4);
+    datalog_init(&d, recs, 10, burns, 4, NULL, 0);
     dl_sample_t s = {.sensor_ok = true, .room_c = 20, .target_c = 21, .heat_mode = true, .ch_allowed = true};
     for (int t = 0; t < 25 * 60; t++) {
         s.flame = (t % 300) < 120;  // a 2 min burn every 5 min
@@ -121,6 +121,72 @@ static void test_ring_wrap(void)
     CHECK(NEAR(k.ch_starts_h, k.ch_starts, 0.001), "rate over at least 1 h: %.2f", k.ch_starts_h);
     CHECK(k.ch_burns == 2 && NEAR(k.median_burn_min, 2, 0.01) && k.short_pct == 100, "burns %u", k.ch_burns);
     CHECK(NEAR(k.comfort_kh, 0.5 * 10 / 60.0, 0.001), "comfort deficit %.3f", k.comfort_kh);
+}
+
+// Hourly summaries, and a restart: everything saved is put back and the KPIs come out the same.
+static void test_hours_and_restore(void)
+{
+    enum { NR = 1440, NB = 512, NH = 840 };
+    dl_rec_t *recs = calloc(NR, sizeof(dl_rec_t)), *recs2 = calloc(NR, sizeof(dl_rec_t));
+    dl_burn_t *burns = calloc(NB, sizeof(dl_burn_t)), *burns2 = calloc(NB, sizeof(dl_burn_t));
+    dl_hour_t *hours = calloc(NH, sizeof(dl_hour_t)), *hours2 = calloc(NH, sizeof(dl_hour_t));
+    dl_t d, e;
+    datalog_init(&d, recs, NR, burns, NB, hours, NH);
+    // 3 days from 00:00:00, a 15 min burn every hour at 50 % (radiators), room 20.0-21.0
+    int64_t t0 = 1790035200;  // a whole hour
+    for (int t = 0; t < 3 * 86400; t++) {
+        dl_sample_t s = {.epoch = t0 + t + 1, .sensor_ok = true, .room_c = 20 + (t % 3600) / 3600.0f,
+                         .target_c = 21, .heat_mode = true, .ch_allowed = true, .boiler_up = true,
+                         .flame = (t % 3600) < 900, .mod_valid = true, .modulation = 50, .flow_valid = true,
+                         .flow_c = 45, .cap_kw = 24, .min_kw = 4.3f};
+        datalog_tick(&d, &s);
+    }
+    CHECK(datalog_hour_count(&d) == 71, "71 closed hours (%d)", datalog_hour_count(&d));
+    dl_hour_t h;
+    datalog_get_hour(&d, 10, &h);
+    CHECK(h.t == t0 + 10 * 3600 && h.minutes == 60, "hour start %lld, %u min", (long long)(h.t - t0), h.minutes);
+    CHECK(abs(h.heat_min - 15) <= 1 && h.ch_starts == 1 && h.flow_c10 == 450, "heat %u min, %u starts, flow %d",
+          h.heat_min, h.ch_starts, h.flow_c10);
+    CHECK(h.room_min_c10 == 200 && h.room_max_c10 >= 209 && abs(h.room_c10 - 205) <= 1, "room %d %d %d",
+          h.room_min_c10, h.room_c10, h.room_max_c10);
+    CHECK(h.wh > 1000 && h.wh < 5000, "gas %u Wh", h.wh);
+
+    dl_kpi_t k1, k2;
+    datalog_kpi(&d, 24, &k1);
+    // Restart: a new log, restored oldest first (as histstore does from flash)
+    datalog_init(&e, recs2, NR, burns2, NB, hours2, NH);
+    dl_rec_t r;
+    dl_burn_t b;
+    for (int i = 0; datalog_get(&d, i, &r); i++) {
+        datalog_restore_rec(&e, &r);
+    }
+    for (int i = 0; datalog_get_burn(&d, i, &b); i++) {
+        datalog_restore_burn(&e, &b);
+    }
+    for (int i = 0; datalog_get_hour(&d, i, &h); i++) {
+        datalog_restore_hour(&e, &h);
+    }
+    datalog_kpi(&e, 24, &k2);
+    CHECK(datalog_count(&e) == NR && datalog_hour_count(&e) == 71, "restored %d minutes, %d hours",
+          datalog_count(&e), datalog_hour_count(&e));
+    CHECK(k1.ch_starts == k2.ch_starts && k1.ch_burns == k2.ch_burns && NEAR(k1.gas_kwh, k2.gas_kwh, 0.01) &&
+          NEAR(k1.median_burn_min, k2.median_burn_min, 0.01),
+          "KPIs survive: starts %u/%u burns %u/%u gas %.2f/%.2f", k1.ch_starts, k2.ch_starts, k1.ch_burns,
+          k2.ch_burns, k1.gas_kwh, k2.gas_kwh);
+    CHECK(k2.ch_burns == 24 && NEAR(k2.median_burn_min, 15, 0.1), "24 burns of 15 min (%u, %.1f)", k2.ch_burns,
+          k2.median_burn_min);
+
+    // Device off for 20 h, then 1 h of new data (ends 21 h after the old day): the 24 h window holds the last
+    // 3 h of the old day plus the new hour
+    for (int t = 0; t < 3600; t++) {
+        dl_sample_t s = {.epoch = t0 + 3 * 86400 + 20 * 3600 + t + 1, .sensor_ok = true, .room_c = 19,
+                         .target_c = 21, .heat_mode = true, .ch_allowed = true, .boiler_up = true};
+        datalog_tick(&e, &s);
+    }
+    datalog_kpi(&e, 24, &k2);
+    CHECK(NEAR(k2.hours, 4, 0.05), "window covers %.2f h of data", k2.hours);
+    CHECK(k2.ch_burns == 3, "only the burns inside the window (%u)", k2.ch_burns);
+    free(recs), free(recs2), free(burns), free(burns2), free(hours), free(hours2);
 }
 
 static void test_alerts(void)
@@ -211,6 +277,7 @@ int main(void)
 {
     test_closed_loop_kpis();
     test_ring_wrap();
+    test_hours_and_restore();
     test_alerts();
     TEST_DONE();
 }

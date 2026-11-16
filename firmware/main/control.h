@@ -122,6 +122,8 @@ void ctrl_default_config(ctrl_config_t *c);
 void ctrl_sanitize(ctrl_config_t *c);
 void ctrl_init(ctrl_t *c, const ctrl_config_t *cfg);
 void ctrl_set_config(ctrl_t *c, const ctrl_config_t *cfg);  // keeps the controller state
+// Sets the PI long-term correction (after a restart, from the last saved minute), within the integral limit.
+void ctrl_set_integral(ctrl_t *c, float i);
 // Call once per second.
 const ctrl_out_t *ctrl_step(ctrl_t *c, const ctrl_in_t *in);
 const char *ctrl_state_name(ctrl_state_t s);

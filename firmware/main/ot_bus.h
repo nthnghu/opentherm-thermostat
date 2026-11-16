@@ -8,6 +8,10 @@
 #include "otb_core.h"
 
 void otbus_start(void);
+// Flash writers: wait until no OpenTherm frame is on the wire and hold the bus off until otbus_quiet_end().
+// Returns false on timeout (write anyway or skip).
+bool otbus_quiet_begin(uint32_t timeout_ms);
+void otbus_quiet_end(void);
 
 void otbus_set_cmd(const otb_cmd_t *cmd);
 void otbus_get(otb_status_t *st);

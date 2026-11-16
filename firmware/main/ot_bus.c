@@ -73,6 +73,21 @@ int otbus_frames(otbus_frame_t *out, int max)
     return n;
 }
 
+// Held while a frame is on the wire: a flash write pauses the cache, and the OT interrupts are not cache-safe.
+static SemaphoreHandle_t s_frame_lock;
+
+bool otbus_quiet_begin(uint32_t timeout_ms)
+{
+    return !s_frame_lock || xSemaphoreTake(s_frame_lock, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+void otbus_quiet_end(void)
+{
+    if (s_frame_lock) {
+        xSemaphoreGive(s_frame_lock);
+    }
+}
+
 static otb_xfer_result_t xfer_real(void *ctx, uint32_t req, uint32_t *resp, uint16_t *lat)
 {
     int64_t now = esp_timer_get_time();
@@ -85,7 +100,13 @@ static otb_xfer_result_t xfer_real(void *ctx, uint32_t req, uint32_t *resp, uint
     }
     uint32_t r = 0;
     uint16_t l = 0;
+    if (s_frame_lock) {
+        xSemaphoreTake(s_frame_lock, portMAX_DELAY);
+    }
     esp_err_t err = ot_transfer(req, &r, &l);
+    if (s_frame_lock) {
+        xSemaphoreGive(s_frame_lock);
+    }
     s_last_frame_end_us = esp_timer_get_time();
     otb_xfer_result_t res = err == ESP_OK ? OTB_XFER_OK : (err == ESP_ERR_TIMEOUT ? OTB_XFER_TIMEOUT : OTB_XFER_BAD);
     capture(req, r, l, res, false);
@@ -165,6 +186,7 @@ void otbus_start(void)
     }
     s_lock = xSemaphoreCreateMutex();
     s_sim_lock = xSemaphoreCreateMutex();
+    s_frame_lock = xSemaphoreCreateMutex();
     s_ring = heap_caps_calloc(OTBUS_FRAME_RING, sizeof(otbus_frame_t), MALLOC_CAP_SPIRAM);
     otb_init(&s_core);
     s_cmd = s_core.cmd;

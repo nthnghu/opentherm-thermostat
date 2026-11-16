@@ -125,6 +125,12 @@ const char *ctrl_state_name(ctrl_state_t s)
     return s <= CTRL_ST_FROST ? n[s] : "?";
 }
 
+void ctrl_set_integral(ctrl_t *c, float i)
+{
+    float lim = c->cfg.pi_i_limit_k;
+    c->i = i > lim ? lim : (i < -lim ? -lim : i);
+}
+
 void ctrl_init(ctrl_t *c, const ctrl_config_t *cfg)
 {
     memset(c, 0, sizeof(*c));

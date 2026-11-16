@@ -29,6 +29,7 @@
 #include "debug.h"
 #include "logring.h"
 #include "ota_check.h"
+#include "histstore.h"
 
 static const char *TAG = "web";
 static httpd_handle_t s_server;
@@ -1407,9 +1408,9 @@ static esp_err_t get_version(httpd_req_t *req)
     const esp_partition_t *run = esp_ota_get_running_partition();
     httpd_resp_set_type(req, "application/json");
     sendf(req, "{\"version\":\"%s\",\"elf_sha\":\"%s\",\"built\":\"%s %s\",\"partition\":\"%s\",\"ota\":\"%s\","
-               "\"ota_text\":\"%s\",\"uptime_s\":%lld}",
+               "\"ota_text\":\"%s\",\"hist\":%s,\"uptime_s\":%lld}",
           app->version, sha, app->date, app->time, run ? run->label : "?", st[ota_check_state()], ota_check_text(),
-          esp_timer_get_time() / 1000000);
+          histstore_ok() ? "true" : "false", esp_timer_get_time() / 1000000);
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 

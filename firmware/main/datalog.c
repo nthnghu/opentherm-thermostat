@@ -30,13 +30,133 @@ float datalog_power_kw(float mod_pct, float cap_kw, float min_kw)
     return min_kw + (cap_kw - min_kw) * m / 100;
 }
 
-void datalog_init(dl_t *d, dl_rec_t *recs, int nrecs, dl_burn_t *burns, int nburns)
+static void hour_reset(dl_t *d, uint32_t t)
+{
+    d->h_t = t;
+    d->h_n = d->h_nroom = d->h_nflow = 0;
+    d->h_room = d->h_target = d->h_flow = d->h_wh = d->h_heat_s = d->h_dhw_s = 0;
+    d->h_min = INT16_MAX;
+    d->h_max = INT16_MIN;
+    d->h_starts = 0;
+}
+
+void datalog_init(dl_t *d, dl_rec_t *recs, int nrecs, dl_burn_t *burns, int nburns, dl_hour_t *hours, int nhours)
 {
     memset(d, 0, sizeof(*d));
     d->recs = recs;
     d->nrecs = nrecs;
     d->burns = burns;
     d->nburns = nburns;
+    d->hours = hours;
+    d->nhours = nhours;
+    hour_reset(d, 0);
+}
+
+static void put_rec(dl_t *d, const dl_rec_t *r)
+{
+    if (!d->recs || d->nrecs <= 0) {
+        return;
+    }
+    d->recs[d->head] = *r;
+    d->head = (d->head + 1) % d->nrecs;
+    if (d->count < d->nrecs) {
+        d->count++;
+    }
+    d->rec_seq++;
+}
+
+static void put_burn(dl_t *d, const dl_burn_t *b)
+{
+    if (!d->burns || d->nburns <= 0) {
+        return;
+    }
+    d->burns[d->bhead] = *b;
+    d->bhead = (d->bhead + 1) % d->nburns;
+    if (d->bcount < d->nburns) {
+        d->bcount++;
+    }
+    d->burn_seq++;
+}
+
+static void put_hour(dl_t *d, const dl_hour_t *h)
+{
+    if (!d->hours || d->nhours <= 0) {
+        return;
+    }
+    d->hours[d->hhead] = *h;
+    d->hhead = (d->hhead + 1) % d->nhours;
+    if (d->hcount < d->nhours) {
+        d->hcount++;
+    }
+    d->hour_seq++;
+}
+
+void datalog_restore_rec(dl_t *d, const dl_rec_t *r)
+{
+    put_rec(d, r);
+}
+
+void datalog_restore_burn(dl_t *d, const dl_burn_t *b)
+{
+    dl_burn_t c = *b;
+    c.start_s = 0;  // seconds since start belong to the previous run
+    put_burn(d, &c);
+}
+
+void datalog_restore_hour(dl_t *d, const dl_hour_t *h)
+{
+    put_hour(d, h);
+}
+
+// Closes the summary of the hour in progress (only hours with the clock set are kept).
+static void hour_close(dl_t *d)
+{
+    if (d->h_t && d->h_n) {
+        dl_hour_t h = {
+            .t = d->h_t,
+            .room_c10 = d->h_nroom ? c10(d->h_room / d->h_nroom) : DL_NO_VALUE,
+            .room_min_c10 = d->h_nroom ? d->h_min : DL_NO_VALUE,
+            .room_max_c10 = d->h_nroom ? d->h_max : DL_NO_VALUE,
+            .target_c10 = c10(d->h_target / d->h_n),
+            .flow_c10 = d->h_nflow ? c10(d->h_flow / d->h_nflow) : DL_NO_VALUE,
+            .wh = (uint16_t)lround(fmin(d->h_wh, 65535)),
+            .heat_min = u8c(d->h_heat_s / 60),
+            .dhw_min = u8c(d->h_dhw_s / 60),
+            .ch_starts = (uint8_t)(d->h_starts > 255 ? 255 : d->h_starts),
+            .minutes = (uint8_t)d->h_n,
+        };
+        put_hour(d, &h);
+    }
+}
+
+// Adds a finished minute to the hour in progress; a new clock hour closes the previous one.
+static void hour_add(dl_t *d, const dl_rec_t *r)
+{
+    uint32_t hour = r->t > 0 ? (uint32_t)(r->t - 1) / 3600 * 3600 : 0;  // t is the end of the minute
+    if (hour != d->h_t) {
+        hour_close(d);
+        hour_reset(d, hour);
+    }
+    if (!hour) {
+        return;
+    }
+    d->h_n++;
+    d->h_target += r->target_c10 / 10.0;
+    if (r->room_c100 != DL_NO_VALUE) {
+        int16_t rc = (int16_t)lround(r->room_c100 / 10.0);
+        d->h_room += r->room_c100 / 100.0;
+        d->h_nroom++;
+        d->h_min = rc < d->h_min ? rc : d->h_min;
+        d->h_max = rc > d->h_max ? rc : d->h_max;
+    }
+    if (r->flow_c10 != DL_NO_VALUE && r->flame_s) {
+        d->h_flow += r->flow_c10 / 10.0;
+        d->h_nflow++;
+    }
+    d->h_wh += r->wh;
+    d->h_heat_s += r->flame_s - r->dhw_s;
+    d->h_dhw_s += r->dhw_s;
+    d->h_starts += r->ch_starts;
 }
 
 static void reset_minute(dl_t *d)
@@ -55,16 +175,13 @@ static void end_burn(dl_t *d)
         uint32_t dur = d->sec - d->burn_start;
         dl_burn_t b = {
             .start_s = d->burn_start,
+            .t = d->burn_t,
             .dur_s = (uint16_t)(dur > 65535 ? 65535 : dur),
             .dhw = d->burn_dhw,
             .ret_c = d->burn_n ? u8c(d->burn_ret / d->burn_n) : 0,
             .mod = d->burn_n ? u8c(d->burn_mod / d->burn_n) : 0,
         };
-        d->burns[d->bhead] = b;
-        d->bhead = (d->bhead + 1) % d->nburns;
-        if (d->bcount < d->nburns) {
-            d->bcount++;
-        }
+        put_burn(d, &b);
     }
     d->flame = false;
 }
@@ -81,6 +198,7 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
     if (s->flame && !d->flame) {
         d->flame = true;
         d->burn_start = d->sec;
+        d->burn_t = s->epoch > 0 ? (uint32_t)s->epoch : 0;
         d->burn_dhw = s->dhw_active;
         d->burn_ret = d->burn_mod = 0;
         d->burn_n = 0;
@@ -187,11 +305,8 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
             .min_s = (uint8_t)d->min_s,
             .wh = (uint16_t)lround(fmin(d->wh, 65535)),
         };
-        d->recs[d->head] = r;
-        d->head = (d->head + 1) % d->nrecs;
-        if (d->count < d->nrecs) {
-            d->count++;
-        }
+        put_rec(d, &r);
+        hour_add(d, &r);
     }
     reset_minute(d);
     return true;
@@ -200,6 +315,34 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
 int datalog_count(const dl_t *d)
 {
     return d->count;
+}
+
+int datalog_burn_count(const dl_t *d)
+{
+    return d->bcount;
+}
+
+bool datalog_get_burn(const dl_t *d, int i, dl_burn_t *out)
+{
+    if (i < 0 || i >= d->bcount) {
+        return false;
+    }
+    *out = d->burns[(d->bhead - d->bcount + i + d->nburns) % d->nburns];
+    return true;
+}
+
+int datalog_hour_count(const dl_t *d)
+{
+    return d->hcount;
+}
+
+bool datalog_get_hour(const dl_t *d, int i, dl_hour_t *out)
+{
+    if (i < 0 || i >= d->hcount) {
+        return false;
+    }
+    *out = d->hours[(d->hhead - d->hcount + i + d->nhours) % d->nhours];
+    return true;
 }
 
 bool datalog_get(const dl_t *d, int i, dl_rec_t *out)
@@ -222,6 +365,26 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k)
     k->window_h = window_h;
     int want = (int)lroundf(window_h * 60);
     int n = d->count < want ? d->count : want;
+    // With the clock set, the window is by time: records restored from before a restart (or a gap while the
+    // device was off) only count when they fall inside it.
+    int64_t now_t = 0;
+    if (d->count) {
+        dl_rec_t last;
+        datalog_get(d, d->count - 1, &last);
+        now_t = last.t;
+    }
+    if (now_t > 0) {
+        int64_t from_t = now_t - (int64_t)lroundf(window_h * 3600);
+        n = 0;
+        for (int j = d->count - 1; j >= 0; j--) {
+            dl_rec_t r;
+            datalog_get(d, j, &r);
+            if (r.t <= from_t || (r.t == 0 && n > 0)) {
+                break;
+            }
+            n++;
+        }
+    }
     double ch_s = 0, cond = 0, minm = 0, mod_ch = 0, wh = 0, room = 0, target = 0, flow = 0, ret = 0;
     int nroom = 0, nflow = 0, nret = 0;
     for (int j = d->count - n; j < d->count; j++) {
@@ -273,11 +436,13 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k)
 
     // Completed CH burns that started inside the window
     uint32_t from = d->sec > (uint32_t)(n * 60) ? d->sec - (uint32_t)(n * 60) : 0;
+    int64_t from_t = now_t > 0 ? now_t - (int64_t)lroundf(window_h * 3600) : 0;
     uint16_t durs[512];
     int nb = 0, shorts = 0;
     for (int j = 0; j < d->bcount && nb < 512; j++) {
         const dl_burn_t *b = &d->burns[(d->bhead - 1 - j + d->nburns) % d->nburns];
-        if (b->start_s < from) {
+        bool inside = (now_t > 0 && b->t > 0) ? b->t > from_t : (b->start_s > 0 && b->start_s >= from);
+        if (!inside) {
             break;
         }
         if (b->dhw) {

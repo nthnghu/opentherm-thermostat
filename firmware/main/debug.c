@@ -22,6 +22,7 @@
 #include "cfgall.h"
 #include "mqtt_ha.h"
 #include "nvs.h"
+#include "histstore.h"
 #include <time.h>
 
 // Runs one command line and writes its answer to o (the serial console, or a web request: /api/cmd).
@@ -65,6 +66,8 @@ void debug_exec(const char *line, FILE *o)
         char hl[600];
         board_wifi_hang_log(hl, sizeof(hl));
         fprintf(o, "WIFI hangs: %s\n", hl);
+        histstore_status(hl, sizeof(hl));
+        fprintf(o, "HIST %s | RAM %d minutes, %d hours\n", hl, thermo_log_count(), thermo_hour_count());
         fprintf(o, "WIFI up=%d rssi=%d chip_silent_s=%d wd_min=%u wd_restarts=%lu\n", board_wifi_connected(),
                board_wifi_rssi(), board_wifi_cp_silent_s(), settings_get()->wifi_wd_min,
                (unsigned long)board_wifi_wd_restarts());

@@ -133,6 +133,8 @@ void thermo_get_kpi(dl_kpi_t *h1, dl_kpi_t *h24);
 // Minute log (7 days, RAM only): count and record i (0 = oldest).
 int thermo_log_count(void);
 bool thermo_log_get(int i, dl_rec_t *out);
+int thermo_hour_count(void);
+bool thermo_hour_get(int i, dl_hour_t *out);  // hourly summaries, 0 = oldest
 // Wi-Fi signal for the log (set by the MQTT task; reading it here would block the control loop).
 void thermo_set_rssi(int rssi);
 

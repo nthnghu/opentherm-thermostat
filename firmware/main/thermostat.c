@@ -20,6 +20,7 @@
 #include "ot_frame.h"
 #include "control.h"
 #include "timekeep.h"
+#include "histstore.h"
 
 static const char *TAG = "thermo";
 
@@ -49,8 +50,9 @@ static svc_t s_svc;               // under s_lock
 static bool s_svccfg_dirty;
 static dl_kpi_t s_kpi1, s_kpi24;
 static volatile int s_rssi;
-#define LOG_RECS (7 * 1440)
-#define LOG_BURNS 4096
+#define LOG_RECS 1440   // 24 h of minutes (longer raw history: MQTT -> VictoriaMetrics / Grafana)
+#define LOG_BURNS 512
+#define LOG_HOURS 840   // 35 days of hourly summaries (week chart)
 static thermo_sample_t *s_hist;   // PSRAM ring
 static int s_hist_head, s_hist_count;
 
@@ -421,6 +423,19 @@ static void thermo_task(void *arg)
         struct tm lt = {0};
         localtime_r(&wall, &lt);
         LOCK();
+        // Once the clock is known: take the PI long-term correction from the last minute saved before the
+        // restart, if that minute is recent (an update or watchdog restart, not a week switched off).
+        static bool i_restored;
+        if (clock_ok && !i_restored) {
+            i_restored = true;
+            dl_rec_t last;
+            if (histstore_last_rec(&last) && last.t > 0 && wall - last.t >= 0 && wall - last.t < 2 * 3600 &&
+                last.i_c10 != DL_NO_VALUE) {
+                ctrl_set_integral(&s_ctrl, last.i_c10 / 10.0f);
+                ESP_LOGI(TAG, "PI correction restored: %.1f K (saved %lld s ago)", last.i_c10 / 10.0f,
+                         (long long)(wall - last.t));
+            }
+        }
         if (s_cfg_changed) {
             s_cfg_changed = false;
             ctrl_set_config(&s_ctrl, &s_cfg);
@@ -585,6 +600,7 @@ static void thermo_task(void *arg)
         otb_flags_t sf = vo->flags;
         bool svc_save = vo->record_changed;
         UNLOCK();
+        histstore_sync(&s_dl);  // new minute / burn / hour to flash (only this task changes s_dl)
 
         // 3. Boiler
         otbus_set_simulated(sim);
@@ -645,7 +661,11 @@ void thermo_start(void)
     alerts_init(&s_alerts, &s_acfg);
     dl_rec_t *recs = heap_caps_calloc(LOG_RECS, sizeof(dl_rec_t), MALLOC_CAP_SPIRAM);
     dl_burn_t *burns = heap_caps_calloc(LOG_BURNS, sizeof(dl_burn_t), MALLOC_CAP_SPIRAM);
-    datalog_init(&s_dl, recs, recs ? LOG_RECS : 0, burns, burns ? LOG_BURNS : 0);
+    dl_hour_t *hours = heap_caps_calloc(LOG_HOURS, sizeof(dl_hour_t), MALLOC_CAP_SPIRAM);
+    datalog_init(&s_dl, recs, recs ? LOG_RECS : 0, burns, burns ? LOG_BURNS : 0, hours, hours ? LOG_HOURS : 0);
+    if (histstore_init()) {
+        histstore_restore(&s_dl);  // the last 24 h and 35 days of hours survive restarts
+    }
     s_st.hysteresis = s_cfg.onoff_hyst_k;
     ctrl_init(&s_ctrl, &s_cfg);
     sched_init(&s_sched, &s_scfg);
@@ -855,6 +875,22 @@ bool thermo_log_get(int i, dl_rec_t *out)
 {
     LOCK();
     bool ok = datalog_get(&s_dl, i, out);
+    UNLOCK();
+    return ok;
+}
+
+int thermo_hour_count(void)
+{
+    LOCK();
+    int n = datalog_hour_count(&s_dl);
+    UNLOCK();
+    return n;
+}
+
+bool thermo_hour_get(int i, dl_hour_t *out)
+{
+    LOCK();
+    bool ok = datalog_get_hour(&s_dl, i, out);
     UNLOCK();
     return ok;
 }

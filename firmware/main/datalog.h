@@ -2,12 +2,14 @@
 // Data log and efficiency KPIs (docs/research/09, plan A6). Pure C (no ESP-IDF), host-tested.
 //
 // Fed once per second. Keeps:
-//   - one record per minute in a caller-supplied ring (PSRAM on the device; 7 days = 10080 records);
+//   - one record per minute in a caller-supplied ring (PSRAM on the device; 24 h = 1440 records);
 //   - one event per burner burn (start, length, CH or DHW, mean return and modulation);
+//   - one summary per clock hour (35 days), for the week chart;
 // and computes the KPIs over a window (last hour, last 24 h): CH starts per hour, median CH burn, % short
 // burns, % burner time with the return below the condensing limit, mean modulation, % time at minimum,
 // comfort degree-hours and an estimated gas input from the modulation.
-// The log lives in RAM only: a restart starts it again (MQTT/VictoriaMetrics keep the long history).
+// The device copies every new record to flash (histstore.c) and replays them after a restart with the
+// datalog_restore_* functions. MQTT/VictoriaMetrics keep the long raw history.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -58,11 +60,24 @@ typedef struct {
 } dl_rec_t;
 
 typedef struct {
-    uint32_t start_s;            // seconds since start
+    uint32_t start_s;            // seconds since start (0 for burns restored from before the last start)
+    uint32_t t;                  // epoch at the start, 0 = clock not set
     uint16_t dur_s;
     bool dhw;                    // the burn heated the tank at any time
     uint8_t ret_c, mod;          // means over the burn
 } dl_burn_t;
+
+// One clock hour (needs the clock; hours without it are not summarised).
+typedef struct {
+    uint32_t t;                  // epoch of the start of the hour
+    int16_t room_c10, room_min_c10, room_max_c10;  // DL_NO_VALUE = no reading
+    int16_t target_c10;
+    int16_t flow_c10;            // mean while the burner was on, DL_NO_VALUE = no burn
+    uint16_t wh;                 // estimated gas input
+    uint8_t heat_min, dhw_min;   // burner minutes for the radiators / the tank (rounded)
+    uint8_t ch_starts;
+    uint8_t minutes;             // minutes of data in the hour
+} dl_hour_t;
 
 typedef struct {
     float window_h;              // requested window
@@ -93,6 +108,15 @@ typedef struct {
     int nrecs, head, count;
     dl_burn_t *burns;
     int nburns, bhead, bcount;
+    dl_hour_t *hours;
+    int nhours, hhead, hcount;
+    uint32_t rec_seq, burn_seq, hour_seq;  // records added so far (histstore writes the new ones)
+    // Hour in progress
+    uint32_t h_t;
+    int h_n, h_nroom, h_nflow;
+    double h_room, h_target, h_flow, h_wh, h_heat_s, h_dhw_s;
+    int16_t h_min, h_max;
+    int h_starts;
     // Current minute
     uint32_t sec;                // seconds since start
     int n;                       // samples in this minute
@@ -104,7 +128,7 @@ typedef struct {
     bool have_err0;
     // Burn in progress
     bool flame;
-    uint32_t burn_start;
+    uint32_t burn_start, burn_t;
     bool burn_dhw;
     double burn_ret, burn_mod;
     int burn_n;
@@ -113,7 +137,11 @@ typedef struct {
     double total_kwh, total_burner_s;
 } dl_t;
 
-void datalog_init(dl_t *d, dl_rec_t *recs, int nrecs, dl_burn_t *burns, int nburns);
+void datalog_init(dl_t *d, dl_rec_t *recs, int nrecs, dl_burn_t *burns, int nburns, dl_hour_t *hours, int nhours);
+// After a restart, oldest first: puts saved entries back (they do not change the totals since start).
+void datalog_restore_rec(dl_t *d, const dl_rec_t *r);
+void datalog_restore_burn(dl_t *d, const dl_burn_t *b);
+void datalog_restore_hour(dl_t *d, const dl_hour_t *h);
 // Once per second. Returns true when a minute record was completed.
 bool datalog_tick(dl_t *d, const dl_sample_t *s);
 // KPIs over the last window_h hours (from the minute records and burn events).
@@ -121,6 +149,10 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k);
 // Record i, 0 = oldest. Returns false past the end.
 bool datalog_get(const dl_t *d, int i, dl_rec_t *out);
 int datalog_count(const dl_t *d);
+bool datalog_get_burn(const dl_t *d, int i, dl_burn_t *out);  // 0 = oldest
+int datalog_burn_count(const dl_t *d);
+bool datalog_get_hour(const dl_t *d, int i, dl_hour_t *out);  // 0 = oldest
+int datalog_hour_count(const dl_t *d);
 // CSV
 const char *datalog_csv_header(void);
 int datalog_csv_row(const dl_rec_t *r, char *out, size_t size);

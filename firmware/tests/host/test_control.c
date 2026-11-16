@@ -274,8 +274,23 @@ static void test_config_table(void)
     CHECK(cfg.pi_kp == 40 && cfg.flow_min_c <= cfg.flow_max_c, "sanitize clamps");
 }
 
+static void test_set_integral(void)
+{
+    ctrl_config_t c;
+    ctrl_default_config(&c);
+    ctrl_t k;
+    ctrl_init(&k, &c);
+    ctrl_set_integral(&k, 4.5f);
+    CHECK(NEAR(k.i, 4.5, 1e-6), "restored integral %.2f", k.i);
+    ctrl_set_integral(&k, 99);
+    CHECK(NEAR(k.i, c.pi_i_limit_k, 1e-6), "clamped to the limit %.2f", k.i);
+    ctrl_set_integral(&k, -99);
+    CHECK(NEAR(k.i, -c.pi_i_limit_k, 1e-6), "clamped low %.2f", k.i);
+}
+
 int main(void)
 {
+    test_set_integral();
     test_config_table();
     test_sensor_loss();
     test_frost_and_off();
