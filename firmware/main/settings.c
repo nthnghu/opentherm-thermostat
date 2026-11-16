@@ -78,6 +78,7 @@ void settings_load(void)
     load_u8(h, "motion", &b8, 0);
     c->motion_wake = b8;
     load_u8(h, "mot_sens", &c->motion_sens, 1);
+    load_u8(h, "swipe_g", &c->swipe_guard, 2);
     load_u8(h, "theme", &c->theme_mode, 0);
     load_u16(h, "day_st", &c->day_start, 7 * 60);
     load_u16(h, "day_en", &c->day_end, 19 * 60);
@@ -154,6 +155,7 @@ esp_err_t settings_save(const settings_t *s)
     CHK(nvs_set_u16(h, "keep_en", s->keep_on_end));
     CHK(nvs_set_u8(h, "motion", s->motion_wake));
     CHK(nvs_set_u8(h, "mot_sens", s->motion_sens));
+    CHK(nvs_set_u8(h, "swipe_g", s->swipe_guard));
     CHK(nvs_set_u8(h, "theme", s->theme_mode));
     CHK(nvs_set_u16(h, "day_st", s->day_start));
     CHK(nvs_set_u16(h, "day_en", s->day_end));

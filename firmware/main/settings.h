@@ -38,6 +38,7 @@ typedef struct {
     uint16_t keep_on_end;
     bool motion_wake;      // camera motion turns the screen on (and keeps it on)
     uint8_t motion_sens;   // 0 = low, 1 = medium, 2 = high
+    uint8_t swipe_guard;   // tap ignored after this much finger travel: 0 = off, 1 = light, 2 = normal, 3 = strong
     uint8_t theme_mode;    // 0 = auto (HA sun, else day window), 1 = light, 2 = dark, 3 = day window only
     uint16_t day_start;    // light theme window when HA's sun is unknown (minutes after midnight)
     uint16_t day_end;

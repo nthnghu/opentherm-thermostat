@@ -509,6 +509,12 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
           c->theme_mode == 0 ? "selected" : "", c->theme_mode == 1 ? "selected" : "", c->theme_mode == 2 ? "selected" : "",
           c->theme_mode == 3 ? "selected" : "");
     sendf(req,
+          "<label>Swipe protection (a swipe that starts on a button does not press it)</label><select name=swipe>"
+          "<option value=0 %s>Off</option><option value=1 %s>Light</option><option value=2 %s>Normal</option>"
+          "<option value=3 %s>Strong</option></select>",
+          c->swipe_guard == 0 ? "selected" : "", c->swipe_guard == 1 ? "selected" : "",
+          c->swipe_guard == 2 ? "selected" : "", c->swipe_guard == 3 ? "selected" : "");
+    sendf(req,
           "<label>Light theme from (HH:MM)</label><input name=d_st type=time value='%02u:%02u'>"
           "<label>until (HH:MM)</label><input name=d_en type=time value='%02u:%02u'>",
           c->day_start / 60, c->day_start % 60, c->day_end / 60, c->day_end % 60);
@@ -1284,6 +1290,9 @@ static esp_err_t post_save(httpd_req_t *req)
         }
         if (form_get(body, "sens", v, 512)) {
             c->motion_sens = (uint8_t)fminf(fmaxf(atoi(v), 0), 2);
+        }
+        if (form_get(body, "swipe", v, 512)) {
+            c->swipe_guard = (uint8_t)fminf(fmaxf(atoi(v), 0), 3);
         }
         settings_save(c);
     } else if (strcmp(section, "web") == 0) {

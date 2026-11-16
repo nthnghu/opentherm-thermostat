@@ -418,8 +418,96 @@ static void create_launcher(void)
     }
 }
 
+/* ---------------------------------------------------------- swipe guard */
+
+// A tap counts only if the finger stayed close to where it touched down. A swipe that did not turn into a page
+// scroll (too short, diagonal, ended on the same row) used to "click" whatever it started on. Settings: Display >
+// Swipe protection. Drag controls (the dial, sliders) are left alone.
+static const uint8_t GUARD_PX[4] = {0, 28, 18, 12};  // off, light, normal, strong
+static lv_point_t s_press_pt;
+
+static void swipe_guard_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *in = lv_indev_active();
+    if (!in) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(in, &p);
+    if (code == LV_EVENT_PRESSED) {
+        s_press_pt = p;
+        return;
+    }
+    if (code != LV_EVENT_CLICKED && code != LV_EVENT_SHORT_CLICKED && code != LV_EVENT_RELEASED) {
+        return;
+    }
+    uint8_t g = settings_get()->swipe_guard;
+    int lim = g < 4 ? GUARD_PX[g] : 0;
+    int dx = p.x - s_press_pt.x, dy = p.y - s_press_pt.y;
+    lv_obj_t *obj = lv_event_get_param(e);
+    if (!lim || !obj || dx * dx + dy * dy < lim * lim) {
+        return;
+    }
+    if (lv_obj_check_type(obj, &lv_arc_class) || lv_obj_check_type(obj, &lv_slider_class)) {
+        return;  // dragging is how these are used
+    }
+    if (code == LV_EVENT_RELEASED) {
+        // Button groups and dropdowns act on release: drop the selection / the press instead
+        if (lv_obj_check_type(obj, &lv_buttonmatrix_class) || lv_obj_check_type(obj, &lv_keyboard_class)) {
+            lv_buttonmatrix_set_selected_button(obj, LV_BUTTONMATRIX_BUTTON_NONE);
+        } else if (lv_obj_check_type(obj, &lv_dropdown_class)) {
+            lv_obj_remove_state(obj, LV_STATE_PRESSED);
+            lv_indev_stop_processing(in);
+        }
+        return;
+    }
+    lv_indev_stop_processing(in);  // the object never sees this click
+}
+
+// Test touch (console "GO touch x0 y0 x1 y1 ms"): a straight finger path from x0,y0 to x1,y1 in ms, then lift.
+// Replaces the touch panel's readings while it runs.
+static lv_indev_read_cb_t s_touch_read;
+static volatile bool s_inj_on;
+static int64_t s_inj_t0;
+static int s_inj_x0, s_inj_y0, s_inj_x1, s_inj_y1, s_inj_ms;
+
+static void touch_read_wrap(lv_indev_t *in, lv_indev_data_t *d)
+{
+    if (!s_inj_on) {
+        s_touch_read(in, d);
+        return;
+    }
+    int64_t el = (esp_timer_get_time() - s_inj_t0) / 1000;
+    if (el <= s_inj_ms) {
+        float f = s_inj_ms ? (float)el / (float)s_inj_ms : 1;
+        d->point.x = s_inj_x0 + (int)((s_inj_x1 - s_inj_x0) * f);
+        d->point.y = s_inj_y0 + (int)((s_inj_y1 - s_inj_y0) * f);
+        d->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        d->point.x = s_inj_x1;
+        d->point.y = s_inj_y1;
+        d->state = LV_INDEV_STATE_RELEASED;
+        s_inj_on = false;
+    }
+}
+
+static void swipe_guard_install(void)
+{
+    for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
+        if (lv_indev_get_type(in) == LV_INDEV_TYPE_POINTER) {
+            lv_indev_add_event_cb(in, swipe_guard_cb, LV_EVENT_ALL, NULL);
+            if (!s_touch_read) {
+                s_touch_read = lv_indev_get_read_cb(in);
+                lv_indev_set_read_cb(in, touch_read_wrap);
+            }
+        }
+    }
+}
+
 void ui_shell_create(void)
 {
+    swipe_guard_install();
     s_apps[APP_THERMO] = app_thermo_create();
     s_apps[APP_HA] = app_ha_create();
     s_apps[APP_CALC] = app_calc_create();
@@ -461,6 +549,15 @@ void ui_debug_go(const char *what)
         strncmp(what, "day ", 4) == 0 || strncmp(what, "group ", 6) == 0) {
         ui_go_thermostat();
         ui_pages_debug(what);
+        return;
+    }
+    if (strncmp(what, "touch ", 6) == 0) {  // "touch x0 y0 x1 y1 ms": a test finger path
+        int v[5];
+        if (sscanf(what + 6, "%d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4]) == 5 && s_touch_read) {
+            s_inj_x0 = v[0], s_inj_y0 = v[1], s_inj_x1 = v[2], s_inj_y1 = v[3], s_inj_ms = v[4];
+            s_inj_t0 = esp_timer_get_time();
+            s_inj_on = true;
+        }
         return;
     }
     if (strncmp(what, "page ", 5) == 0) {

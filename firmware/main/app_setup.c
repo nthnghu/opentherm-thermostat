@@ -806,6 +806,7 @@ static lv_obj_t *build_thermo(void)
 
 static lv_obj_t *s_br, *s_dim, *s_dim_dd, *s_off_dd, *s_home_dd, *s_keep_sw, *s_k_st, *s_k_en;
 static lv_obj_t *s_night_sw, *s_n_st, *s_n_en, *s_n_lvl, *s_mot_sw, *s_mot_dd, *s_mot_lbl, *s_theme_dd, *s_d_st, *s_d_en;
+static lv_obj_t *s_swipe_dd;
 static const uint16_t DIM_S[] = {0, 15, 30, 60, 120, 300, 600};
 static const char DIM_OPTS[] = "Never\n15 s\n30 s\n1 min\n2 min\n5 min\n10 min";
 static const uint16_t OFF_S[] = {0, 60, 120, 300, 600, 1800, 3600};
@@ -843,6 +844,7 @@ static void display_panel_cb(lv_event_t *e)
     lv_dropdown_set_selected(s_theme_dd, c->theme_mode);
     lv_dropdown_set_selected(s_d_st, c->day_start / 30);
     lv_dropdown_set_selected(s_d_en, c->day_end / 30);
+    lv_dropdown_set_selected(s_swipe_dd, c->swipe_guard);
 }
 
 static void display_save_cb(lv_event_t *e)
@@ -865,6 +867,7 @@ static void display_save_cb(lv_event_t *e)
     s_tmp.theme_mode = lv_dropdown_get_selected(s_theme_dd);
     s_tmp.day_start = lv_dropdown_get_selected(s_d_st) * 30;
     s_tmp.day_end = lv_dropdown_get_selected(s_d_en) * 30;
+    s_tmp.swipe_guard = lv_dropdown_get_selected(s_swipe_dd);
     settings_save(&s_tmp);
     ui_theme_update();
 }
@@ -985,6 +988,12 @@ static lv_obj_t *build_display(void)
              "By the hours: light between these times. "
              "Also in the quick panel: tap the status bar.",
           16, 1350, 448, 0x607D8B);
+
+    section(p, "Touch", 1450);
+    s_swipe_dd = dropdown(p, "Swipe protection", "Off\nLight\nNormal\nStrong", 230, 1480, 220);
+    label(p, "A tap only counts if the finger stays put: a swipe that starts on a button or a setting no longer "
+             "opens it. Stronger = a smaller movement already cancels the tap.",
+          16, 1550, 448, 0x607D8B);
     lv_timer_create(motion_tick_cb, 1000, NULL);
     return p;
 }
