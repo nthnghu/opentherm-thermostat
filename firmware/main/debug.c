@@ -1,5 +1,6 @@
 // Development helper on the USB serial port only (not reachable over the network):
 // "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "CFG [name value]" lists/sets the control and schedule settings; "PROG [day text]" the weekly program; "BOOST|DHWBOOST|PASTEUR on|off", "AWAY <hours>|on|off"; "MODE heat|off", "SP <C>" for bench tests; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
+#include "esp_heap_caps.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +37,18 @@ static struct {
 } s_ts_prev[TS_MAX];
 static configRUN_TIME_COUNTER_TYPE s_ts_prev_total;
 static int s_ts_prev_n;
+
+// Free memory in the pools the Wi-Fi link needs (the SDIO driver takes each 1536-byte frame from the DMA heap).
+void debug_heap_stats(char *out, size_t size)
+{
+    snprintf(out, size, "dma free=%u largest=%u min=%u | internal free=%u largest=%u | psram free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
 
 void debug_task_stats(char *out, size_t size)
 {
@@ -85,6 +98,12 @@ void debug_task_stats(char *out, size_t size)
 
 void debug_exec(const char *line, FILE *o)
 {
+    if (strcmp(line, "HEAP") == 0) {
+        char b[200];
+        debug_heap_stats(b, sizeof(b));
+        fprintf(o, "HEAP %s\n", b);
+        return;
+    }
     if (strcmp(line, "TASKS") == 0) {  // CPU per task since the last TASKS
         char *b = malloc(1536);
         if (b) {

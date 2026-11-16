@@ -11,7 +11,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # PSRAM (32 MB)
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# Only very small blocks in internal RAM: its DMA part is needed by the Wi-Fi link (one 1536 B block per SDIO frame)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
 
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
@@ -30,6 +31,8 @@ CONFIG_LV_USE_CLIB_SPRINTF=y
 
 # HTTPS to Home Assistant (if an https:// URL is used)
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# TLS buffers (~20 KB per connection) in PSRAM: internal DMA RAM is needed by the Wi-Fi link (SDIO frames)
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 
 # Camera: OV02C10 (vendored driver in components/ov02c10), 1 lane 1288x728 RAW10

@@ -5,6 +5,9 @@
 #include "motion.h"
 #include <math.h>
 #include <string.h>
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -165,7 +168,8 @@ static void motion_task(void *arg)
 
 void motion_start(void)
 {
-    xTaskCreatePinnedToCore(motion_task, "motion", 4096, NULL, 2, NULL, 0);
+    // Stack in PSRAM: this task never touches flash, and internal DMA RAM is kept for the Wi-Fi link.
+    xTaskCreatePinnedToCoreWithCaps(motion_task, "motion", 4096, NULL, 2, NULL, 0, MALLOC_CAP_SPIRAM);
 }
 
 void motion_set_off(bool off)

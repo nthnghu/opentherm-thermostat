@@ -4,6 +4,9 @@
 // entity list, remove, move up/down, move to another page). The layout is stored in NVS (hadash.c).
 #include <stdio.h>
 #include <string.h>
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include <stdlib.h>
 #include <strings.h>
 #include <stdarg.h>
@@ -776,7 +779,8 @@ lv_obj_t *app_ha_create(void)
     build_editor();
     build_dashboard();
 
-    xTaskCreatePinnedToCore(worker, "ha_app", 10240, NULL, 3, &s_task, 0);
+    // Stack in PSRAM: HTTP only, never flash, and internal DMA RAM is kept for the Wi-Fi link.
+    xTaskCreatePinnedToCoreWithCaps(worker, "ha_app", 10240, NULL, 3, &s_task, 0, MALLOC_CAP_SPIRAM);
     int total = 0;
     for (int i = 0; i < s_dash.page_count; i++) {
         total += s_dash.pages[i].count;

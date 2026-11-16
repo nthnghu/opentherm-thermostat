@@ -573,7 +573,7 @@ void board_wifi_hang_log(char *out, size_t size)
 
 static void wifi_mon_task(void *arg)
 {
-    int64_t last_rssi_us = 0, ok_epoch = 0, next_check_us = 0;
+    int64_t last_rssi_us = 0, ok_epoch = 0, next_check_us = 0, next_heap_us = 60000000;
     bool lease_logged = false;
     int ok_rssi = 0;
     for (;;) {
@@ -607,6 +607,12 @@ static void wifi_mon_task(void *arg)
         } else if (!s_wifi_up) {
             lease_logged = false;
         }
+        if (now >= next_heap_us) {  // memory trend for the Wi-Fi hang hunt (the SDIO driver ran out of DMA memory)
+            next_heap_us = now + 600000000LL;
+            char hb[200];
+            debug_heap_stats(hb, sizeof(hb));
+            ESP_LOGI(TAG, "memory: %s", hb);
+        }
         bool answered = false;
         if (s_wifi_up) {
             wifi_ap_record_t ap;
@@ -638,6 +644,8 @@ static void wifi_mon_task(void *arg)
             if (ts) {
                 debug_task_stats(ts, 1024);
                 ESP_LOGW(TAG, "Wi-Fi chip silent %lld s; CPU: %s", silent_s, ts);
+                debug_heap_stats(ts, 1024);
+                ESP_LOGW(TAG, "memory: %s", ts);
                 free(ts);
             }
         }

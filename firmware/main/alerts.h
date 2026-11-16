@@ -53,7 +53,7 @@ typedef struct {
     bool press_valid;
     float pressure_bar;
     bool link_up;
-    bool link_known;             // false until the first answer (boiler not connected yet: no alert)
+    bool link_known;             // false for the first 5 s (before the bus gave up or got an answer); never-answered = lost
     bool sensor_ok;
     uint16_t ch_starts_1h;
     float median_burn_1h_min;

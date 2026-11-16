@@ -4,6 +4,7 @@
 #include "ot_frame.h"
 #include "ot_sim.h"
 #include "otb_core.h"
+#include "alerts.h"
 
 static otb_xfer_result_t sim_xfer(void *ctx, uint32_t req, uint32_t *resp, uint16_t *lat)
 {
@@ -139,6 +140,38 @@ static void test_misses_and_e31(void)
     CHECK(ch && !b.e31, "power cycle with the master talking: CH back");
 }
 
+// Adapter unplugged or boiler off from power-on: the link was never up, it still goes LOST (not a "loss") and the
+// link alert fires after link_s, so a dead adapter at start-up is reported too.
+static void test_never_answered(void)
+{
+    ot_sim_t b;
+    ot_sim_init(&b, 20, 8);
+    b.q.miss_pct = 100;
+    otb_core_t c;
+    otb_init(&c);
+    int64_t now = 0;
+    run(&c, &b, &now, 4);
+    CHECK(c.st.link == OTB_LINK_UNKNOWN, "4 s without any answer: still unknown");
+    run(&c, &b, &now, 1);
+    CHECK(c.st.link == OTB_LINK_LOST && c.st.link_losses == 0, "5 s: lost, not counted as a loss");
+
+    alert_config_t k;
+    alert_default_config(&k);
+    alerts_t a;
+    alerts_init(&a, &k);
+    alert_in_t in = {.sensor_ok = true, .clock_ok = true, .link_up = false};
+    const alert_out_t *o = NULL;
+    for (int s = 0; s <= 5 + k.link_s; s++) {
+        in.now_s = s;
+        in.link_known = s >= 5;  // as the bus reports it
+        o = alerts_step(&a, &in);
+        if (s == 5 + k.link_s - 1) {
+            CHECK(!o->active[ALERT_LINK], "no link alert before link_s");
+        }
+    }
+    CHECK(o->active[ALERT_LINK], "link alert %u s after the bus gave up", k.link_s);
+}
+
 static void test_link_loss(void)
 {
     ot_sim_t b;
@@ -186,6 +219,7 @@ int main(void)
     test_immergas_quirks();
     test_misses_and_e31();
     test_link_loss();
+    test_never_answered();
     test_plant();
     TEST_DONE();
 }
