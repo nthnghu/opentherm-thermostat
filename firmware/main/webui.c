@@ -249,6 +249,13 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
                "brings it back (heating pauses for a few seconds). Now: last answer %d s ago, watchdog restarts so "
                "far: %lu.</p><button>Save</button></form>",
           c->wifi_wd_min, board_wifi_cp_silent_s(), (unsigned long)board_wifi_wd_restarts());
+    {
+        char hl[600];
+        board_wifi_hang_log(hl, sizeof(hl));
+        SEND(req, "<p class=hint>Last hangs (when the chip last answered): ");
+        send_escaped(req, hl);
+        SEND(req, "</p>");
+    }
 
     // Home Assistant
     SEND(req, "<h2>Home Assistant</h2><form method=post action=/save/ha>");

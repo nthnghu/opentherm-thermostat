@@ -74,6 +74,9 @@ static void debug_task(void *arg)
             mqtt_ha_status(mst, sizeof(mst));
             printf("ALERT count=%u bits=%04x text=%s | MQTT %s\n", st.alert_count, st.alerts,
                    st.alert_text[0] ? st.alert_text : "none", mst);
+            char hl[600];
+            board_wifi_hang_log(hl, sizeof(hl));
+            printf("WIFI hangs: %s\n", hl);
             printf("WIFI up=%d rssi=%d chip_silent_s=%d wd_min=%u wd_restarts=%lu\n", board_wifi_connected(),
                    board_wifi_rssi(), board_wifi_cp_silent_s(), settings_get()->wifi_wd_min,
                    (unsigned long)board_wifi_wd_restarts());

@@ -1,6 +1,7 @@
 #include "board.h"
 
 #include <string.h>
+#include <time.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -516,9 +517,64 @@ i2c_master_bus_handle_t board_i2c_bus(void)
 // settings wifi_wd_min minutes, the device restarts (the C6 is reset at start-up); 0 = never.
 static volatile int s_rssi;
 
+// Hang record (NVS "board"/"wd_log", newest first): when the C6 last answered, to look for a pattern.
+#define WD_LOG_N 8
+typedef struct {
+    int64_t epoch;      // wall clock of the last answer (0 = clock not set)
+    uint32_t uptime_s;  // uptime at the last answer
+    int8_t rssi;        // last signal strength seen
+} wd_event_t;
+
+static void wd_log_add(int64_t epoch, uint32_t uptime_s, int rssi)
+{
+    wd_event_t ev[WD_LOG_N] = {0};
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    size_t len = sizeof(ev);
+    nvs_get_blob(h, "wd_log", ev, &len);
+    memmove(&ev[1], &ev[0], sizeof(ev[0]) * (WD_LOG_N - 1));
+    ev[0] = (wd_event_t){epoch, uptime_s, (int8_t)rssi};
+    nvs_set_blob(h, "wd_log", ev, sizeof(ev));
+    nvs_set_u32(h, "wd_rst", s_wd_restarts + 1);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+void board_wifi_hang_log(char *out, size_t size)
+{
+    wd_event_t ev[WD_LOG_N] = {0};
+    size_t len = sizeof(ev), n = 0;
+    out[0] = 0;
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_blob(h, "wd_log", ev, &len);
+        nvs_close(h);
+    }
+    for (int i = 0; i < WD_LOG_N && n < size; i++) {
+        if (!ev[i].uptime_s) {
+            continue;
+        }
+        char when[24] = "clock not set";
+        if (ev[i].epoch) {
+            time_t t = (time_t)ev[i].epoch;
+            struct tm lt;
+            localtime_r(&t, &lt);
+            strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &lt);
+        }
+        n += (size_t)snprintf(out + n, size - n, "%s%s, %lu min after start, signal %d", n ? "; " : "", when,
+                              (unsigned long)(ev[i].uptime_s / 60), ev[i].rssi);
+    }
+    if (!out[0]) {
+        snprintf(out, size, "none");
+    }
+}
+
 static void wifi_mon_task(void *arg)
 {
-    int64_t last_rssi_us = 0;
+    int64_t last_rssi_us = 0, ok_epoch = 0;
+    int ok_rssi = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(5000));
         if (!s_wifi_inited) {
@@ -542,6 +598,9 @@ static void wifi_mon_task(void *arg)
         now = esp_timer_get_time();
         if (answered) {
             s_cp_ok_us = now;
+            time_t t = time(NULL);
+            ok_epoch = t > 1700000000 ? (int64_t)t : 0;
+            ok_rssi = s_rssi;
         }
         if (!s_wifi_up || now - last_rssi_us > 30000000) {
             s_rssi = 0;
@@ -553,12 +612,7 @@ static void wifi_mon_task(void *arg)
         }
         if (wd && silent_s >= (int64_t)wd * 60) {
             ESP_LOGE(TAG, "Wi-Fi chip silent for %lld s: restarting", silent_s);
-            nvs_handle_t h;
-            if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {
-                nvs_set_u32(h, "wd_rst", s_wd_restarts + 1);
-                nvs_commit(h);
-                nvs_close(h);
-            }
+            wd_log_add(ok_epoch, (uint32_t)(s_cp_ok_us / 1000000), ok_rssi);
             vTaskDelay(pdMS_TO_TICKS(200));
             esp_restart();
         }

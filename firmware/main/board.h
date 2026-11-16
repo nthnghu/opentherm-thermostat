@@ -1,6 +1,7 @@
 #pragma once
 // Board support for the Guition JC4880P443C_I_W (ESP32-P4 + ESP32-C6).
 #include <stdbool.h>
+#include <stddef.h>
 #include "esp_err.h"
 #include "esp_codec_dev.h"
 #include "esp_wifi_types.h"
@@ -46,6 +47,7 @@ const char *board_wifi_ip(void);  // "" when not connected
 int board_wifi_rssi(void);        // 0 when not connected; cached, never blocks
 int board_wifi_cp_silent_s(void); // seconds since the Wi-Fi chip (C6) last answered (normally < 10)
 uint32_t board_wifi_wd_restarts(void);  // restarts by the Wi-Fi watchdog so far
+void board_wifi_hang_log(char *out, size_t size);  // the last hangs, newest first ("none")
 
 #include "driver/i2c_master.h"
 // Shared I2C bus (GPIO7/8): GT911, ES8311, SHT40, camera SCCB.

@@ -890,6 +890,16 @@ static void sv_close_cb(lv_event_t *e)
     lv_obj_add_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN);
 }
 
+// Header "Back": from a routine's detail to the routine list, from the list to the Settings page.
+static void sv_back_cb(lv_event_t *e)
+{
+    if (s_sv_detail && !lv_obj_has_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_screen_load(s_thermo_scr);
+}
+
 static void sv_start(bool confirmed)
 {
     char why[128];
@@ -994,7 +1004,7 @@ static void service_open(void)
 {
     if (!s_sv_scr) {
         lv_obj_t *c;
-        s_sv_scr = screen("Service", &c, NULL);
+        s_sv_scr = screen("Service", &c, sv_back_cb);
         // PIN pad
         s_sv_pin = lv_obj_create(c);
         lv_obj_set_size(s_sv_pin, 480, UI_CONTENT_H);
