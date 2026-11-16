@@ -29,6 +29,8 @@
 #include "cJSON.h"
 #include "debug.h"
 #include "logring.h"
+#include "tlscert.h"
+#include "esp_https_server.h"
 #include "esp_core_dump.h"
 #include "esp_partition.h"
 #include "ota_check.h"
@@ -1488,7 +1490,7 @@ static esp_err_t post_sink(httpd_req_t *req)
     double s = (esp_timer_get_time() - t0) / 1e6;
     ESP_LOGI(TAG, "sink: %u bytes in %.1f s", (unsigned)got, s);
     sendf(req, "sink: %u bytes in %.1f s (%.0f KB/s)\n", (unsigned)got, s, s > 0 ? got / 1024.0 / s : 0);
-    return ESP_OK;
+    return httpd_resp_send_chunk(req, NULL, 0);  // ends the reply (without it the client waits for its timeout)
 }
 
 // GET /api/log: the last 64 KB of the device log (oldest first).
@@ -1664,6 +1666,26 @@ static esp_err_t post_ota(httpd_req_t *req)
     return ESP_OK;
 }
 
+// Port 80: GET goes to the same address on https; anything else is refused, so no form or upload is ever
+// accepted unencrypted.
+static esp_err_t to_https(httpd_req_t *req)
+{
+    char host[80] = "", loc[360];
+    httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host));
+    char *colon = strchr(host, ':');
+    if (colon) {
+        *colon = 0;
+    }
+    if (req->method != HTTP_GET && req->method != HTTP_HEAD) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        return httpd_resp_sendstr(req, "Use https://");
+    }
+    snprintf(loc, sizeof(loc), "https://%s%.256s", host[0] ? host : board_wifi_ip(), req->uri);
+    httpd_resp_set_status(req, "301 Moved Permanently");
+    httpd_resp_set_hdr(req, "Location", loc);
+    return httpd_resp_sendstr(req, "Moved to https");
+}
+
 /* -------------------------------------------------------------- startup */
 
 esp_err_t webui_start(void)
@@ -1676,17 +1698,46 @@ esp_err_t webui_start(void)
     const esp_timer_create_args_t wa = {.callback = wifi_cb, .name = "web_wifi"};
     esp_timer_create(&wa, &s_wifi_timer);
 
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.stack_size = 10240;  // HA test (possibly TLS) runs in a handler
-    cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 24;  // default 8; more are registered below
-    cfg.uri_match_fn = httpd_uri_match_wildcard;
-    cfg.core_id = 0;
-    cfg.task_priority = 4;
-    esp_err_t err = httpd_start(&s_server, &cfg);
+    // HTTPS only: the login, the tokens typed into the forms and firmware uploads never cross the network in the
+    // clear. The certificate is the device's own (tlscert.c).
+    if (!tlscert_init()) {
+        ESP_LOGE(TAG, "no HTTPS certificate: the web page is off");
+        return ESP_FAIL;
+    }
+    httpd_ssl_config_t cfg = HTTPD_SSL_CONFIG_DEFAULT();
+    cfg.servercert = (const uint8_t *)tlscert_cert_pem();
+    cfg.servercert_len = strlen(tlscert_cert_pem()) + 1;
+    cfg.prvtkey_pem = (const uint8_t *)tlscert_key_pem();
+    cfg.prvtkey_len = strlen(tlscert_key_pem()) + 1;
+    cfg.httpd.stack_size = 12288;  // TLS handshake, and the HA test (possibly TLS too) runs in a handler
+    cfg.httpd.lru_purge_enable = true;
+    cfg.httpd.max_open_sockets = 5;
+    cfg.httpd.max_uri_handlers = 24;  // default 8; more are registered below
+    cfg.httpd.uri_match_fn = httpd_uri_match_wildcard;
+    cfg.httpd.core_id = 0;
+    cfg.httpd.task_priority = 4;
+    esp_err_t err = httpd_ssl_start(&s_server, &cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "httpd_ssl_start: %s", esp_err_to_name(err));
         return err;
+    }
+    // Port 80 only points to https://
+    httpd_config_t rc = HTTPD_DEFAULT_CONFIG();
+    rc.server_port = 80;
+    rc.ctrl_port = cfg.httpd.ctrl_port + 1;
+    rc.stack_size = 4096;
+    rc.max_open_sockets = 2;
+    rc.lru_purge_enable = true;
+    rc.uri_match_fn = httpd_uri_match_wildcard;
+    rc.core_id = 0;
+    rc.task_priority = 4;
+    static httpd_handle_t redirect;
+    if (httpd_start(&redirect, &rc) == ESP_OK) {
+        static const httpd_method_t methods[] = {HTTP_GET, HTTP_POST, HTTP_HEAD};
+        for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
+            httpd_uri_t u = {.uri = "/*", .method = methods[i], .handler = to_https};
+            httpd_register_uri_handler(redirect, &u);
+        }
     }
     const httpd_uri_t uris[] = {
         {.uri = "/", .method = HTTP_GET, .handler = get_root},
@@ -1711,6 +1762,6 @@ esp_err_t webui_start(void)
             ESP_LOGE(TAG, "could not register %s", uris[i].uri);
         }
     }
-    ESP_LOGI(TAG, "web setup on port 80");
+    ESP_LOGI(TAG, "web setup on port 443 (https); port 80 redirects");
     return ESP_OK;
 }

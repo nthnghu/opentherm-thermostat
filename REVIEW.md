@@ -32,6 +32,14 @@ Date: 2026-11-16 · Commit reviewed: `795f2fe` (firmware 0.3.1) · No code was c
 | M10 | After 5 wrong logins every further one blocks logins for 10 s, doubling up to 5 minutes | 5 × 401, then 429 for 10 s, also for the correct password. The hash is still one round of SHA-256 |
 | M13 | `esp_hosted` 3.1.0 and `esp_wifi_remote` 1.6.5 pinned exactly; `dependencies.lock` is now tracked in git | Build |
 
+**H6, partly done (firmware 0.4.0):**
+
+| Part | State |
+|---|---|
+| HTTPS on the device | Done. The web server runs on port 443 with a key and self-signed certificate made on the device at first start (`tlscert.c`, kept in NVS, nothing secret in the image or the repo). Port 80 redirects page views and refuses everything else. `tools/ota.sh` pins the device's public key (`~/.config/thermostat.pin`, trusted on first use; console `TLS` shows it, `TLS new` replaces the certificate). Checked on the device: pin matches, wrong pin refused, POST over HTTP gets 403, handshake 0.17–0.22 s, main page 1.1 s, upload about 800 KB/s, free DMA RAM 88 KB |
+| Signed firmware | Skipped for now by decision. A signing key was generated at `~/.config/thermostat-signing-key.pem` and is unused; the firmware accepts unsigned images as before |
+| Home Assistant over `https://` | Not a firmware change; depends on the HA setup |
+
 Severity: **High** = can leave the house unheated, or gives control of the device to someone else. **Medium** = degrades reliability or security in a realistic case. **Low** = hardening or cleanup.
 
 Items marked *(verify)* are conclusions from reading code that I did not reproduce on the device.

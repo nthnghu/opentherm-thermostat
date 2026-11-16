@@ -27,7 +27,7 @@ static bool web_answers(void)
     }
     struct timeval tv = {.tv_sec = 3};
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(80)};
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(443)};
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     bool ok = connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0;
     if (!ok) {

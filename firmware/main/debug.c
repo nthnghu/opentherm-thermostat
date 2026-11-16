@@ -2,6 +2,7 @@
 // "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "CFG [name value]" lists/sets the control and schedule settings; "PROG [day text]" the weekly program; "BOOST|DHWBOOST|PASTEUR on|off", "AWAY <hours>|on|off"; "MODE heat|off", "SP <C>" for bench tests; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
 #include "esp_heap_caps.h"
 #include "esp_core_dump.h"
+#include "tlscert.h"
 #include "driver/gpio.h"
 #include <string.h>
 #include <stdio.h>
@@ -341,6 +342,15 @@ void debug_exec(const char *line, FILE *o)
                 fprintf(o, "COREDUMP stored, summary not readable (download: /api/coredump)\n");
             }
             free(cs);
+        }
+        return;
+    }
+    if (strcmp(line, "TLS") == 0 || strcmp(line, "TLS new") == 0) {  // the web certificate's pin; "TLS new": replace it
+        if (line[3]) {
+            tlscert_forget();
+            fprintf(o, "TLS certificate forgotten: a new one is made at the next restart (browsers and tools must trust it again)\n");
+        } else {
+            fprintf(o, "TLS pin %s\n", tlscert_pin());
         }
         return;
     }

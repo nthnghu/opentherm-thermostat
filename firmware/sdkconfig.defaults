@@ -47,7 +47,6 @@ CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y
 # OTA with rollback: a new image must pass the boot hardware check
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
-CONFIG_APP_PROJECT_VER="0.3.1"
 
 # Web server: Basic auth header + several sockets
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
@@ -81,3 +80,13 @@ CONFIG_HEAP_POISONING_LIGHT=y
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# Web page over HTTPS (device-made certificate, tlscert.c); port 80 only redirects
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+CONFIG_LWIP_MAX_SOCKETS=16
+# Receive window 12 segments (default 4): a TLS upload arrives in 16 KB records, more than the default 5.7 KB
+# window holds. Uploads run at about 800 KB/s with it; the default was not measured over HTTPS.
+CONFIG_LWIP_TCP_WND_DEFAULT=17280
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=16
+
+CONFIG_APP_PROJECT_VER="0.4.0"

@@ -974,7 +974,7 @@ static void update_cb(lv_timer_t *t)
         strlcpy(s_qr_ip, ip, sizeof(s_qr_ip));
         if (up) {
             char url[40];
-            snprintf(url, sizeof(url), "http://%s/", ip);
+            snprintf(url, sizeof(url), "https://%s/", ip);
             lv_qrcode_update(s_qr, url, strlen(url));
             lv_obj_remove_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -982,7 +982,7 @@ static void update_cb(lv_timer_t *t)
         }
     }
     if (up) {
-        ui_label_fmt(s_qr_lbl, "Web setup\n#4FC3F7 http://%s/#\n%s", ip,
+        ui_label_fmt(s_qr_lbl, "Web setup\n#4FC3F7 https://%s/#\n%s", ip,
                               settings_web_configured() ? "Log in with your web password."
                                                         : "#FFB74D Set a login in Web access first.#");
     } else {
