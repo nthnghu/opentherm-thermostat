@@ -234,6 +234,8 @@ static void create_status_bar(void)
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);  // tap or swipe down: quick panel
     lv_obj_add_event_cb(bar, bar_cb, LV_EVENT_CLICKED, NULL);
+    // Gestures stop here (LVGL passes them up to the top layer otherwise); a swipe is no click (swipe guard).
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_event_cb(bar, bar_cb, LV_EVENT_GESTURE, NULL);
 
     s_clock = lv_label_create(bar);

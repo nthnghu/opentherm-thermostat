@@ -202,6 +202,7 @@ void quickpanel_create(void)
     lv_obj_set_style_pad_all(s_panel, 0, 0);
     lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_GESTURE_BUBBLE);  // swipe up on the panel or its buttons: close
     lv_obj_add_event_cb(s_panel, gesture_cb, LV_EVENT_GESTURE, NULL);
 
     // Brightness + screen off
