@@ -98,12 +98,25 @@ static void send_escaped(httpd_req_t *req, const char *s)
 static void sendf(httpd_req_t *req, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static void sendf(httpd_req_t *req, const char *fmt, ...)
 {
+    // Never truncate: a cut-off tag (e.g. a missing </form>) silently breaks the rest of the page.
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    SEND(req, buf);
+    if (n < (int)sizeof(buf)) {
+        SEND(req, buf);
+        return;
+    }
+    char *big = malloc((size_t)n + 1);
+    if (!big) {
+        return;
+    }
+    va_start(ap, fmt);
+    vsnprintf(big, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    SEND(req, big);
+    free(big);
 }
 
 // Reads a form body (application/x-www-form-urlencoded). Caller frees.
@@ -326,7 +339,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
         }
         SEND(req, "</table>");
         sendf(req, "<h3>Service PIN for the device</h3><p class=hint>%s</p><form method=post action=/save/svcpin>"
-                   "<input name=pin type=password inputmode=numeric placeholder='4-6 digits, empty = remove'>"
+                   "<input name=pin type=password inputmode=numeric autocomplete=off placeholder='4-6 digits, empty = remove'>"
                    "<button>Set PIN</button></form>",
               settings_svc_pin_configured() ? "A PIN is set. Settings > Service on the device asks for it."
                                             : "No PIN yet: the service menu on the device is locked.");
