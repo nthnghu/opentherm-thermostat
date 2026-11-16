@@ -1,4 +1,4 @@
-// OV02C10 camera (MIPI-CSI, 1 lane) through esp_video's V4L2-style API, plus QR decoding with quirc.
+// OV02C10 camera (MIPI-CSI, 1 lane) through esp_video's V4L2-style API.
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -12,7 +12,6 @@
 #include "esp_video_init.h"
 #include "esp_video_device.h"
 #include "linux/videodev2.h"
-#include "quirc.h"
 #include "board.h"
 #include "camera.h"
 
@@ -26,8 +25,6 @@ static int s_fd = -1;
 static uint8_t *s_buf[NUM_BUFS];
 static size_t s_buf_len[NUM_BUFS];
 static int s_w, s_h;
-static struct quirc *s_qr;
-static int s_qr_w, s_qr_h;
 
 esp_err_t camera_init(void)
 {
@@ -187,52 +184,6 @@ static inline uint8_t luma565(uint16_t p)
 {
     unsigned r = (p >> 11) << 3, g = ((p >> 5) & 0x3f) << 2, b = (p & 0x1f) << 3;
     return (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
-}
-
-int camera_qr_decode(const uint16_t *px, int w, int h, char *out, size_t out_size)
-{
-    // Decode on a 2x-downscaled grey image: enough resolution for a phone/monitor QR, and 4x faster.
-    int qw = w / 2, qh = h / 2;
-    if (!s_qr) {
-        s_qr = quirc_new();
-        if (!s_qr) {
-            return -1;
-        }
-    }
-    if (qw != s_qr_w || qh != s_qr_h) {
-        if (quirc_resize(s_qr, qw, qh) < 0) {
-            return -1;
-        }
-        s_qr_w = qw;
-        s_qr_h = qh;
-    }
-    uint8_t *g = quirc_begin(s_qr, NULL, NULL);
-    for (int y = 0; y < qh; y++) {
-        const uint16_t *row = px + (size_t)(y * 2) * w;
-        for (int x = 0; x < qw; x++) {
-            g[y * qw + x] = luma565(row[x * 2]);
-        }
-    }
-    quirc_end(s_qr);
-    int n = quirc_count(s_qr);
-    // quirc_code + quirc_data are ~13 KB: keep them off the caller's stack (decode is single-threaded).
-    static struct quirc_code code;
-    static struct quirc_data data;
-    for (int i = 0; i < n; i++) {
-        quirc_extract(s_qr, i, &code);
-        quirc_decode_error_t e = quirc_decode(&code, &data);
-        if (e == QUIRC_ERROR_DATA_ECC) {
-            quirc_flip(&code);  // mirrored image (camera facing the user)
-            e = quirc_decode(&code, &data);
-        }
-        if (e == QUIRC_SUCCESS) {
-            size_t len = data.payload_len < (int)out_size - 1 ? data.payload_len : out_size - 1;
-            memcpy(out, data.payload, len);
-            out[len] = 0;
-            return 1;
-        }
-    }
-    return n > 0 ? 0 : -2;  // 0: QR seen but not decodable, -2: none seen
 }
 
 static void mean_cb(const uint16_t *px, int w, int h, void *user)

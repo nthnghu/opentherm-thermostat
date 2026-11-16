@@ -8,3 +8,5 @@ esp_err_t sht4x_init(i2c_master_bus_handle_t bus);
 esp_err_t sht4x_read_serial(uint32_t *serial);
 // High-precision measurement (~9 ms). Values in °C and %RH.
 esp_err_t sht4x_measure(float *temp_c, float *rh);
+// Soft reset of the sensor (after repeated read errors).
+esp_err_t sht4x_reset(void);

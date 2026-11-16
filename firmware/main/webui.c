@@ -29,6 +29,8 @@
 #include "cJSON.h"
 #include "debug.h"
 #include "logring.h"
+#include "esp_core_dump.h"
+#include "esp_partition.h"
 #include "ota_check.h"
 #include "histstore.h"
 
@@ -154,6 +156,10 @@ static bool form_get(const char *body, const char *key, char *out, size_t size)
     return true;
 }
 
+// An upload that sends nothing for this many receive timeouts (5 s each) is dropped: the server handles one
+// request at a time, so a stalled client would otherwise block the web page for good.
+#define UPLOAD_MAX_STALLS 6
+
 /* ------------------------------------------------------------------ auth */
 
 // Returns true when the request carries valid Basic credentials; otherwise sends 401/403.
@@ -163,6 +169,10 @@ uint32_t webui_requests(void)
 {
     return s_served;
 }
+
+#define LOGIN_FREE_TRIES 5
+static int s_login_fails;                 // httpd task only
+static int64_t s_login_locked_until_us;
 
 static bool check_auth(httpd_req_t *req)
 {
@@ -176,6 +186,17 @@ static bool check_auth(httpd_req_t *req)
                                 "<b>Apps &rarr; Setup &rarr; Web access</b>.</p></body>");
         return false;
     }
+    // After LOGIN_FREE_TRIES wrong logins in a row every further one costs a wait that doubles up to 5 minutes;
+    // during the wait nothing is checked. A correct login resets it.
+    int64_t now_us = esp_timer_get_time();
+    if (now_us < s_login_locked_until_us) {
+        char wait[12];
+        snprintf(wait, sizeof(wait), "%d", (int)((s_login_locked_until_us - now_us) / 1000000) + 1);
+        httpd_resp_set_status(req, "429 Too Many Requests");
+        httpd_resp_set_hdr(req, "Retry-After", wait);
+        httpd_resp_sendstr(req, "Too many wrong logins. Wait and try again.");
+        return false;
+    }
     char hdr[160];
     if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) == ESP_OK &&
         strncmp(hdr, "Basic ", 6) == 0) {
@@ -187,11 +208,19 @@ static bool check_auth(httpd_req_t *req)
             if (colon) {
                 *colon = 0;
                 if (settings_check_web_password((char *)dec, colon + 1)) {
+                    s_login_fails = 0;
                     return true;
                 }
             }
         }
-        ESP_LOGW(TAG, "bad login attempt");
+        if (++s_login_fails >= LOGIN_FREE_TRIES) {
+            int steps = s_login_fails - LOGIN_FREE_TRIES;
+            int wait_s = steps >= 5 ? 300 : (10 << steps) > 300 ? 300 : (10 << steps);
+            s_login_locked_until_us = now_us + (int64_t)wait_s * 1000000;
+            ESP_LOGW(TAG, "bad login attempt #%d: logins blocked for %d s", s_login_fails, wait_s);
+        } else {
+            ESP_LOGW(TAG, "bad login attempt #%d", s_login_fails);
+        }
     }
     httpd_resp_set_status(req, "401 Unauthorized");
     httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Thermostat\", charset=\"UTF-8\"");
@@ -608,7 +637,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     tab(req, "sys");
     SEND(req, "<h2>Diagnostics</h2><p class=hint><a href=/api/log target=_blank>Device log</a> (last 64 KB) &middot; "
               "<a href=/api/screen.bmp target=_blank>Screenshot</a> &middot; <a href=/api/version target=_blank>Version"
-              "</a></p><label for=cmd>Console (the serial commands: STAT, OTSTAT, CFG, SVC, ...)</label>"
+              "</a> &middot; <a href=/api/coredump>Crash dump</a> (console: COREDUMP, COREDUMP clear)</p><label for=cmd>Console (the serial commands: STAT, OTSTAT, CFG, SVC, ...)</label>"
               "<input id=cmd placeholder=STAT onkeydown=\"if(event.key=='Enter')runcmd()\">"
               "<button onclick='runcmd()'>Run</button><pre id=cmdout class=hint style='white-space:pre-wrap'></pre>");
 
@@ -1442,11 +1471,13 @@ static esp_err_t post_sink(httpd_req_t *req)
     }
     size_t left = req->content_len, got = 0;
     int64_t t0 = esp_timer_get_time();
+    int stalls = 0;
     while (left > 0) {
         int r = httpd_req_recv(req, buf, left < 4096 ? left : 4096);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < UPLOAD_MAX_STALLS) {
             continue;
         }
+        stalls = 0;
         if (r <= 0) {
             break;
         }
@@ -1477,6 +1508,42 @@ static esp_err_t get_devlog(httpd_req_t *req)
     httpd_resp_send(req, buf, n);
     free(buf);
     return ESP_OK;
+}
+
+// GET /api/coredump: the crash dump kept in flash (ELF, for "idf.py coredump-info -c <file>"). The console
+// command "COREDUMP clear" erases it.
+static esp_err_t get_coredump(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_check() != ESP_OK || esp_core_dump_image_get(&addr, &size) != ESP_OK || size < 28) {
+        httpd_resp_set_status(req, "404 Not Found");
+        return httpd_resp_sendstr(req, "No crash dump stored.");
+    }
+    const esp_partition_t *part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    char *buf = malloc(4096);
+    if (!part || !buf || addr < part->address) {
+        free(buf);
+        return httpd_resp_send_500(req);
+    }
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"thermostat-coredump.elf\"");
+    // The image starts with a 24-byte header and ends with a 4-byte checksum; the ELF is in between.
+    size_t off = addr - part->address + 24, left = size - 28;
+    esp_err_t err = ESP_OK;
+    while (left > 0 && err == ESP_OK) {
+        size_t n = left < 4096 ? left : 4096;
+        err = esp_partition_read(part, off, buf, n);
+        if (err == ESP_OK) {
+            err = httpd_resp_send_chunk(req, buf, n);
+        }
+        off += n;
+        left -= n;
+    }
+    free(buf);
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 // GET /api/screen.bmp: the frame buffer as a 16-bit BMP (RGB565, top-down).
@@ -1555,15 +1622,20 @@ static esp_err_t post_ota(httpd_req_t *req)
     char *buf = malloc(4096);
     int left = req->content_len;
     ESP_LOGI(TAG, "OTA: %d bytes to %s", left, part->label);
+    int stalls = 0;
     while (left > 0 && buf) {
         int r = httpd_req_recv(req, buf, left < 4096 ? left : 4096);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < UPLOAD_MAX_STALLS) {
             continue;
         }
         if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "OTA: upload stalled, giving up (%d bytes missing)", left);
+            }
             err = ESP_FAIL;
             break;
         }
+        stalls = 0;
         err = esp_ota_write(ota, buf, r);
         if (err != ESP_OK) {
             break;
@@ -1631,6 +1703,7 @@ esp_err_t webui_start(void)
         {.uri = "/api/log", .method = HTTP_GET, .handler = get_devlog},
         {.uri = "/api/sink", .method = HTTP_POST, .handler = post_sink},
         {.uri = "/api/screen.bmp", .method = HTTP_GET, .handler = get_screen},
+        {.uri = "/api/coredump", .method = HTTP_GET, .handler = get_coredump},
         {.uri = "/api/version", .method = HTTP_GET, .handler = get_version},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {

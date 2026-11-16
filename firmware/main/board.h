@@ -48,6 +48,8 @@ const char *board_wifi_status(void);
 const char *board_wifi_ip(void);  // "" when not connected
 int board_wifi_rssi(void);        // 0 when not connected; cached, never blocks
 int board_wifi_cp_silent_s(void); // seconds since the Wi-Fi chip (C6) last answered (normally < 10)
+void board_wifi_chip_reset(void);       // test: reset the Wi-Fi chip alone, as the watchdog does first
+uint32_t board_wifi_chip_resets(void);  // chip resets since start
 uint32_t board_wifi_wd_restarts(void);  // restarts by the Wi-Fi watchdog so far
 void board_wifi_hang_log(char *out, size_t size);  // the last hangs, newest first ("none")
 

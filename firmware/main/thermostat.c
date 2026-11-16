@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
+#include "driver/i2c_master.h"
 #include "esp_heap_caps.h"
 #include "nvs.h"
 #include "board.h"
@@ -27,6 +28,7 @@ static const char *TAG = "thermo";
 #define LOOP_MS          1000
 #define SENSOR_STALE_US  ((int64_t)THERMO_SENSOR_STALE_S * 1000000)
 #define SAVE_DELAY_US    (5LL * 1000000)
+#define SENSOR_STUCK_N   150  // reads (2 s each): 5 minutes of bit-identical values
 #define SMOOTH_ALPHA     (2.0f / 30.0f)  // reading every 2 s -> ~30 s exponential average
 #define SHOW_BAND_C      0.08f           // shown temperature moves only past this from the smoothed value
 #define SHOW_BAND_RH     0.8f
@@ -226,7 +228,7 @@ static void load(void)
     if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
         int32_t v;
         uint8_t b;
-        if (nvs_get_i32(h, "sp", &v) == ESP_OK) {
+        if (nvs_get_i32(h, "sp", &v) == ESP_OK && v >= THERMO_SP_MIN * 10 && v <= THERMO_SP_MAX * 10) {
             s_st.setpoint = v / 10.0f;
         }
         if (nvs_get_u8(h, "mode", &b) == ESP_OK) {
@@ -252,27 +254,37 @@ static void load(void)
     }
 }
 
-static void save(void)
+// Returns false when something could not be written: the caller tries again later.
+static bool save(void)
 {
     nvs_handle_t h;
-    if (nvs_open("thermo", NVS_READWRITE, &h) != ESP_OK) {
-        return;
+    esp_err_t err = nvs_open("thermo", NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "settings not saved: %s", esp_err_to_name(err));
+        return false;
     }
     LOCK();
     thermo_state_t c = s_st;
     UNLOCK();
-    nvs_set_i32(h, "sp", (int32_t)lroundf(c.setpoint * 10));
-    nvs_set_u8(h, "mode", c.mode);
-    nvs_set_i32(h, "ofs", (int32_t)lroundf(c.offset * 10));
+    int bad = 0;
+    bad += nvs_set_i32(h, "sp", (int32_t)lroundf(c.setpoint * 10)) != ESP_OK;
+    bad += nvs_set_u8(h, "mode", c.mode) != ESP_OK;
+    bad += nvs_set_i32(h, "ofs", (int32_t)lroundf(c.offset * 10)) != ESP_OK;
     if (s_boiler_chosen) {  // a simulator that only stepped in for a missing boiler is never stored
-        nvs_set_u8(h, "sim", c.boiler_sim);
+        bad += nvs_set_u8(h, "sim", c.boiler_sim) != ESP_OK;
     }
-    nvs_set_u8(h, "simroom", c.sim_room);
-    nvs_set_u8(h, "away", c.away);
-    nvs_set_i64(h, "awayuntil", c.away_until);
-    nvs_commit(h);
+    bad += nvs_set_u8(h, "simroom", c.sim_room) != ESP_OK;
+    // The end time first: "away" without its end would mean away for good after a power cut in between.
+    bad += nvs_set_i64(h, "awayuntil", c.away_until) != ESP_OK;
+    bad += nvs_set_u8(h, "away", c.away) != ESP_OK;
+    bad += nvs_commit(h) != ESP_OK;
     nvs_close(h);
+    if (bad) {
+        ESP_LOGE(TAG, "settings not saved completely (%d writes failed); trying again in a minute", bad);
+        return false;
+    }
     ESP_LOGI(TAG, "settings saved (sp %.1f, mode %d)", c.setpoint, c.mode);
+    return true;
 }
 
 static void mark_dirty(void)
@@ -428,6 +440,36 @@ static void thermo_task(void *arg)
             esp_err_t err = sensor_inited ? sht4x_measure(&t, &h) : ESP_ERR_INVALID_STATE;
             if (!sensor_inited) {
                 sensor_inited = sht4x_init(board_i2c_bus()) == ESP_OK;
+            }
+            // Recovery: after 5 failed reads in a row a soft reset of the sensor, after 15 (and then every 30 s)
+            // a reset of the I2C bus as well (a device holding the data line low blocks everyone on it).
+            static int fails_in_row;
+            fails_in_row = err == ESP_OK ? 0 : fails_in_row + 1;
+            if (sensor_inited && fails_in_row == 5) {
+                ESP_LOGW(TAG, "SHT40: 5 failed reads, soft reset: %s", esp_err_to_name(sht4x_reset()));
+            } else if (fails_in_row >= 15 && fails_in_row % 15 == 0 && board_i2c_bus()) {
+                esp_err_t br = i2c_master_bus_reset(board_i2c_bus());
+                ESP_LOGW(TAG, "SHT40: %d failed reads, I2C bus reset: %s", fails_in_row, esp_err_to_name(br));
+                if (sensor_inited) {
+                    sht4x_reset();
+                }
+            }
+            // A real sensor never repeats the exact same pair of readings for long (its last digits are noise):
+            // identical values for SENSOR_STUCK_N reads mean it has stopped measuring, and count as failures.
+            static float last_t = -1000, last_h = -1000;
+            static int same;
+            if (err == ESP_OK) {
+                same = (t == last_t && h == last_h) ? same + 1 : 0;
+                last_t = t;
+                last_h = h;
+                if (same >= SENSOR_STUCK_N) {
+                    if (same == SENSOR_STUCK_N) {
+                        ESP_LOGE(TAG, "SHT40 repeats the same reading (%.2f C, %.1f %%) for %d s: treated as failed", t, h,
+                                 SENSOR_STUCK_N * 2);
+                        sht4x_reset();
+                    }
+                    err = ESP_ERR_INVALID_RESPONSE;
+                }
             }
             // Bench testing: the simulated house replaces the SHT40 temperature (humidity stays real).
             float sim_t;
@@ -708,7 +750,9 @@ static void thermo_task(void *arg)
         }
         if (s_dirty_since_us && now - s_dirty_since_us > SAVE_DELAY_US) {
             s_dirty_since_us = 0;
-            save();
+            if (!save()) {
+                s_dirty_since_us = now + 55LL * 1000000;  // SAVE_DELAY_US after this = one minute from now
+            }
             if (s_cfg_dirty) {
                 s_cfg_dirty = false;
                 save_ctrl_config();

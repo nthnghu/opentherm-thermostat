@@ -16,7 +16,5 @@ int camera_width(void);
 int camera_height(void);
 // Waits for the next frame and passes it to cb (the buffer is only valid inside cb).
 bool camera_grab(camera_frame_cb_t cb, void *user);
-// 1 = decoded into out, 0 = QR seen but unreadable, -2 = no QR, -1 = error.
-int camera_qr_decode(const uint16_t *rgb565, int w, int h, char *out, size_t out_size);
 // Boot test: grabs a few frames; returns ESP_OK when frames arrive.
 esp_err_t camera_selftest(int *mean_luma);

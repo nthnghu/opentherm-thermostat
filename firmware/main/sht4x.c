@@ -80,6 +80,20 @@ esp_err_t sht4x_read_serial(uint32_t *serial)
     return err;
 }
 
+// Soft reset (command 0x94, 1 ms): clears a sensor that answers but with errors.
+esp_err_t sht4x_reset(void)
+{
+    if (!s_dev) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t cmd = 0x94;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = i2c_master_transmit(s_dev, &cmd, 1, 50);
+    vTaskDelay(pdMS_TO_TICKS(2));
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
 esp_err_t sht4x_measure(float *temp_c, float *rh)
 {
     uint16_t t, h;

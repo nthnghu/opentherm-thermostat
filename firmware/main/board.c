@@ -20,6 +20,7 @@
 #include "esp_lvgl_port.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_wifi.h"
+#include "esp_hosted.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_timer.h"
@@ -424,6 +425,12 @@ static const char *reason_text(int reason)
     }
 }
 
+// New Wi-Fi credentials are on trial: when they give no connection within WIFI_TRIAL_S, the previous ones (which
+// worked) are put back, so a typo on the web page cannot take the device off the network for good.
+#define WIFI_TRIAL_S 60
+static char s_prev_ssid[33], s_prev_pass[65];
+static volatile int64_t s_trial_until_us;  // 0 = no trial running
+
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -447,6 +454,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         ESP_LOGI(TAG, "Got IP %s", s_ip);
         s_wifi_up = true;
+        s_trial_until_us = 0;  // new credentials (if any were on trial) work
         set_wifi_status("%s  " LV_SYMBOL_WIFI "  %s", settings_get()->ssid, s_ip);
     }
 }
@@ -523,6 +531,15 @@ esp_err_t board_wifi_connect(const char *ssid, const char *pass)
         return ESP_ERR_NO_MEM;
     }
     settings_copy(s);
+    bool changed = strcmp(s->ssid, ssid) != 0 || strcmp(s->pass, pass) != 0;
+    if (s_trial_until_us) {
+        s_trial_until_us = 0;  // a second change during a trial: the fallback stays the last working network
+    } else if (changed && s->ssid[0] && s_wifi_up) {
+        strlcpy(s_prev_ssid, s->ssid, sizeof(s_prev_ssid));
+        strlcpy(s_prev_pass, s->pass, sizeof(s_prev_pass));
+    } else {
+        s_prev_ssid[0] = 0;
+    }
     strlcpy(s->ssid, ssid, sizeof(s->ssid));
     strlcpy(s->pass, pass, sizeof(s->pass));
     esp_err_t serr = settings_save(s);
@@ -537,6 +554,9 @@ esp_err_t board_wifi_connect(const char *ssid, const char *pass)
     s_wifi_up = false;
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wc), TAG, "config");
     set_wifi_status("Connecting to %s...", ssid);
+    if (s_prev_ssid[0] && changed) {
+        s_trial_until_us = esp_timer_get_time() + WIFI_TRIAL_S * 1000000LL;
+    }
     return esp_wifi_connect();
 }
 
@@ -589,6 +609,7 @@ static void wd_log_add(int64_t epoch, uint32_t uptime_s, int rssi)
     nvs_set_u32(h, "wd_rst", s_wd_restarts + 1);
     nvs_commit(h);
     nvs_close(h);
+    s_wd_restarts++;  // the count of hangs handled (chip reset, or a device restart when that did not help)
 }
 
 void board_wifi_hang_log(char *out, size_t size)
@@ -620,9 +641,61 @@ void board_wifi_hang_log(char *out, size_t size)
     }
 }
 
+// Wi-Fi chip recovery without restarting the thermostat: take the Wi-Fi driver and the link to the C6 down,
+// bring the link up again (that resets the C6 through its reset pin), then start Wi-Fi with the saved network.
+// Calls into a hung chip time out after 5 s each, so this can take half a minute; it runs in wifi_mon_task only.
+#define CHIP_RECOVER_WAIT_S 90  // still silent this long after the chip reset: restart the device
+static volatile bool s_chip_reset_req;
+static uint32_t s_chip_resets;
+
+static void wifi_chip_recover(void)
+{
+    int64_t t0 = esp_timer_get_time();
+    s_wifi_up = false;
+    s_ip[0] = 0;
+    s_reconnect_at_us = 0;
+    set_wifi_status("Restarting the Wi-Fi chip...");
+    esp_err_t e1 = esp_wifi_stop();
+    esp_err_t e2 = esp_wifi_deinit();
+    int e3 = esp_hosted_deinit();
+    vTaskDelay(pdMS_TO_TICKS(300));
+    int e4 = esp_hosted_init();
+    int e5 = esp_hosted_connect_to_slave();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_err_t e6 = esp_wifi_init(&cfg);
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    if (settings_wifi_configured()) {
+        wifi_config_t wc = {0};
+        settings_t *c = malloc(sizeof(settings_t));
+        if (c) {
+            settings_copy(c);
+            strlcpy((char *)wc.sta.ssid, c->ssid, sizeof(wc.sta.ssid));
+            strlcpy((char *)wc.sta.password, c->pass, sizeof(wc.sta.password));
+            free(c);
+            esp_wifi_set_config(WIFI_IF_STA, &wc);
+        }
+    }
+    esp_err_t e7 = esp_wifi_start();  // WIFI_EVENT_STA_START then reconnects
+    s_chip_resets++;
+    ESP_LOGW(TAG, "Wi-Fi chip reset #%lu in %lld ms: stop %s, deinit %s, link down %d, link up %d, connect %d, init %s, start %s",
+             (unsigned long)s_chip_resets, (esp_timer_get_time() - t0) / 1000, esp_err_to_name(e1), esp_err_to_name(e2), e3,
+             e4, e5, esp_err_to_name(e6), esp_err_to_name(e7));
+}
+
+void board_wifi_chip_reset(void)
+{
+    s_chip_reset_req = true;
+}
+
+uint32_t board_wifi_chip_resets(void)
+{
+    return s_chip_resets;
+}
+
 static void wifi_mon_task(void *arg)
 {
-    int64_t last_rssi_us = 0, ok_epoch = 0, next_check_us = 0, next_heap_us = 60000000;
+    int64_t last_rssi_us = 0, ok_epoch = 0, next_check_us = 0, next_heap_us = 60000000, recover_at_us = 0;
     bool lease_logged = false;
     int ok_rssi = 0;
     for (;;) {
@@ -637,6 +710,17 @@ static void wifi_mon_task(void *arg)
             if (settings_wifi_configured() && !s_wifi_up) {
                 esp_wifi_connect();
             }
+            now = esp_timer_get_time();
+        }
+        if (s_trial_until_us && now > s_trial_until_us && !s_wifi_up) {
+            ESP_LOGW(TAG, "no connection with the new Wi-Fi settings in %d s: back to %s", WIFI_TRIAL_S, s_prev_ssid);
+            char ssid[33], pass[65];
+            strlcpy(ssid, s_prev_ssid, sizeof(ssid));
+            strlcpy(pass, s_prev_pass, sizeof(pass));
+            s_prev_ssid[0] = 0;  // no trial for the way back
+            s_trial_until_us = 0;
+            board_wifi_connect(ssid, pass);
+            set_wifi_status("New network failed; back on %s", ssid);
             now = esp_timer_get_time();
         }
         if (now < next_check_us) {
@@ -701,9 +785,25 @@ static void wifi_mon_task(void *arg)
         if (silent_s >= 60 && silent_s % 60 < 6) {
             ESP_LOGW(TAG, "Wi-Fi chip not answering for %lld s (restart after %u min)", silent_s, wd);
         }
-        if (wd && silent_s >= (int64_t)wd * 60) {
-            ESP_LOGE(TAG, "Wi-Fi chip silent for %lld s: restarting", silent_s);
-            wd_log_add(ok_epoch, (uint32_t)(s_cp_ok_us / 1000000), ok_rssi);
+        if (answered) {
+            recover_at_us = 0;
+        }
+        if (s_chip_reset_req || (wd && silent_s >= (int64_t)wd * 60 && !recover_at_us)) {
+            // First the Wi-Fi chip alone: the thermostat keeps running and the boiler sees no gap.
+            bool test = s_chip_reset_req;
+            s_chip_reset_req = false;
+            ESP_LOGE(TAG, "Wi-Fi chip %s: resetting the chip only", test ? "reset requested" : "silent");
+            if (!test) {
+                wd_log_add(ok_epoch, (uint32_t)(s_cp_ok_us / 1000000), ok_rssi);
+            }
+            wifi_chip_recover();
+            recover_at_us = esp_timer_get_time();
+            next_check_us = recover_at_us + 5000000;
+            continue;
+        }
+        if (wd && recover_at_us && now - recover_at_us > CHIP_RECOVER_WAIT_S * 1000000LL && silent_s >= CHIP_RECOVER_WAIT_S) {
+            // The chip reset did not bring it back: restart everything, as before.
+            ESP_LOGE(TAG, "Wi-Fi chip still silent %d s after its reset: restarting the device", CHIP_RECOVER_WAIT_S);
             vTaskDelay(pdMS_TO_TICKS(200));
             esp_restart();
         }

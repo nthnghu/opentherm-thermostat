@@ -1,4 +1,4 @@
-// Setup: QR code to the web setup page, then sections (Wi-Fi, Home Assistant with camera token scan,
+// Setup: QR code to the web setup page, then sections (Wi-Fi, Home Assistant,
 // Clock, Web access, Thermostat, Display, Diagnostics). Each section is an overlay panel.
 #include <stdio.h>
 #include <string.h>
@@ -30,8 +30,6 @@
 static const char *TAG = "setup";
 
 #define MAX_APS 30
-#define PREVIEW_W 448
-#define PREVIEW_H 252
 
 typedef enum { CMD_SCAN, CMD_TEST, CMD_C6_UPDATE } cmd_t;
 
@@ -302,9 +300,7 @@ static lv_obj_t *build_wifi(void)
 
 /* ========================================================= Home Assistant */
 
-static lv_obj_t *s_ha_url, *s_ha_status, *s_cam, *s_cam_canvas, *s_cam_msg;
-static uint16_t *s_cam_buf;
-static volatile bool s_scanning;
+static lv_obj_t *s_ha_url, *s_ha_status;
 
 static void ha_refresh(void)
 {
@@ -349,137 +345,6 @@ static void ha_test_cb(lv_event_t *e)
     send_cmd(CMD_TEST);
 }
 
-static void cam_stop(void)
-{
-    s_scanning = false;
-    ui_set_busy(false);
-}
-
-static void cam_cancel_cb(lv_event_t *e)
-{
-    cam_stop();
-    lv_obj_add_flag(s_cam, LV_OBJ_FLAG_HIDDEN);
-}
-
-static void qr_task(void *arg);
-
-static void scan_cb(lv_event_t *e)
-{
-    if (!s_cam_buf) {
-        ui_label_text(s_ha_status, "#E57373 Camera buffer missing#");
-        return;
-    }
-    lv_obj_remove_flag(s_cam, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_cam);
-    ui_label_text(s_cam_msg, "Hold the token's QR code 15-30 cm in front of the camera.");
-    ui_set_busy(true);
-    if (!s_scanning) {
-        s_scanning = true;
-        // quirc's region flood-fill recurses deeply on real images: give it a big stack of its own.
-        if (xTaskCreatePinnedToCore(qr_task, "qrscan", 32768, NULL, 3, NULL, 0) != pdPASS) {
-            s_scanning = false;
-            ui_label_text(s_cam_msg, "#E57373 Not enough memory to start the scanner#");
-        }
-    }
-}
-
-// Camera frame -> preview (nearest-neighbour scale) + QR decode. Runs in the worker task.
-typedef struct {
-    char text[400];
-    int rc;
-} qr_ctx_t;
-
-static void frame_cb(const uint16_t *px, int w, int h, void *user)
-{
-    qr_ctx_t *q = user;
-    for (int y = 0; y < PREVIEW_H; y++) {
-        const uint16_t *row = px + (size_t)(y * h / PREVIEW_H) * w;
-        uint16_t *out = s_cam_buf + y * PREVIEW_W;
-        for (int x = 0; x < PREVIEW_W; x++) {
-            out[x] = row[x * w / PREVIEW_W];
-        }
-    }
-    lvgl_port_lock(0);
-    lv_obj_invalidate(s_cam_canvas);
-    lvgl_port_unlock();
-    q->rc = camera_qr_decode(px, w, h, q->text, sizeof(q->text));
-}
-
-static void qr_scan_loop(void)
-{
-    motion_set_paused(true);
-    if (camera_init() != ESP_OK || camera_start() != ESP_OK) {
-        lvgl_port_lock(0);
-        ui_label_text(s_cam_msg, "#E57373 Camera not available#");
-        lvgl_port_unlock();
-        cam_stop();
-        motion_set_paused(false);
-        return;
-    }
-    static qr_ctx_t q;
-    int64_t t0 = esp_timer_get_time();
-    while (s_scanning) {
-        q.rc = -2;
-        if (!camera_grab(frame_cb, &q)) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-        if (q.rc == 1) {
-            if (ha_token_plausible(q.text)) {
-                // Own copy: s_tmp belongs to the LVGL task.
-                settings_t *c = malloc(sizeof(settings_t));
-                esp_err_t serr = ESP_ERR_NO_MEM;
-                if (c) {
-                    settings_copy(c);
-                    strlcpy(c->ha_token, q.text, sizeof(c->ha_token));
-                    serr = settings_save(c);
-                    free(c);
-                }
-                if (serr != ESP_OK) {
-                    ESP_LOGE(TAG, "saving the token failed: %s", esp_err_to_name(serr));
-                }
-                lvgl_port_lock(0);
-                ui_label_text(s_cam_msg, "#81C784 " LV_SYMBOL_OK " Token read and saved. Testing...#");
-                lvgl_port_unlock();
-                char msg[128], info[96];
-                ha_token_describe(q.text, info, sizeof(info));
-                ESP_LOGI(TAG, "scanned token: %s", info);
-                bool ok = ha_test(msg, sizeof(msg));
-                lvgl_port_lock(0);
-                ui_label_fmt(s_cam_msg, "%s %s#\n#90A4AE Token: %s#", ok ? "#81C784 " LV_SYMBOL_OK : "#FFB74D " LV_SYMBOL_WARNING,
-                                      msg, info);
-                lvgl_port_unlock();
-                break;
-            }
-            lvgl_port_lock(0);
-            ui_label_fmt(s_cam_msg, "That QR code is not an HA token:\n%.40s", q.text);
-            lvgl_port_unlock();
-        } else if (q.rc == 0) {
-            lvgl_port_lock(0);
-            ui_label_text(s_cam_msg, "QR code seen - hold it steady and a bit closer");
-            lvgl_port_unlock();
-        }
-        if (esp_timer_get_time() - t0 > 120LL * 1000000) {
-            lvgl_port_lock(0);
-            ui_label_text(s_cam_msg, "Stopped after 2 minutes. Tap Scan again to retry.");
-            lvgl_port_unlock();
-            break;
-        }
-    }
-    camera_stop();
-    cam_stop();
-    motion_set_paused(false);
-    lvgl_port_lock(0);
-    ha_refresh();
-    lvgl_port_unlock();
-}
-
-static void qr_task(void *arg)
-{
-    qr_scan_loop();
-    vTaskDelete(NULL);
-}
-
 static lv_obj_t *build_ha(void)
 {
     lv_obj_t *p = panel(LV_SYMBOL_HOME " Home Assistant");
@@ -489,31 +354,12 @@ static lv_obj_t *build_ha(void)
     lv_textarea_set_max_length(s_ha_url, 120);
     button(p, "Save", 0x2E7D32, ha_save_url_cb, 356, 98, 108, 52);
 
-    button(p, LV_SYMBOL_EYE_OPEN "  Scan token with the camera", 0x1565C0, scan_cb, 16, 176, 448, 70);
-    label(p, "In HA: your profile > Security > Long-lived access tokens > Create token. "
-             "HA shows the new token as a QR code: hold that screen in front of this device.",
-          16, 258, 448, 0x90A4AE);
-    s_ha_status = label(p, "", 16, 360, 448, 0);
+    label(p, "The access token is entered on the web setup page (QR code on the Setup screen): in HA, your profile > "
+             "Security > Long-lived access tokens > Create token, then paste it there.",
+          16, 176, 448, 0x90A4AE);
+    s_ha_status = label(p, "", 16, 290, 448, 0);
     lv_label_set_recolor(s_ha_status, true);
-    button(p, "Test connection", 0x37474F, ha_test_cb, 16, 440, 448, 60);
-    label(p, "You can also enter the URL and token on the web setup page (QR code on the Setup screen).", 16, 520,
-          448, 0x607D8B);
-
-    // Camera overlay
-    s_cam = ui_overlay(s_content);
-    lv_obj_t *t = lv_label_create(s_cam);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
-    ui_label_text(t, "Scan HA token");
-    lv_obj_set_pos(t, 16, 14);
-    s_cam_buf = heap_caps_calloc(PREVIEW_W * PREVIEW_H, 2, MALLOC_CAP_SPIRAM);
-    s_cam_canvas = lv_canvas_create(s_cam);
-    if (s_cam_buf) {
-        lv_canvas_set_buffer(s_cam_canvas, s_cam_buf, PREVIEW_W, PREVIEW_H, LV_COLOR_FORMAT_RGB565);
-    }
-    lv_obj_set_pos(s_cam_canvas, 16, 64);
-    s_cam_msg = label(s_cam, "", 16, 336, 448, 0);
-    lv_label_set_recolor(s_cam_msg, true);
-    button(s_cam, "Close", 0x37474F, cam_cancel_cb, 16, 620, 448, 64);
+    button(p, "Test connection", 0x37474F, ha_test_cb, 16, 370, 448, 60);
     return p;
 }
 
@@ -1191,7 +1037,6 @@ static void screen_cb(lv_event_t *e)
         }
     } else {
         kb_hide();
-        s_scanning = false;
     }
 }
 

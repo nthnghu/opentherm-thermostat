@@ -15,6 +15,7 @@
 #include "webui.h"
 #include "debug.h"
 #include "logring.h"
+#include "esp_core_dump.h"
 #include "ota_check.h"
 #include "motion.h"
 #include "mqtt_ha.h"
@@ -36,6 +37,16 @@ void app_main(void)
                  err == ESP_OK ? "all settings are back at their defaults" : esp_err_to_name(err));
     }
     settings_load();
+    {
+        // A crash dump from an earlier run (kept in flash until downloaded and cleared: web page, Diagnostics)
+        esp_core_dump_summary_t *cs = malloc(sizeof(*cs));
+        if (cs && esp_core_dump_image_check() == ESP_OK && esp_core_dump_get_summary(cs) == ESP_OK) {
+            ESP_LOGE(TAG, "crash dump in flash: task \"%s\" at 0x%08lx (cause %lu, return 0x%08lx), firmware %.9s",
+                     cs->exc_task, (unsigned long)cs->exc_pc, (unsigned long)cs->ex_info.mcause,
+                     (unsigned long)cs->ex_info.ra, (const char *)cs->app_elf_sha256);
+        }
+        free(cs);
+    }
 
     // Heating first: nothing below (display, self-test, Wi-Fi) can keep the thermostat from starting.
     if (board_i2c_init() != ESP_OK) {

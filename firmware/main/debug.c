@@ -1,6 +1,8 @@
 // Development helper on the USB serial port only (not reachable over the network):
 // "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "CFG [name value]" lists/sets the control and schedule settings; "PROG [day text]" the weekly program; "BOOST|DHWBOOST|PASTEUR on|off", "AWAY <hours>|on|off"; "MODE heat|off", "SP <C>" for bench tests; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
 #include "esp_heap_caps.h"
+#include "esp_core_dump.h"
+#include "driver/gpio.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -163,9 +165,9 @@ void debug_exec(const char *line, FILE *o)
         fprintf(o, "WIFI hangs: %s\n", hl);
         histstore_status(hl, sizeof(hl));
         fprintf(o, "HIST %s | RAM %d minutes, %d hours\n", hl, thermo_log_count(), thermo_hour_count());
-        fprintf(o, "WIFI up=%d rssi=%d chip_silent_s=%d wd_min=%u wd_restarts=%lu\n", board_wifi_connected(),
+        fprintf(o, "WIFI up=%d rssi=%d chip_silent_s=%d wd_min=%u wd_restarts=%lu chip_resets=%lu\n", board_wifi_connected(),
                board_wifi_rssi(), board_wifi_cp_silent_s(), settings_get()->wifi_wd_min,
-               (unsigned long)board_wifi_wd_restarts());
+               (unsigned long)board_wifi_wd_restarts(), (unsigned long)board_wifi_chip_resets());
         motion_debug_t m;
         motion_debug(&m);
         fprintf(o, "MOT on=%d state=%s mean=%d contrast=%d changed=%d/576 delta=%d.%02d frames=%d grab_fail=%d "
@@ -322,6 +324,29 @@ void debug_exec(const char *line, FILE *o)
     if (strcmp(line, "MOTION off") == 0 || strcmp(line, "MOTION on") == 0) {  // test: pause (not saved)
         motion_set_off(line[8] == 'f');
         fprintf(o, "MOT off=%d (until restart)\n", line[8] == 'f');
+        return;
+    }
+    if (strncmp(line, "COREDUMP", 8) == 0) {  // "COREDUMP": what is stored; "COREDUMP clear": erase it
+        if (esp_core_dump_image_check() != ESP_OK) {
+            fprintf(o, "COREDUMP none stored\n");
+        } else if (strstr(line, "clear")) {
+            fprintf(o, "COREDUMP clear: %s\n", esp_err_to_name(esp_core_dump_image_erase()));
+        } else {
+            esp_core_dump_summary_t *cs = malloc(sizeof(*cs));
+            if (cs && esp_core_dump_get_summary(cs) == ESP_OK) {
+                fprintf(o, "COREDUMP task=%s pc=0x%08lx cause=%lu ra=0x%08lx firmware=%.9s (download: /api/coredump)\n",
+                        cs->exc_task, (unsigned long)cs->exc_pc, (unsigned long)cs->ex_info.mcause,
+                        (unsigned long)cs->ex_info.ra, (const char *)cs->app_elf_sha256);
+            } else {
+                fprintf(o, "COREDUMP stored, summary not readable (download: /api/coredump)\n");
+            }
+            free(cs);
+        }
+        return;
+    }
+    if (strcmp(line, "C6RESET") == 0) {  // test: what the Wi-Fi watchdog does first
+        board_wifi_chip_reset();
+        fprintf(o, "C6RESET requested (the connection drops for a few seconds)\n");
         return;
     }
     if (strncmp(line, "WIFIWD ", 7) == 0) {  // minutes, 0 = never

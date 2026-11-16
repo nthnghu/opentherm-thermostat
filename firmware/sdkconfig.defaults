@@ -11,8 +11,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # PSRAM (32 MB)
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_USE_MALLOC=y
-# Only very small blocks in internal RAM: its DMA part is needed by the Wi-Fi link (one 1536 B block per SDIO frame)
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+# Only tiny blocks in internal RAM: its DMA part is needed by the Wi-Fi link (one 1536 B block per SDIO frame),
+# and the UI makes thousands of small allocations that would otherwise fill it
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=64
 
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
@@ -71,3 +72,12 @@ CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 # Code and rodata run from PSRAM: flash writes (OTA, history) no longer suspend the cache, so the display and
 # the UI keep running (the screen flickered during OTA uploads).
 CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+# Crash evidence: stack overflow check in every function with arrays, light heap poisoning (overruns and
+# use-after-free are caught at the next heap call), and a core dump in flash (partition "coredump"; devices
+# flashed before it existed simply skip the dump).
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
+CONFIG_HEAP_POISONING_LIGHT=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y

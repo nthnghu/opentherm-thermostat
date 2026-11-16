@@ -18,6 +18,20 @@ Date: 2026-11-16 · Commit reviewed: `795f2fe` (firmware 0.3.1) · No code was c
 | H4 | Bus and thermostat start before the display; a failed panel leaves a headless UI; timer failure is no longer fatal | Normal boot on the device (thermostat starts at 1.6 s). The no-display path was not exercised |
 | H5 | POSTs with an `Origin` or `Referer` from another site are refused (403) | On the device: foreign Origin, `null`, look-alike host and foreign Referer refused; same-origin and curl accepted |
 
+**Medium findings, fixed later the same day** (M3 is intentional: later only OTA updates will be possible, so a firmware that cannot reach Wi-Fi must roll back; M5, M11, M12 are open):
+
+| # | Fix | Checked on the device |
+|---|---|---|
+| M1 | The Wi-Fi watchdog first resets the Wi-Fi chip alone (driver and link down, link up, reconnect); the device restarts only if the chip is still silent 90 s later | Three chip resets in a row (`C6RESET`): 2.4 s each, no restart, no memory lost. A real hang cannot be provoked. A chip that is completely dead still restarts the device: esp_hosted itself aborts on "TRANSPORT_FAILURE" |
+| M2 | `save()` checks every write, logs failures and retries after a minute; the away end time is written before the away flag; the setpoint is range-checked on load; an NVS erase or init error is logged | Normal saves only; no write failure was provoked |
+| M4 | An upload with no data for 30 s is dropped | Stalled `/ota` upload: dropped after 30 s, web page answering again, current firmware kept |
+| M6 | New Wi-Fi credentials are on trial for 60 s; without a connection the previous ones are restored | Bogus network saved through the web page: back on the old network after 63 s |
+| M7 | Soft reset of the sensor after 5 failed reads, I2C bus reset after 15; bit-identical readings for 5 minutes count as a failure | Not exercised (needs a faulty sensor) |
+| M8 | QR token scanner removed (32 KB task stack, 225 KB preview buffer, quirc); allocations above 64 bytes go to PSRAM | Free DMA RAM 98 KB, low point 89 KB (63 / 52 KB before, 26 / 17 KB in the morning) |
+| M9 | Stack overflow check, light heap poisoning, core dump to a new `coredump` flash partition, summary in the log at boot, download at `/api/coredump`, console `COREDUMP [clear]` | Watchdog crash provoked: dump stored, reported at boot, downloaded and decoded with `idf.py coredump-info` |
+| M10 | After 5 wrong logins every further one blocks logins for 10 s, doubling up to 5 minutes | 5 × 401, then 429 for 10 s, also for the correct password. The hash is still one round of SHA-256 |
+| M13 | `esp_hosted` 3.1.0 and `esp_wifi_remote` 1.6.5 pinned exactly; `dependencies.lock` is now tracked in git | Build |
+
 Severity: **High** = can leave the house unheated, or gives control of the device to someone else. **Medium** = degrades reliability or security in a realistic case. **Low** = hardening or cleanup.
 
 Items marked *(verify)* are conclusions from reading code that I did not reproduce on the device.
