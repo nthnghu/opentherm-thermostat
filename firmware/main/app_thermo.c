@@ -14,6 +14,8 @@
 #define CHART_POINTS 144  // 24 h at 10 min
 
 static lv_obj_t *s_scr, *s_tv;
+LV_FONT_DECLARE(font_room_75);  // tools/gen_font.py: digits . - ° only
+
 static lv_obj_t *s_time, *s_date, *s_room, *s_hum, *s_arc, *s_set, *s_mode_btn, *s_mode_lbl, *s_info;
 static lv_obj_t *s_chart, *s_chart_info;
 static lv_chart_series_t *s_ser_room, *s_ser_sp;
@@ -191,10 +193,7 @@ static void build_main(lv_obj_t *p)
     lv_label_set_text(rl, "Room");
     lv_obj_align(rl, LV_ALIGN_CENTER, 0, -86);
     s_room = lv_label_create(s_arc);
-    lv_obj_set_style_text_font(s_room, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_transform_scale(s_room, 400, 0);  // 48 px font shown ~75 px tall
-    lv_obj_set_style_transform_pivot_x(s_room, LV_PCT(50), 0);
-    lv_obj_set_style_transform_pivot_y(s_room, LV_PCT(50), 0);
+    lv_obj_set_style_text_font(s_room, &font_room_75, 0);  // drawn at full size: scaling a 48 px font blurred it
     lv_obj_align(s_room, LV_ALIGN_CENTER, 0, -22);
     s_hum = lv_label_create(s_arc);
     lv_label_set_recolor(s_hum, true);
