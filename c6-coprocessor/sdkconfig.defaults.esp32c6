@@ -98,3 +98,6 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
 # # 12 iperf task
 # #--------------
+
+# SDIO packet mode: SW_AGGR stalled the link under MQTT traffic (2026-11-16)
+CONFIG_EH_TRANSPORT_CP_SDIO_MODE_PACKET=y
