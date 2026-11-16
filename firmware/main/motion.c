@@ -148,7 +148,7 @@ static void motion_task(void *arg)
         int64_t now = esp_timer_get_time();
         hits = (changed > frac[sens] * N || lights) ? hits + 1 : 0;
         if (hits >= 2 && now > cooldown_until) {
-            ESP_LOGI(TAG, "motion (%d/%d cells%s)", changed, N, lights ? ", light change" : "");
+            ESP_LOGD(TAG, "motion (%d/%d cells%s)", changed, N, lights ? ", light change" : "");
             wake_screen();
             cooldown_until = now + 2000000;
             hits = 0;

@@ -264,6 +264,14 @@ All editors use `cfgall.c`, one index over the control, schedule, alert and serv
 
 Serial screens for screenshots: `GO page N`, `GO edit <name>`, `GO advanced`, `GO group <0..8>`, `GO service`, `GO day <0..6>`.
 
+### Updates and diagnostics without USB
+
+- **Update:** `firmware/tools/ota.sh` builds, uploads to `/ota`, waits for the restart and checks that the new build (ELF SHA) runs and was accepted. The web page (Firmware) does the same upload by hand.
+- **Trial (`ota_check.c`):** a new firmware is kept only when the hardware check passes and, within 5 minutes, Wi-Fi is connected and the device's own web server answers (asked over loopback). Otherwise it rolls back to the previous firmware. A restart during the trial also rolls back.
+- **Remote diagnostics** (web login): `POST /api/cmd` runs any serial command (`STAT`, `CFG`, `SVC`, `OTSTAT`, `SIM`, `GO` ...) and returns its output (`debug_exec`); `GET /api/log` returns the last 64 KB of the log (`logring.c`); `GET /api/screen.bmp` returns a screenshot; `GET /api/version` returns the version, build SHA and update state. The web page has a Diagnostics section with a console.
+- Login for the scripts: `~/.config/thermostat.netrc` (`machine <ip> login <user> password <password>`, chmod 600).
+- Motion detections are logged at debug level now, so they don't fill the log.
+
 ### Host tests
 
 The pure-C parts build and run on the Mac, without ESP-IDF:

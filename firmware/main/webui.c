@@ -26,6 +26,9 @@
 #include "cfgall.h"
 #include "cfgtext.h"
 #include "cJSON.h"
+#include "debug.h"
+#include "logring.h"
+#include "ota_check.h"
 
 static const char *TAG = "web";
 static httpd_handle_t s_server;
@@ -510,8 +513,19 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     const esp_partition_t *run = esp_ota_get_running_partition();
     sendf(req, "<h2>Firmware</h2><p class=hint>Running %s %s from %s.</p>", app->project_name, app->version,
           run ? run->label : "?");
-    SEND(req, "<input type=file id=fw accept=.bin><button onclick='upload()'>Upload and install</button>"
-              "<p id=fwmsg class=hint>The device reboots into the new firmware and rolls back if its hardware check fails.</p>");
+    SEND(req, "<p class=hint>Update state: ");
+    send_escaped(req, ota_check_text());
+    SEND(req, "</p><input type=file id=fw accept=.bin><button onclick='upload()'>Upload and install</button>"
+              "<p id=fwmsg class=hint>The device restarts into the new firmware. It keeps it only when the hardware "
+              "check passes and, within 5 minutes, Wi-Fi and this web page work; otherwise it goes back to the "
+              "previous firmware by itself.</p>");
+
+    // Remote diagnostics
+    SEND(req, "<h2>Diagnostics</h2><p class=hint><a href=/api/log target=_blank>Device log</a> (last 64 KB) &middot; "
+              "<a href=/api/screen.bmp target=_blank>Screenshot</a> &middot; <a href=/api/version target=_blank>Version"
+              "</a></p><label for=cmd>Console (the serial commands: STAT, OTSTAT, CFG, SVC, ...)</label>"
+              "<input id=cmd placeholder=STAT onkeydown=\"if(event.key=='Enter')runcmd()\">"
+              "<button onclick='runcmd()'>Run</button><pre id=cmdout class=hint style='white-space:pre-wrap'></pre>");
 
     // Diagnostics
     SEND(req, "<h2>Hardware check</h2><table>");
@@ -549,6 +563,9 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
          "async function upload(){const f=document.getElementById('fw').files[0],m=document.getElementById('fwmsg');"
          "if(!f){m.textContent='Choose a .bin file first';return;}m.textContent='Uploading '+f.name+'...';"
          "try{const r=await fetch('/ota',{method:'POST',body:f});m.textContent=await r.text();}catch(e){m.textContent='Upload failed: '+e;}}"
+         "async function runcmd(){const c=document.getElementById('cmd').value||'STAT',o=document.getElementById('cmdout');"
+         "o.textContent='...';try{const r=await fetch('/api/cmd',{method:'POST',body:c});o.textContent=await r.text()||'(no output)';}"
+         "catch(e){o.textContent='failed: '+e;}}"
          "</script></body></html>");
     free(c);
     return httpd_resp_send_chunk(req, NULL, 0);
@@ -1278,6 +1295,116 @@ static esp_err_t post_save(httpd_req_t *req)
 
 /* -------------------------------------------------------------------- OTA */
 
+/* ------------------------------------------------- remote diagnostics (no USB needed) */
+
+// POST /api/cmd, body = one serial command (STAT, CFG, SVC, OTSTAT, SIM, GO ...). Answers its output as text.
+static esp_err_t post_cmd(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    char *line = read_body(req, 200);
+    if (!line) {
+        return httpd_resp_send_500(req);
+    }
+    size_t n = strcspn(line, "\r\n");
+    line[n] = 0;
+    const size_t cap = 16384;
+    char *out = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    FILE *f = out ? fmemopen(out, cap, "w") : NULL;
+    if (!f) {
+        free(out);
+        free(line);
+        return httpd_resp_send_500(req);
+    }
+    if (strcmp(line, "SNAP") == 0) {
+        fprintf(f, "Use /api/screen.bmp for a screenshot\n");
+    } else {
+        debug_exec(line, f);
+    }
+    fflush(f);
+    long len = ftell(f);
+    fclose(f);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_send(req, out, len > 0 ? len : 0);
+    free(out);
+    free(line);
+    return ESP_OK;
+}
+
+// GET /api/log: the last 64 KB of the device log (oldest first).
+static esp_err_t get_devlog(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    char *buf = heap_caps_malloc(LOGRING_SIZE + 1, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        return httpd_resp_send_500(req);
+    }
+    size_t n = logring_read(buf, LOGRING_SIZE + 1);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_send(req, buf, n);
+    free(buf);
+    return ESP_OK;
+}
+
+// GET /api/screen.bmp: the frame buffer as a 16-bit BMP (RGB565, top-down).
+static esp_err_t get_screen(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    const uint8_t *fb = (const uint8_t *)board_framebuffer();
+    if (!fb) {
+        return httpd_resp_send_500(req);
+    }
+    const uint32_t w = BOARD_LCD_H_RES, h = BOARD_LCD_V_RES, data = w * h * 2, off = 14 + 40 + 12;
+    uint8_t hd[66] = {'B', 'M'};
+    #define P32(o, v) do { uint32_t _v = (v); memcpy(hd + (o), &_v, 4); } while (0)
+    P32(2, off + data);
+    P32(10, off);
+    P32(14, 40);
+    P32(18, w);
+    P32(22, (uint32_t)(-(int32_t)h));  // negative height: rows top to bottom
+    hd[26] = 1;                         // planes
+    hd[28] = 16;                        // bits per pixel
+    P32(30, 3);                         // BI_BITFIELDS
+    P32(34, data);
+    P32(54, 0xF800);
+    P32(58, 0x07E0);
+    P32(62, 0x001F);
+    #undef P32
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_send_chunk(req, (const char *)hd, sizeof(hd));
+    for (uint32_t o = 0; o < data; o += 9600) {
+        uint32_t k = data - o < 9600 ? data - o : 9600;
+        if (httpd_resp_send_chunk(req, (const char *)fb + o, k) != ESP_OK) {
+            return ESP_FAIL;
+        }
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// GET /api/version: which build runs and whether an update has been accepted (tools/ota.sh).
+static esp_err_t get_version(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    const esp_app_desc_t *app = esp_app_get_description();
+    char sha[17];
+    esp_app_get_elf_sha256(sha, sizeof(sha));
+    static const char *st[] = {"accepted", "trial", "usb"};
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    httpd_resp_set_type(req, "application/json");
+    sendf(req, "{\"version\":\"%s\",\"elf_sha\":\"%s\",\"built\":\"%s %s\",\"partition\":\"%s\",\"ota\":\"%s\","
+               "\"ota_text\":\"%s\",\"uptime_s\":%lld}",
+          app->version, sha, app->date, app->time, run ? run->label : "?", st[ota_check_state()], ota_check_text(),
+          esp_timer_get_time() / 1000000);
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 static esp_err_t post_ota(httpd_req_t *req)
 {
     if (!check_auth(req)) {
@@ -1350,7 +1477,7 @@ esp_err_t webui_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 10240;  // HA test (possibly TLS) runs in a handler
     cfg.lru_purge_enable = true;
-    cfg.max_uri_handlers = 16;  // default 8; more are registered below
+    cfg.max_uri_handlers = 24;  // default 8; more are registered below
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     cfg.core_id = 0;
     cfg.task_priority = 4;
@@ -1370,6 +1497,10 @@ esp_err_t webui_start(void)
         {.uri = "/api/service", .method = HTTP_GET, .handler = get_service},
         {.uri = "/save/*", .method = HTTP_POST, .handler = post_save},
         {.uri = "/ota", .method = HTTP_POST, .handler = post_ota},
+        {.uri = "/api/cmd", .method = HTTP_POST, .handler = post_cmd},
+        {.uri = "/api/log", .method = HTTP_GET, .handler = get_devlog},
+        {.uri = "/api/screen.bmp", .method = HTTP_GET, .handler = get_screen},
+        {.uri = "/api/version", .method = HTTP_GET, .handler = get_version},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         if (httpd_register_uri_handler(s_server, &uris[i]) != ESP_OK) {

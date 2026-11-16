@@ -1,7 +1,6 @@
 // Thermostat test firmware v2 for the Guition JC4880P443C (ESP32-P4).
 // Boot: display -> thermostat task (runs from here on, core 1) -> hardware check -> Wi-Fi/clock/web -> UI.
 #include "esp_log.h"
-#include "esp_ota_ops.h"
 #include "nvs_flash.h"
 #include "esp_lvgl_port.h"
 #include "board.h"
@@ -15,27 +14,12 @@
 #include "timekeep.h"
 #include "webui.h"
 #include "debug.h"
+#include "logring.h"
+#include "ota_check.h"
 #include "motion.h"
 #include "mqtt_ha.h"
 
 static const char *TAG = "main";
-
-// After an OTA update the new image is "pending verify": keep it only if the hardware check passes.
-static void ota_confirm(bool hw_ok)
-{
-    const esp_partition_t *run = esp_ota_get_running_partition();
-    esp_ota_img_states_t st;
-    if (!run || esp_ota_get_state_partition(run, &st) != ESP_OK || st != ESP_OTA_IMG_PENDING_VERIFY) {
-        return;
-    }
-    if (hw_ok) {
-        ESP_LOGI(TAG, "new firmware passed the hardware check: keeping it");
-        esp_ota_mark_app_valid_cancel_rollback();
-    } else {
-        ESP_LOGE(TAG, "new firmware failed the hardware check: rolling back");
-        esp_ota_mark_app_invalid_rollback_and_reboot();
-    }
-}
 
 void app_main(void)
 {
@@ -44,6 +28,7 @@ void app_main(void)
         nvs_flash_erase();
         nvs_flash_init();
     }
+    logring_start();  // keep a copy of the log for the web page (/api/log)
     settings_load();
     ESP_ERROR_CHECK(board_display_init());
     board_backlight(settings_get()->bright);
@@ -58,10 +43,10 @@ void app_main(void)
     thermo_start();
 
     bool hw_ok = selftest_run();  // also brings up audio, camera and Wi-Fi
-    ota_confirm(hw_ok);
 
     timekeep_init();
     webui_start();
+    ota_check_start(hw_ok);  // after an update: keep it only once the hardware, Wi-Fi and web page work
     mqtt_ha_start();  // connects once Wi-Fi is up (settings: web page -> MQTT)
 
     lvgl_port_lock(0);
