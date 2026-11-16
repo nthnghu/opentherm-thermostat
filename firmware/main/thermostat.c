@@ -390,6 +390,15 @@ static int32_t local_day(const struct tm *t)
     return era * 146097 + doe - 719468;
 }
 
+static volatile int s_hang_s;
+static volatile bool s_hang_feed;
+
+void thermo_test_hang(int seconds, bool feed_watchdog)
+{
+    s_hang_feed = feed_watchdog;
+    s_hang_s = seconds < 1 ? 1 : (seconds > 60 ? 60 : seconds);
+}
+
 static void thermo_task(void *arg)
 {
     esp_task_wdt_add(NULL);
@@ -398,6 +407,19 @@ static void thermo_task(void *arg)
     int64_t last_hist = 0;
     for (int loop = 0;; loop++) {
         esp_task_wdt_reset();
+        if (s_hang_s) {  // fault test (console HANG): this task stops, as if it were stuck
+            int n = s_hang_s;
+            s_hang_s = 0;
+            ESP_LOGW(TAG, "test: control task stops for %d s (%s the watchdog)", n, s_hang_feed ? "feeding" : "not feeding");
+            for (int i = 0; i < n; i++) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                if (s_hang_feed) {
+                    esp_task_wdt_reset();
+                }
+            }
+            ESP_LOGW(TAG, "test: control task continues");
+            wake = xTaskGetTickCount();
+        }
         int64_t now = esp_timer_get_time();
 
         // 1. Sensor (every 2 s)

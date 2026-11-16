@@ -167,3 +167,7 @@ void thermo_set_svc_config(const svc_config_t *c);
 
 // Copies up to max samples, oldest first; returns the count.
 int thermo_history(thermo_sample_t *out, int max);
+
+// Fault test: the control task stops for 1..60 s. With feed_watchdog the task watchdog stays quiet, so only the
+// bus's command timeout acts (heating off after 10 s); without it the watchdog restarts the device after 10 s.
+void thermo_test_hang(int seconds, bool feed_watchdog);

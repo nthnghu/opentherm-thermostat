@@ -98,6 +98,14 @@ void debug_task_stats(char *out, size_t size)
 
 void debug_exec(const char *line, FILE *o)
 {
+    if (strncmp(line, "HANG ", 5) == 0) {  // "HANG <s>": watchdog restart; "HANG <s> feed": command timeout only
+        int n = atoi(line + 5);
+        bool feed = strstr(line + 5, "feed") != NULL;
+        thermo_test_hang(n, feed);
+        fprintf(o, "HANG control task for %d s, %s\n", n < 1 ? 1 : (n > 60 ? 60 : n),
+                feed ? "watchdog fed: expect heating off after 10 s" : "watchdog not fed: expect a restart after 10 s");
+        return;
+    }
     if (strcmp(line, "HEAP") == 0) {
         char b[200];
         debug_heap_stats(b, sizeof(b));

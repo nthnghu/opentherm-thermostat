@@ -12,8 +12,8 @@ Date: 2026-11-16 · Commit reviewed: `795f2fe` (firmware 0.3.1) · No code was c
 
 | # | Fix | Checked |
 |---|---|---|
-| H1 | `CONFIG_ESP_TASK_WDT_PANIC=y`: a control task that hangs for 10 s restarts the device | Config only; no hang was provoked on the device |
-| H2 | The bus switches heating off when the controller has sent no command for 10 s (`otb_cmd_guard`) | Host test `test_cmd_guard`; not provoked on the device |
+| H1 | `CONFIG_ESP_TASK_WDT_PANIC=y`: a control task that hangs for 10 s restarts the device | On the device (`HANG 40`): restart about 11 s after the task stopped, web page back 5 s later, firmware still accepted, PI correction and burner-start count restored |
+| H2 | The bus switches heating off when the controller has sent no command for 10 s (`otb_cmd_guard`) | Host test `test_cmd_guard`, and on the device (`HANG 25 feed`, burner on): flow request 55 → 10 °C at 10–11 s, burner off, back to 55 °C when the task continued |
 | H3 | With no saved choice the thermostat looks for a real boiler for 120 s and only then falls back to the simulator, without saving that | Read-through only; the bench device has a saved choice, so this path did not run |
 | H4 | Bus and thermostat start before the display; a failed panel leaves a headless UI; timer failure is no longer fatal | Normal boot on the device (thermostat starts at 1.6 s). The no-display path was not exercised |
 | H5 | POSTs with an `Origin` or `Referer` from another site are refused (403) | On the device: foreign Origin, `null`, look-alike host and foreign Referer refused; same-origin and curl accepted |
