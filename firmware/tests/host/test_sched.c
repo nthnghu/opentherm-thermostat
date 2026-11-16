@@ -475,8 +475,55 @@ static void test_step(void)
     CHECK(strcmp(o, "660") == 0, "range over 1000 (seconds) steps 60: %s", o);
 }
 
+// Switch points with a fixed temperature next to Comfort and Eco.
+static void test_fixed_levels(void)
+{
+    sched_config_t c;
+    sched_default_config(&c);
+    CHECK(sched_prog_parse(&c, 0, "06:00=c 08:00=18.5 17:00=t21 22:30=e"), "parse fixed");
+    char buf[120];
+    sched_prog_format(&c, 0, buf, sizeof(buf));
+    CHECK(strcmp(buf, "06:00=c 08:00=18.5 17:00=21 22:30=e") == 0, "format: %s", buf);
+    CHECK(sched_prog_parse(&c, 1, buf), "round trip");
+    CHECK(memcmp(c.prog[0], c.prog[1], sizeof(c.prog[0])) == 0, "same day after the round trip");
+    CHECK(!sched_prog_parse(&c, 2, "06:00=4.5") && !sched_prog_parse(&c, 2, "06:00=31") &&
+          !sched_prog_parse(&c, 2, "06:00=21x"), "out of range / junk refused");
+    CHECK(sched_prog_parse(&c, 2, "06:00=20.3"), "rounded");
+    sched_prog_format(&c, 2, buf, sizeof(buf));
+    CHECK(strcmp(buf, "06:00=20.25") == 0, "0.25 steps: %s", buf);
+    CHECK(sched_level_from_c(2) == SCHED_FIXED_MIN && sched_level_from_c(40) == SCHED_FIXED_MAX, "clamped");
+    CHECK(NEAR(sched_level_temp(SCHED_ECO, 21, 2), 19, 1e-6) && NEAR(sched_level_temp(SCHED_COMFORT, 21, 2), 21, 1e-6) &&
+          NEAR(sched_level_temp(sched_level_from_c(17.5f), 21, 2), 17.5, 1e-6), "level temperatures");
+
+    // Sanitising keeps fixed levels, turns junk into Comfort
+    c.prog[3][0] = (sched_point_t){600, 80};
+    c.prog[3][1] = (sched_point_t){700, 7};
+    sched_sanitize(&c);
+    CHECK(c.prog[3][0].level == 80 && c.prog[3][1].level == SCHED_COMFORT, "sanitise %u %u", c.prog[3][0].level,
+          c.prog[3][1].level);
+
+    // Program step: Monday 08:00-17:00 at 18.5 °C, then 21 °C, dial (Comfort) at 22
+    sched_default_config(&c);
+    c.prog_on = true;
+    sched_prog_parse(&c, 0, "06:00=c 08:00=18.5 17:00=21 22:30=e");
+    sched_t s;
+    sched_init(&s, &c);
+    sched_in_t in = at(hm(0, 12, 0));
+    in.comfort_c = 22;
+    const sched_out_t *o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_FIXED && NEAR(o->target_c, 18.5, 0.01), "fixed 18.5 (%.2f)", o->target_c);
+    CHECK(o->next_change_min == 300 && o->next_level == sched_level_from_c(21), "next: 21 at 17:00 (%d, %u)",
+          o->next_change_min, o->next_level);
+    in = at(hm(0, 7, 0));
+    in.comfort_c = 22;
+    o = sched_step(&s, &in);
+    CHECK(o->src == SCHED_SRC_COMFORT && NEAR(o->target_c, 22, 0.01), "comfort follows the dial");
+    CHECK(strcmp(sched_src_name(SCHED_SRC_FIXED), "program") == 0, "name");
+}
+
 int main(void)
 {
+    test_fixed_levels();
     test_step();
     test_program();
     test_boost_away_summer();

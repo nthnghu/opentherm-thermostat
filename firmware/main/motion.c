@@ -21,6 +21,7 @@ static const char *TAG = "motion";
 #define DARK_LUMA 14
 
 static volatile bool s_paused;
+static volatile bool s_off;  // switched off for now (not saved), e.g. for tests
 static volatile motion_state_t s_state = MOTION_OFF;
 static volatile int64_t s_last_us;
 static volatile uint32_t s_count;
@@ -79,7 +80,7 @@ static void motion_task(void *arg)
 
     for (;;) {
         const settings_t *c = settings_get();
-        if (!c->motion_wake || s_paused) {
+        if (!c->motion_wake || s_paused || s_off) {
             if (owner && !s_paused) {
                 camera_stop();
             }
@@ -165,6 +166,11 @@ static void motion_task(void *arg)
 void motion_start(void)
 {
     xTaskCreatePinnedToCore(motion_task, "motion", 4096, NULL, 2, NULL, 0);
+}
+
+void motion_set_off(bool off)
+{
+    s_off = off;
 }
 
 void motion_set_paused(bool paused)

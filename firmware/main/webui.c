@@ -435,7 +435,8 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
         sched_config_t sc;
         thermo_get_sched_config(&sc);
         SEND(req, "<h2>Weekly program</h2><form method=post action=/save/prog><p class=hint>Switch times per day, "
-                  "e.g. <code>06:00=c 08:00=e 17:00=c 22:30=e</code> (c = Comfort = your setpoint, e = Eco). Empty = "
+                  "e.g. <code>06:00=c 08:00=e 17:00=21.5 22:30=e</code> (c = Comfort = your setpoint, e = Eco, a number = that "
+                  "temperature, 5-30 °C). Empty = "
                   "the day continues the previous one. Used when Weekly program is ticked.</p>");
         static const char *dn[7] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
         char day[100];
@@ -613,6 +614,8 @@ static esp_err_t get_status(httpd_req_t *req)
           "\"starts_last_hour\":%u,\"return\":%.1f,\"dhw_active\":%s},",
           ctrl_state_name(st.ctrl_state), st.req_c, st.pi_p, st.pi_i, st.duty, st.starts_last_h, st.return_c,
           st.dhw_active ? "true" : "false");
+    char nlv[12];
+    sched_level_text(st.next_level, nlv, sizeof(nlv));
     char mean[16] = "null";
     if (st.outside_mean_valid) {
         snprintf(mean, sizeof(mean), "%.1f", st.outside_mean_c);
@@ -620,7 +623,7 @@ static esp_err_t get_status(httpd_req_t *req)
     sendf(req,
           "\"schedule\":{\"source\":\"%s\",\"target\":%.1f,\"next_change_min\":%d,\"next_level\":\"%s\","
           "\"boost_left_s\":%d,\"away\":%s,\"away_until\":%lld,\"summer\":%s,\"outside_mean\":%s},",
-          sched_src_name(st.sched_src), st.target_c, st.next_change_min, st.next_level ? "comfort" : "eco",
+          sched_src_name(st.sched_src), st.target_c, st.next_change_min, nlv,
           st.boost_left_s, st.away ? "true" : "false", (long long)st.away_until, st.summer ? "true" : "false",
           mean);
     sendf(req,

@@ -125,7 +125,7 @@ void sched_sanitize(sched_config_t *c)
             sched_point_t *p = &c->prog[d][i];
             if (p->min > 1439) {
                 *p = (sched_point_t){SCHED_UNUSED, 0};
-            } else if (p->level > SCHED_COMFORT) {
+            } else if (p->level > SCHED_COMFORT && !sched_level_is_fixed(p->level)) {
                 p->level = SCHED_COMFORT;
             }
         }
@@ -191,8 +191,14 @@ void sched_prog_format(const sched_config_t *c, int wday, char *out, size_t size
         if (p->min == SCHED_UNUSED) {
             continue;
         }
-        int w = snprintf(out + n, size - n, "%s%02d:%02d=%c", n ? " " : "", p->min / 60, p->min % 60,
-                         p->level == SCHED_COMFORT ? 'c' : 'e');
+        char lv[8];
+        if (sched_level_is_fixed(p->level)) {
+            float c = p->level / 4.0f;
+            snprintf(lv, sizeof(lv), c == (int)c ? "%.0f" : (c * 2 == (int)(c * 2) ? "%.1f" : "%.2f"), c);
+        } else {
+            snprintf(lv, sizeof(lv), "%c", p->level == SCHED_COMFORT ? 'c' : 'e');
+        }
+        int w = snprintf(out + n, size - n, "%s%02d:%02d=%s", n ? " " : "", p->min / 60, p->min % 60, lv);
         if (w < 0 || (size_t)w >= size - n) {
             break;
         }
@@ -216,11 +222,27 @@ bool sched_prog_parse(sched_config_t *c, int wday, const char *text)
         }
         *eq = 0;
         int m = parse_time(tok);
-        char l = eq[1];
-        if (m < 0 || eq[2] || (l != 'c' && l != 'e' && l != 'C' && l != 'E')) {
+        const char *v = eq + 1;
+        uint8_t level;
+        if (m < 0) {
             return false;
         }
-        pts[n++] = (sched_point_t){(uint16_t)m, (l == 'c' || l == 'C') ? SCHED_COMFORT : SCHED_ECO};
+        if ((v[0] == 'c' || v[0] == 'C') && !v[1]) {
+            level = SCHED_COMFORT;
+        } else if ((v[0] == 'e' || v[0] == 'E') && !v[1]) {
+            level = SCHED_ECO;
+        } else {
+            if (v[0] == 't' || v[0] == 'T') {
+                v++;
+            }
+            char *end;
+            float c = strtof(v, &end);
+            if (end == v || *end || c < 5 || c > 30) {
+                return false;
+            }
+            level = sched_level_from_c(c);
+        }
+        pts[n++] = (sched_point_t){(uint16_t)m, level};
     }
     set_day(c, wday, pts, n);
     sched_sanitize(c);
@@ -228,6 +250,33 @@ bool sched_prog_parse(sched_config_t *c, int wday, const char *text)
 }
 
 /* ------------------------------------------------------------ program */
+
+uint8_t sched_level_from_c(float c)
+{
+    int l = (int)lroundf(c * 4);
+    return (uint8_t)(l < SCHED_FIXED_MIN ? SCHED_FIXED_MIN : (l > SCHED_FIXED_MAX ? SCHED_FIXED_MAX : l));
+}
+
+void sched_level_text(uint8_t level, char *out, size_t size)
+{
+    if (sched_level_is_fixed(level)) {
+        if (level % 4) {
+            snprintf(out, size, level % 2 ? "%.2f" : "%.1f", level / 4.0f);
+        } else {
+            snprintf(out, size, "%.0f", level / 4.0f);
+        }
+    } else {
+        snprintf(out, size, "%s", level == SCHED_COMFORT ? "comfort" : "eco");
+    }
+}
+
+float sched_level_temp(uint8_t level, float comfort_c, float eco_setback_k)
+{
+    if (sched_level_is_fixed(level)) {
+        return level / 4.0f;
+    }
+    return level == SCHED_COMFORT ? comfort_c : comfort_c - eco_setback_k;
+}
 
 sched_level_t sched_level_at(const sched_config_t *c, int wday, int min_of_day)
 {
@@ -490,8 +539,8 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in)
     o->next_change_min = -1;
     if (k->prog_on && in->clock_ok) {
         sched_level_t l = sched_level_at(k, in->wday, in->min_of_day);
-        o->src = l == SCHED_COMFORT ? SCHED_SRC_COMFORT : SCHED_SRC_ECO;
-        o->target_c = l == SCHED_COMFORT ? comfort : comfort - k->eco_setback_k;
+        o->src = sched_level_is_fixed(l) ? SCHED_SRC_FIXED : (l == SCHED_COMFORT ? SCHED_SRC_COMFORT : SCHED_SRC_ECO);
+        o->target_c = sched_level_temp(l, comfort, k->eco_setback_k);
         o->next_change_min = next_change(k, in->wday, in->min_of_day, l, &o->next_level);
     }
     if (s->away) {
@@ -589,8 +638,8 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in)
 
 const char *sched_src_name(sched_src_t s)
 {
-    static const char *n[] = {"constant", "comfort", "eco", "boost", "away", "summer"};
-    return s <= SCHED_SRC_SUMMER ? n[s] : "?";
+    static const char *n[] = {"constant", "comfort", "eco", "boost", "away", "summer", "program"};
+    return s <= SCHED_SRC_FIXED ? n[s] : "?";
 }
 
 const char *sched_dhw_reason_name(sched_dhw_reason_t r)

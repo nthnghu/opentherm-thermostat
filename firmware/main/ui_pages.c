@@ -310,20 +310,63 @@ static void open_field(int idx, lv_obj_t *ret, void (*done)(void))
 
 /* -------------------------------------------------------- boiler card */
 
-#define BL_ROWS 12
-static lv_obj_t *s_bl_val[BL_ROWS], *s_bl_alerts;
+static lv_obj_t *s_bl_icon, *s_bl_icon_sym, *s_bl_state, *s_bl_sub, *s_bl_flow, *s_bl_mod_bar, *s_bl_gas, *s_bl_alerts;
+static lv_obj_t *s_bl_val[6], *s_bl_note[6];
+
+static lv_obj_t *card(lv_obj_t *p, int x, int y, int w, int h)
+{
+    lv_obj_t *c = lv_obj_create(p);
+    lv_obj_set_pos(c, x, y);
+    lv_obj_set_size(c, w, h);
+    lv_obj_set_style_bg_color(c, ui_c(UI_SURFACE), 0);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_radius(c, 12, 0);
+    lv_obj_set_style_pad_all(c, 0, 0);
+    lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    return c;
+}
 
 void ui_pages_boiler(lv_obj_t *p)
 {
-    static const char *keys[BL_ROWS] = {"Boiler",      "Burner",          "Flow / return", "Modulation",
-                                        "Flow setpoint", "Water pressure", "Tank",          "Controller",
-                                        "Starts",      "Burns (24 h)",    "Efficiency (24 h)", "Gas (estimate)"};
-    label(p, "Boiler", 20, 16, 0, UI_TEXT, &lv_font_montserrat_28);
-    for (int i = 0; i < BL_ROWS; i++) {
-        label(p, keys[i], 20, 66 + i * 40, 170, UI_MUTED, NULL);
-        s_bl_val[i] = label(p, "-", 190, 66 + i * 40, 280, UI_TEXT, NULL);
+    label(p, "Boiler", 20, 24, 0, UI_TEXT, &lv_font_montserrat_28);
+    // State card: icon, what the boiler does, water temperature
+    lv_obj_t *c = card(p, 20, 84, 440, 112);
+    s_bl_icon = lv_obj_create(c);
+    lv_obj_remove_style_all(s_bl_icon);
+    lv_obj_set_size(s_bl_icon, 72, 72);
+    lv_obj_set_pos(s_bl_icon, 16, 20);
+    lv_obj_set_style_radius(s_bl_icon, 36, 0);
+    lv_obj_set_style_bg_opa(s_bl_icon, LV_OPA_COVER, 0);
+    s_bl_icon_sym = lv_label_create(s_bl_icon);
+    lv_obj_set_style_text_font(s_bl_icon_sym, &lv_font_montserrat_40, 0);
+    lv_obj_set_style_text_color(s_bl_icon_sym, lv_color_white(), 0);
+    lv_label_set_text(s_bl_icon_sym, LV_SYMBOL_CHARGE);
+    lv_obj_center(s_bl_icon_sym);
+    s_bl_state = label(c, "", 104, 18, 230, UI_TEXT, &lv_font_montserrat_28);
+    s_bl_sub = label(c, "", 104, 70, 330, UI_MUTED, &lv_font_montserrat_14);
+    s_bl_flow = label(c, "", 300, 18, 124, UI_VALUE, &lv_font_montserrat_40);
+    lv_obj_set_style_text_align(s_bl_flow, LV_TEXT_ALIGN_RIGHT, 0);
+
+    // Tiles
+    static const char *titles[6] = {"Water out / back", "Burner power", "Water pressure",
+                                    "Hot water tank",   "Burner starts", "Efficiency (24 h)"};
+    for (int i = 0; i < 6; i++) {
+        lv_obj_t *t = card(p, 20 + (i % 2) * 228, 208 + (i / 2) * 118, 212, 108);
+        label(t, titles[i], 14, 10, 190, UI_MUTED, &lv_font_montserrat_14);
+        s_bl_val[i] = label(t, "-", 14, 32, 190, UI_TEXT, &lv_font_montserrat_28);
+        s_bl_note[i] = label(t, "", 14, 76, 190, UI_MUTED, &lv_font_montserrat_14);
+        if (i == 1) {
+            s_bl_mod_bar = lv_bar_create(t);
+            lv_obj_set_size(s_bl_mod_bar, 184, 10);
+            lv_obj_set_pos(s_bl_mod_bar, 14, 70);
+            lv_bar_set_range(s_bl_mod_bar, 0, 100);
+            lv_obj_set_style_bg_color(s_bl_mod_bar, ui_c(UI_SURFACE_ALT), LV_PART_MAIN);
+            lv_obj_set_style_bg_color(s_bl_mod_bar, ui_c(UI_HEAT), LV_PART_INDICATOR);
+            lv_obj_set_y(s_bl_note[i], 84);
+        }
     }
-    s_bl_alerts = label(p, "", 20, 66 + BL_ROWS * 40 + 10, 440, UI_OK, NULL);
+    s_bl_gas = label(p, "", 20, 566, 440, UI_MUTED, NULL);
+    s_bl_alerts = label(p, "", 20, 598, 440, UI_OK, NULL);
 }
 
 // Plain words for the controller state and the hot water reason (the internal names go to MQTT and logs).
@@ -348,34 +391,76 @@ void ui_pages_boiler_update(void)
     thermo_get(&st);
     dl_kpi_t k1, k24;
     thermo_get_kpi(&k1, &k24);
-    char b[96];
-    snprintf(b, sizeof(b), "%s %s", st.boiler_sim ? "simulated," : "real,",
-             st.boiler_online ? "#81C784 answering#" : "#E57373 not answering#");
-    ui_label_text(s_bl_val[0], b);
-    snprintf(b, sizeof(b), "%s", !st.flame ? "off" : (st.dhw_active ? "#FF7043 on - hot water#" : "#FF7043 on - heating#"));
-    ui_label_text(s_bl_val[1], b);
-    lv_label_set_text_fmt(s_bl_val[2], "%.1f / %.1f °C", st.flow_c, st.return_c);
-    lv_label_set_text_fmt(s_bl_val[3], "%.0f %%", st.modulation > 100 ? 100 : st.modulation);
-    lv_label_set_text_fmt(s_bl_val[4], "%s %.0f °C", st.demand ? "heat to" : "off,", st.flow_setpoint);
-    if (st.press_valid) {
-        lv_label_set_text_fmt(s_bl_val[5], "%.2f bar", st.pressure_bar);
+    alert_config_t ac;
+    thermo_get_alert_config(&ac);
+
+    // State card
+    uint32_t col = UI_FAINT;
+    const char *state = "Idle";
+    if (!st.boiler_online) {
+        col = UI_ERR, state = "Not answering";
+    } else if (st.flame && st.dhw_active) {
+        col = 0x00838F, state = "Hot water";
+    } else if (st.flame) {
+        col = UI_HEAT, state = "Heating";
+    } else if (st.demand) {
+        col = UI_WARN, state = "Waiting";
+    }
+    lv_obj_set_style_bg_color(s_bl_icon, ui_c(col), 0);
+    lv_label_set_text(s_bl_state, state);
+    char b[128];
+    if (st.demand) {
+        snprintf(b, sizeof(b), "wants %.0f °C, %s\n%s boiler, %s", st.flow_setpoint, ctrl_words(st.ctrl_state),
+                 st.boiler_sim ? "simulated" : "real", st.boiler_online ? "answering" : "no answer");
     } else {
-        lv_label_set_text(s_bl_val[5], "not reported");
+        snprintf(b, sizeof(b), "no heat needed now\n%s boiler, %s", st.boiler_sim ? "simulated" : "real",
+                 st.boiler_online ? "answering" : "no answer");
+    }
+    lv_label_set_text(s_bl_sub, b);
+    if (st.boiler_online) {
+        lv_label_set_text_fmt(s_bl_flow, "%.0f°", st.flow_c);
+    } else {
+        lv_label_set_text(s_bl_flow, "");
+    }
+
+    // Tiles
+    lv_label_set_text_fmt(s_bl_val[0], "%.0f / %.0f °C", st.flow_c, st.return_c);
+    lv_label_set_text_fmt(s_bl_note[0], "difference %.0f °C", st.flow_c - st.return_c);
+    float mod = st.flame ? (st.modulation > 100 ? 100 : st.modulation) : 0;
+    lv_label_set_text_fmt(s_bl_val[1], st.flame ? "%.0f %%" : "off", mod);
+    lv_bar_set_value(s_bl_mod_bar, (int32_t)mod, LV_ANIM_OFF);
+    lv_label_set_text_fmt(s_bl_note[1], "24 h average %.0f %%", k24.mean_mod);
+    if (st.press_valid) {
+        bool low = st.pressure_bar < ac.pressure_min_bar;
+        lv_label_set_text_fmt(s_bl_val[2], "%.2f bar", st.pressure_bar);
+        lv_obj_set_style_text_color(s_bl_val[2], ui_c(low ? UI_ERR : UI_TEXT), 0);
+        lv_label_set_text(s_bl_note[2], low ? "low: top up the water" : "normal (1-2 bar)");
+    } else {
+        lv_label_set_text(s_bl_val[2], "-");
+        lv_label_set_text(s_bl_note[2], "not reported");
     }
     if (st.tank_valid) {
-        lv_label_set_text_fmt(s_bl_val[6], "%.1f °C, %s", st.tank_c, dhw_words(st.dhw_reason));
+        lv_label_set_text_fmt(s_bl_val[3], "%.0f °C", st.tank_c);
     } else {
-        lv_label_set_text(s_bl_val[6], "not reported");
+        lv_label_set_text(s_bl_val[3], "-");
     }
-    lv_label_set_text_fmt(s_bl_val[7], "%s, wants %.1f °C", ctrl_words(st.ctrl_state), st.req_c);
-    lv_label_set_text_fmt(s_bl_val[8], "%u last hour, %.1f/h (24 h)", k1.ch_starts, k24.ch_starts_h);
+    lv_label_set_text(s_bl_note[3], dhw_words(st.dhw_reason));
+    lv_label_set_text_fmt(s_bl_val[4], "%u last hour", k1.ch_starts);
     if (k24.ch_burns) {
-        lv_label_set_text_fmt(s_bl_val[9], "median %.0f min, %.0f %% short", k24.median_burn_min, k24.short_pct);
+        lv_label_set_text_fmt(s_bl_note[4], "24 h: %u, typical burn %.0f min", k24.ch_starts, k24.median_burn_min);
     } else {
-        lv_label_set_text(s_bl_val[9], "none completed yet");
+        lv_label_set_text_fmt(s_bl_note[4], "24 h: %u starts", k24.ch_starts);
     }
-    lv_label_set_text_fmt(s_bl_val[10], "%.0f %% condensing, mod %.0f %%", k24.cond_pct, k24.mean_mod);
-    lv_label_set_text_fmt(s_bl_val[11], "%.1f kWh (24 h), %.1f since start", k24.gas_kwh, st.gas_kwh_total);
+    if (k24.burner_h > 0) {
+        lv_label_set_text_fmt(s_bl_val[5], "%.0f %%", k24.cond_pct);
+        lv_label_set_text(s_bl_note[5], "of the time condensing");
+    } else {
+        lv_label_set_text(s_bl_val[5], "-");
+        lv_label_set_text(s_bl_note[5], "no burns yet");
+    }
+
+    lv_label_set_text_fmt(s_bl_gas, "Gas used (estimate): %.1f kWh in 24 h, %.1f kWh in the last hour", k24.gas_kwh,
+                          k1.gas_kwh);
     if (st.alert_count) {
         char a[300];
         size_t n = (size_t)snprintf(a, sizeof(a), "#FFB74D " LV_SYMBOL_WARNING " Alerts:#");
@@ -396,28 +481,68 @@ static lv_obj_t *s_week[7], *s_prog_btn, *s_boost_btn, *s_away_btn, *s_dhw_btn, 
 static sched_config_t s_week_cache;
 static bool s_week_valid;
 
+// Colour of a level: Comfort orange, Eco blue, fixed temperatures from blue (16 °C or less) to orange (23 °C+).
+static uint32_t level_color(uint8_t level)
+{
+    if (!sched_level_is_fixed(level)) {
+        return level == SCHED_COMFORT ? C_COMFORT : C_ECO;
+    }
+    float f = (level / 4.0f - 16) / 7;
+    f = f < 0 ? 0 : (f > 1 ? 1 : f);
+    uint32_t a = C_ECO, b = C_COMFORT, out = 0;
+    for (int sh = 0; sh <= 16; sh += 8) {
+        int ca = (a >> sh) & 0xFF, cb = (b >> sh) & 0xFF;
+        out |= (uint32_t)(ca + (cb - ca) * f) << sh;
+    }
+    return out;
+}
+
+// "Comfort", "Eco" or "21.5°"
+static void level_label(uint8_t level, char *out, size_t size)
+{
+    if (sched_level_is_fixed(level)) {
+        float c = level / 4.0f;
+        snprintf(out, size, c == (int)c ? "%.0f °C" : "%.1f °C", c);
+    } else {
+        snprintf(out, size, "%s", level == SCHED_COMFORT ? "Comfort" : "Eco");
+    }
+}
+
 static void draw_day(int d, const sched_config_t *c)
 {
     lv_obj_t *bar = s_week[d];
     lv_obj_clean(bar);
-    lv_obj_set_style_bg_color(bar, ui_c(c->prog_on ? C_ECO : UI_SURFACE_ALT), 0);
+    lv_obj_set_style_bg_color(bar, ui_c(UI_SURFACE_ALT), 0);
     int w = lv_obj_get_width(bar);
-    // Walk the day in 15-minute steps and draw Comfort spans
-    int start = -1;
-    for (int m = 0; m <= 1440; m += 15) {
-        bool comfort = m < 1440 && sched_level_at(c, d, m) == SCHED_COMFORT;
-        if (comfort && start < 0) {
-            start = m;
-        } else if (!comfort && start >= 0) {
-            lv_obj_t *r = lv_obj_create(bar);
-            lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_border_width(r, 0, 0);
-            lv_obj_set_style_radius(r, 4, 0);
-            lv_obj_set_style_bg_color(r, ui_c(c->prog_on ? C_COMFORT : UI_FAINT), 0);
-            lv_obj_set_pos(r, start * w / 1440, 0);
-            lv_obj_set_size(r, (m - start) * w / 1440, LV_PCT(100));
-            start = -1;
+    // Walk the day in 15-minute steps and draw one segment per run of the same level
+    int start = 0;
+    uint8_t cur = (uint8_t)sched_level_at(c, d, 0);
+    for (int m = 15; m <= 1440; m += 15) {
+        uint8_t l = m < 1440 ? (uint8_t)sched_level_at(c, d, m) : 0xFF;
+        if (l == cur) {
+            continue;
         }
+        lv_obj_t *r = lv_obj_create(bar);
+        lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_border_width(r, 0, 0);
+        lv_obj_set_style_radius(r, 4, 0);
+        lv_obj_set_style_pad_all(r, 0, 0);
+        lv_obj_set_style_bg_color(r, c->prog_on ? lv_color_hex(level_color(cur)) : ui_c(UI_FAINT), 0);
+        lv_obj_set_style_bg_opa(r, c->prog_on ? LV_OPA_COVER : (cur == SCHED_ECO ? LV_OPA_20 : LV_OPA_60), 0);
+        int x0 = start * w / 1440, x1 = m * w / 1440;
+        lv_obj_set_pos(r, x0, 0);
+        lv_obj_set_size(r, x1 - x0, LV_PCT(100));
+        if (sched_level_is_fixed(cur) && x1 - x0 >= 44) {
+            char t[12];
+            level_label(cur, t, sizeof(t));
+            lv_obj_t *lt = lv_label_create(r);
+            lv_obj_set_style_text_font(lt, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(lt, lv_color_white(), 0);
+            lv_label_set_text(lt, t);
+            lv_obj_center(lt);
+        }
+        start = m;
+        cur = l;
     }
 }
 
@@ -464,17 +589,17 @@ static void dhw_boost_cb(lv_event_t *e)
 
 void ui_pages_schedule(lv_obj_t *p)
 {
-    label(p, "Schedule", 20, 16, 0, UI_TEXT, &lv_font_montserrat_28);
+    label(p, "Schedule", 20, 24, 0, UI_TEXT, &lv_font_montserrat_28);
     static const char *hours[5] = {"0", "6", "12", "18", "24"};
     for (int h = 0; h < 5; h++) {
-        lv_obj_t *l = label(p, hours[h], 0, 54, 0, UI_FAINT, NULL);
+        lv_obj_t *l = label(p, hours[h], 0, 78, 0, UI_FAINT, NULL);
         lv_obj_update_layout(l);
         lv_obj_set_x(l, 76 + h * 96 - lv_obj_get_width(l) / 2);
     }
     for (int d = 0; d < 7; d++) {
-        label(p, DAYS[d], 20, 82 + d * 44, 0, UI_MUTED, NULL);
+        label(p, DAYS[d], 20, 106 + d * 44, 0, UI_MUTED, NULL);
         lv_obj_t *bar = lv_obj_create(p);
-        lv_obj_set_pos(bar, 76, 76 + d * 44);
+        lv_obj_set_pos(bar, 76, 100 + d * 44);
         lv_obj_set_size(bar, 384, 34);
         lv_obj_set_style_pad_all(bar, 0, 0);
         lv_obj_set_style_border_width(bar, 0, 0);
@@ -483,13 +608,13 @@ void ui_pages_schedule(lv_obj_t *p)
         lv_obj_add_event_cb(bar, day_cb, LV_EVENT_CLICKED, (void *)(intptr_t)d);
         s_week[d] = bar;
     }
-    s_prog_btn = button(p, "", 0x37474F, prog_cb, NULL, 20, 392, 440, 52);
-    s_boost_btn = button(p, "", 0xD84315, boost_cb, NULL, 20, 456, 212, 64);
-    s_away_btn = button(p, "", 0x37474F, away_cb, NULL, 248, 456, 212, 64);
-    label(p, "Hot water", 20, 534, 0, UI_MUTED, NULL);
-    s_dhw_btn = button(p, "", 0x37474F, dhw_mode_cb, NULL, 20, 560, 212, 64);
-    s_dhwb_btn = button(p, "", 0x00838F, dhw_boost_cb, NULL, 248, 560, 212, 64);
-    s_sched_info = label(p, "", 20, 636, 440, UI_MUTED, NULL);
+    s_prog_btn = button(p, "", 0x37474F, prog_cb, NULL, 20, 414, 440, 52);
+    s_boost_btn = button(p, "", 0xD84315, boost_cb, NULL, 20, 476, 212, 64);
+    s_away_btn = button(p, "", 0x37474F, away_cb, NULL, 248, 476, 212, 64);
+    label(p, "Hot water", 20, 548, 0, UI_MUTED, NULL);
+    s_dhw_btn = button(p, "", 0x37474F, dhw_mode_cb, NULL, 20, 574, 212, 60);
+    s_dhwb_btn = button(p, "", 0x00838F, dhw_boost_cb, NULL, 248, 574, 212, 60);
+    s_sched_info = label(p, "", 20, 642, 440, UI_MUTED, &lv_font_montserrat_14);
 }
 
 void ui_pages_schedule_update(void)
@@ -544,6 +669,9 @@ void ui_pages_schedule_update(void)
 
 static lv_obj_t *s_de_scr, *s_de_title, *s_de_row[SCHED_POINTS], *s_de_time[SCHED_POINTS], *s_de_lvl[SCHED_POINTS];
 static lv_obj_t *s_de_copy[7], *s_de_msg;
+static lv_obj_t *s_lp, *s_lp_title, *s_lp_btn[3], *s_lp_temp;
+static int s_lp_row;
+static uint8_t s_lp_fixed;  // the fixed temperature shown in the picker (level units)
 static int s_de_day;
 static sched_point_t s_de_pts[SCHED_POINTS];
 
@@ -566,9 +694,10 @@ static void de_show(void)
         }
         lv_obj_remove_flag(s_de_row[i], LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text_fmt(s_de_time[i], "%02d:%02d", s_de_pts[i].min / 60, s_de_pts[i].min % 60);
-        bool c = s_de_pts[i].level == SCHED_COMFORT;
-        set_btn_text(s_de_lvl[i], c ? "Comfort" : "Eco");
-        lv_obj_set_style_bg_color(s_de_lvl[i], ui_c(c ? C_COMFORT : C_ECO), 0);
+        char t[16];
+        level_label(s_de_pts[i].level, t, sizeof(t));
+        set_btn_text(s_de_lvl[i], t);
+        lv_obj_set_style_bg_color(s_de_lvl[i], lv_color_hex(level_color(s_de_pts[i].level)), 0);
     }
 }
 
@@ -581,11 +710,66 @@ static void de_time_cb(lv_event_t *e)
     de_show();
 }
 
+// Level picker for one switch time: Comfort, Eco, or a fixed temperature.
+static void lp_show(void)
+{
+    thermo_state_t st;
+    thermo_get(&st);
+    sched_config_t c;
+    thermo_get_sched_config(&c);
+    uint8_t cur = s_de_pts[s_lp_row].level;
+    lv_label_set_text_fmt(s_lp_title, "From %02d:%02d the room should be:", s_de_pts[s_lp_row].min / 60,
+                          s_de_pts[s_lp_row].min % 60);
+    char b[64];
+    snprintf(b, sizeof(b), "Comfort\n#B0BEC5 the dial: now %.1f °C#", st.setpoint);
+    ui_label_text(lv_obj_get_child(s_lp_btn[0], 0), b);
+    snprintf(b, sizeof(b), "Eco\n#B0BEC5 dial - %.1f: now %.1f °C#", c.eco_setback_k, st.setpoint - c.eco_setback_k);
+    ui_label_text(lv_obj_get_child(s_lp_btn[1], 0), b);
+    snprintf(b, sizeof(b), "Fixed temperature");
+    set_btn_text(s_lp_btn[2], b);
+    float f = s_lp_fixed / 4.0f;
+    lv_label_set_text_fmt(s_lp_temp, f == (int)f ? "%.0f °C" : "%.1f °C", f);
+    for (int k = 0; k < 3; k++) {
+        bool on = (k == 0 && cur == SCHED_COMFORT) || (k == 1 && cur == SCHED_ECO) || (k == 2 && sched_level_is_fixed(cur));
+        lv_obj_set_style_border_width(s_lp_btn[k], on ? 4 : 0, 0);
+    }
+}
+
+static void lp_pick_cb(lv_event_t *e)
+{
+    int k = (int)(intptr_t)lv_event_get_user_data(e);
+    s_de_pts[s_lp_row].level = k == 0 ? SCHED_COMFORT : (k == 1 ? SCHED_ECO : s_lp_fixed);
+    lp_show();
+}
+
+static void lp_temp_cb(lv_event_t *e)
+{
+    int dir = (int)(intptr_t)lv_event_get_user_data(e);
+    int v = s_lp_fixed + dir * 2;  // 0.5 °C steps
+    s_lp_fixed = (uint8_t)(v < SCHED_FIXED_MIN ? SCHED_FIXED_MIN : (v > SCHED_FIXED_MAX ? SCHED_FIXED_MAX : v));
+    s_de_pts[s_lp_row].level = s_lp_fixed;  // changing the temperature picks "fixed"
+    lp_show();
+}
+
+static void lp_done_cb(lv_event_t *e)
+{
+    lv_obj_add_flag(s_lp, LV_OBJ_FLAG_HIDDEN);
+    de_show();
+}
+
 static void de_lvl_cb(lv_event_t *e)
 {
-    int i = (int)(intptr_t)lv_event_get_user_data(e);
-    s_de_pts[i].level = s_de_pts[i].level == SCHED_COMFORT ? SCHED_ECO : SCHED_COMFORT;
-    de_show();
+    s_lp_row = (int)(intptr_t)lv_event_get_user_data(e);
+    uint8_t cur = s_de_pts[s_lp_row].level;
+    if (sched_level_is_fixed(cur)) {
+        s_lp_fixed = cur;
+    } else {
+        thermo_state_t st;
+        thermo_get(&st);
+        s_lp_fixed = sched_level_from_c(roundf(st.setpoint * 2) / 2);  // start from the dial
+    }
+    lp_show();
+    lv_obj_remove_flag(s_lp, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void de_del_cb(lv_event_t *e)
@@ -606,21 +790,17 @@ static void de_add_cb(lv_event_t *e)
     }
     int m = n ? s_de_pts[n - 1].min + 60 : 360;
     s_de_pts[n] = (sched_point_t){(uint16_t)(m > 1425 ? 1425 : m),
-                                  n && s_de_pts[n - 1].level == SCHED_COMFORT ? SCHED_ECO : SCHED_COMFORT};
+                                  n && s_de_pts[n - 1].level != SCHED_ECO ? SCHED_ECO : SCHED_COMFORT};
     de_show();
 }
 
 static void de_save_cb(lv_event_t *e)
 {
-    char text[100];
-    size_t n = 0;
-    text[0] = 0;
-    for (int i = 0; i < de_count(); i++) {
-        n += (size_t)snprintf(text + n, sizeof(text) - n, "%s%02d:%02d=%c", n ? " " : "", s_de_pts[i].min / 60,
-                              s_de_pts[i].min % 60, s_de_pts[i].level == SCHED_COMFORT ? 'c' : 'e');
-    }
     sched_config_t c;
     thermo_get_sched_config(&c);
+    memcpy(c.prog[s_de_day], s_de_pts, sizeof(s_de_pts));
+    char text[120];
+    sched_prog_format(&c, s_de_day, text, sizeof(text));  // through the parser: sorted and checked
     bool ok = sched_prog_parse(&c, s_de_day, text);
     for (int d = 0; ok && d < 7; d++) {
         if (d != s_de_day && lv_obj_has_state(s_de_copy[d], LV_STATE_CHECKED)) {
@@ -659,6 +839,7 @@ static void day_editor_open(int d)
             s_de_time[i] = label(r, "", 92, 14, 0, UI_TEXT, &lv_font_montserrat_28);
             button(r, LV_SYMBOL_PLUS, 0x37474F, de_time_cb, (void *)(intptr_t)(i + 1), 186, 4, 64, 56);
             s_de_lvl[i] = button(r, "", C_COMFORT, de_lvl_cb, (void *)(intptr_t)i, 262, 4, 136, 56);
+            lv_obj_set_style_text_color(s_de_lvl[i], lv_color_white(), 0);
             button(r, LV_SYMBOL_CLOSE, 0x5D4037, de_del_cb, (void *)(intptr_t)i, 408, 4, 56, 56);
         }
         button(c, LV_SYMBOL_PLUS " Add a switch time", 0x37474F, de_add_cb, NULL, 16, 468, 448, 52);
@@ -672,7 +853,27 @@ static void day_editor_open(int d)
         s_de_msg = label(c, "", 20, 612, 440, UI_WARN, NULL);
         button(c, "Cancel", 0x37474F, de_cancel_cb, NULL, 16, 628, 214, 64);
         button(c, LV_SYMBOL_OK " Save", 0x2E7D32, de_save_cb, NULL, 250, 628, 214, 64);
+        // Level picker (over the editor)
+        s_lp = ui_overlay(c);
+        s_lp_title = label(s_lp, "", 20, 16, 440, UI_TEXT, &lv_font_montserrat_28);
+        for (int k = 0; k < 3; k++) {
+            uint32_t col = k == 0 ? C_COMFORT : (k == 1 ? C_ECO : 0x6D4C41);
+            s_lp_btn[k] = button(s_lp, "", col, lp_pick_cb, (void *)(intptr_t)k, 20, 100 + k * 104, 440, 92);
+            lv_obj_set_style_border_color(s_lp_btn[k], ui_c(UI_TEXT), 0);
+            lv_label_set_recolor(lv_obj_get_child(s_lp_btn[k], 0), true);
+            lv_obj_set_style_text_align(lv_obj_get_child(s_lp_btn[k], 0), LV_TEXT_ALIGN_CENTER, 0);
+        }
+        lv_obj_t *mb = button(s_lp, LV_SYMBOL_MINUS, 0x1565C0, lp_temp_cb, (void *)(intptr_t)-1, 20, 420, 120, 84);
+        lv_obj_add_event_cb(mb, lp_temp_cb, LV_EVENT_LONG_PRESSED_REPEAT, (void *)(intptr_t)-1);
+        lv_obj_t *pb = button(s_lp, LV_SYMBOL_PLUS, 0xD84315, lp_temp_cb, (void *)(intptr_t)1, 340, 420, 120, 84);
+        lv_obj_add_event_cb(pb, lp_temp_cb, LV_EVENT_LONG_PRESSED_REPEAT, (void *)(intptr_t)1);
+        s_lp_temp = label(s_lp, "", 140, 440, 200, UI_VALUE, &lv_font_montserrat_40);
+        lv_obj_set_style_text_align(s_lp_temp, LV_TEXT_ALIGN_CENTER, 0);
+        label(s_lp, "Changing the temperature selects \"Fixed temperature\".", 20, 516, 440, UI_MUTED,
+              &lv_font_montserrat_14);
+        button(s_lp, LV_SYMBOL_OK " Done", 0x2E7D32, lp_done_cb, NULL, 20, 600, 440, 72);
     }
+    lv_obj_add_flag(s_lp, LV_OBJ_FLAG_HIDDEN);
     sched_config_t c;
     thermo_get_sched_config(&c);
     s_de_day = d;
@@ -1101,8 +1302,8 @@ static void svc_cb(lv_event_t *e)
 
 void ui_pages_settings(lv_obj_t *p)
 {
-    label(p, "Settings", 20, 12, 0, UI_TEXT, &lv_font_montserrat_28);
-    label(p, "Tap a row to see what it does and change it.", 20, 50, 440, UI_MUTED, &lv_font_montserrat_14);
+    label(p, "Settings", 20, 14, 0, UI_TEXT, &lv_font_montserrat_28);
+    label(p, "Tap a row to see what it does and change it.", 20, 52, 310, UI_MUTED, &lv_font_montserrat_14);
     for (int i = 0; i < N_EVERYDAY; i++) {
         int k = cfgall_find(EVERYDAY[i]);
         s_ev_val[i] = setting_row(p, k, 20, 76 + i * 70, 440, ev_cb, (void *)(intptr_t)i);

@@ -17,12 +17,27 @@
 #define SCHED_WINDOWS 3          // DHW windows (every day)
 #define SCHED_UNUSED 0xFFFF      // unused switch point / window
 
+// A switch point's level: Eco (setpoint - eco_setback_k), Comfort (the setpoint), or a fixed temperature
+// SCHED_FIXED_MIN..SCHED_FIXED_MAX = level / 4 °C (5.0-30.0 °C in 0.25 steps).
 typedef enum { SCHED_ECO = 0, SCHED_COMFORT = 1 } sched_level_t;
+#define SCHED_FIXED_MIN 20
+#define SCHED_FIXED_MAX 120
 
 typedef struct {
     uint16_t min;                // minute of the day (0..1439), SCHED_UNUSED = empty
-    uint8_t level;               // sched_level_t
+    uint8_t level;               // SCHED_ECO, SCHED_COMFORT or a fixed temperature (see above)
 } sched_point_t;
+
+static inline bool sched_level_is_fixed(uint8_t level)
+{
+    return level >= SCHED_FIXED_MIN && level <= SCHED_FIXED_MAX;
+}
+// Fixed temperature -> level (rounded to 0.25 °C, clamped to 5-30 °C).
+uint8_t sched_level_from_c(float c);
+// The room target for a level.
+float sched_level_temp(uint8_t level, float comfort_c, float eco_setback_k);
+// "comfort", "eco" or the temperature ("21.5") for logs, JSON and MQTT.
+void sched_level_text(uint8_t level, char *out, size_t size);
 
 typedef struct {
     uint16_t start, end;         // minutes of the day; start == SCHED_UNUSED or start == end = unused;
@@ -97,6 +112,7 @@ typedef enum {
     SCHED_SRC_BOOST,
     SCHED_SRC_AWAY,
     SCHED_SRC_SUMMER,            // CH off
+    SCHED_SRC_FIXED,             // program, a fixed-temperature switch point
 } sched_src_t;
 
 typedef enum {
@@ -115,7 +131,7 @@ typedef struct {
     bool ch_allowed;             // false in summer mode (the frost floor still works)
     uint8_t src;                 // sched_src_t
     int next_change_min;         // minutes until the next program change (-1 = none / program off)
-    uint8_t next_level;          // sched_level_t at that change
+    uint8_t next_level;          // level at that change (Eco, Comfort or a fixed temperature)
     int boost_left_s;            // 0 = no boost
     bool away;
     int64_t away_until;          // 0 = until cancelled

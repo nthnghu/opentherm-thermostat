@@ -144,7 +144,7 @@ The screen's status line shows the plan, for example "Eco 19.0 °C until 05:30",
 
 **Data log (`datalog.c`, pure C, host-tested):**
 - one record per minute: room, target, flow/return/tank/pressure, modulation, flame and DHW seconds, starts, estimated gas input, controller state, flags, RSSI, OT errors;
-- kept for 7 days in PSRAM. It is RAM only, so a restart clears it; the long history lives in VictoriaMetrics through MQTT;
+- kept for 24 h in PSRAM, plus one summary per hour for 35 days. Every new entry is also written to the 256 KB flash partition `hist` (`histstore.c`), so restarts and updates keep it; the long raw history lives in VictoriaMetrics through MQTT;
 - download from the web page: `/api/log.csv[?h=N]`.
 
 **KPIs (last hour and last 24 h, `/api/kpi`, serial `STAT` → `KPI` line):**
@@ -232,14 +232,13 @@ The bus flags (`ca`, `mirror57`, `explicitoff`) are now saved in NVS: by Apply a
 ## User interface (Phase 1, milestone 6)
 
 **Thermostat app, swipe pages:**
-1. Room, setpoint, mode. The status line shows the plan, alerts and service; tap it for the boiler card.
-2. 24 h chart.
-3. **Boiler card:** link (simulated/real), burner, flow/return, modulation, setpoint, pressure, tank, controller state, starts, burns, efficiency and gas estimate (24 h), active alerts.
-4. **Schedule:**
-   - the week as Comfort (orange) / Eco (blue) bars; tap a day to edit its switch times (±15 min, Comfort/Eco, add/delete, copy to other days);
-   - program on/off;
-   - Boost and Away;
+1. Room, setpoint, mode. The status line shows the plan, alerts and service; tap it for the boiler page.
+2. **History:** 5 min, 1 h, 6 h, 24 h or a week. Room and target on the left °C scale, boiler water on the right scale, time below, and a red bar for the share of time the radiators were heated. 5 min/1 h come from a 5-second ring (RAM), 6 h/24 h from the minute log, the week from the hourly summaries.
+3. **Schedule:**
+   - the week as coloured bars (Comfort orange, Eco blue, fixed temperatures from blue to orange with the °C written on them); tap a day to edit it: time ±15 min, and per switch time Comfort, Eco or a fixed temperature (5-30 °C, 0.5 steps), add/delete, copy to other days;
+   - program on/off, Boost and Away;
    - hot water mode (Always / Windows / Off), Hot water boost, tank and pasteurisation status.
+4. **Boiler:** a status card (heating / hot water / idle / not answering, the requested and actual water temperature) and tiles for water out/back, burner power, pressure, tank, starts, condensing share, then gas use and alerts.
 5. **Settings:**
    - everyday shortcuts: weekly program, Eco temperature drop, hot water, summer mode, frost protection and limit, what to do if the room sensor fails, underfloor circuit. Each row shows a plain title, the value with its unit and a one-line description;
    - **All settings:** nine topics (program, summer, hot water, legionella, safety, heating system, fine tuning, alerts, service tests). Settings that belong to another are indented, and dimmed while that one is off;
@@ -256,11 +255,13 @@ All editors use `cfgall.c`, one index over the control, schedule, alert and serv
 
 **Web page:**
 - "Thermostat settings": the same titles, explanations, topics and choice lists as the device, with range and factory value (the internal name is the tooltip);
-- "Weekly program": one line per day, `06:00=c 08:00=e`;
+- "Weekly program": one line per day, `06:00=c 08:00=e 17:00=21.5` (c = Comfort, e = Eco, a number = that temperature);
 - "Export / import": `/api/config?download=1` gives all settings, the program and the boiler flags as JSON; paste a file to restore it. Unknown keys are ignored and values are range-checked;
 - the service PIN.
 
 **Home Assistant, everyday controls:** switches "Weekly program" and "Summer mode (auto)", a select "Hot water mode", and a number "Eco setback".
+
+Every page has the Apps button. The dots at the bottom jump to a page; swiping up from the bottom edge returns to page 1.
 
 Serial screens for screenshots: `GO page N`, `GO edit <name>`, `GO advanced`, `GO group <0..8>`, `GO service`, `GO day <0..6>`.
 

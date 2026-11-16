@@ -38,6 +38,8 @@ void debug_exec(const char *line, FILE *o)
     if (strcmp(line, "STAT") == 0) {
         thermo_state_t st;
         thermo_get(&st);
+        char nl[12];
+        sched_level_text(st.next_level, nl, sizeof(nl));
         fprintf(o, "STAT sensor_ok=%d raw=%.2f smooth=%.3f shown=%.1f hum=%.1f errors=%lu sp=%.1f demand=%d loops=%lu\n",
                st.sensor_ok, st.room_raw, st.room_c, st.room_shown, st.humidity, (unsigned long)st.sensor_errors, st.setpoint, st.demand, (unsigned long)st.loops);
         fprintf(o, "CTRL state=%s tset=%.1f req=%.1f p=%.2f i=%.2f duty=%.2f starts_h=%u flame=%d dhw=%d flow=%.1f ret=%.1f mod=%.0f\n",
@@ -45,7 +47,7 @@ void debug_exec(const char *line, FILE *o)
                st.starts_last_h, st.flame, st.dhw_active, st.flow_c, st.return_c, st.modulation);
         fprintf(o, "SCHED src=%s target=%.1f next=%d/%s boost=%d away=%d until=%lld summer=%d out=%d/%.1f mean=%d/%.1f "
                "dhw=%d/%s dhwboost=%d set=%.1f id56=%d tank=%d/%.1f pasteur=%d last=%s@%lld\n",
-               sched_src_name(st.sched_src), st.target_c, st.next_change_min, st.next_level ? "c" : "e",
+               sched_src_name(st.sched_src), st.target_c, st.next_change_min, nl,
                st.boost_left_s, st.away, (long long)st.away_until, st.summer, st.outside_valid, st.outside_c,
                st.outside_mean_valid, st.outside_mean_c, st.dhw_enable, sched_dhw_reason_name(st.dhw_reason),
                st.dhw_boost_left_s, st.dhw_set, st.id56, st.tank_valid, st.tank_c, st.pasteur_running,
@@ -199,6 +201,11 @@ void debug_exec(const char *line, FILE *o)
         char why[96];
         bool ok = id >= 0 && id < 128 && (!w || vs[0]) && thermo_svc_manual(w, (uint8_t)id, data, why, sizeof(why));
         fprintf(o, "OT %s %d: %s (answer: SVC)\n", w ? "write" : "read", id, ok ? "queued" : (id < 0 ? "bad id" : why));
+        return;
+    }
+    if (strcmp(line, "MOTION off") == 0 || strcmp(line, "MOTION on") == 0) {  // test: pause (not saved)
+        motion_set_off(line[8] == 'f');
+        fprintf(o, "MOT off=%d (until restart)\n", line[8] == 'f');
         return;
     }
     if (strncmp(line, "WIFIWD ", 7) == 0) {  // minutes, 0 = never

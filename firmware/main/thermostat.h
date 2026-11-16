@@ -98,7 +98,17 @@ typedef struct {
     uint8_t demand;
 } thermo_sample_t;
 
-#define THERMO_HISTORY_LEN 1440  // 24 h at 1 / min
+#define THERMO_HISTORY_LEN 1440  // 24 h at 1 / min (from the data log)
+
+// 5-second samples of the last hour (chart: 5 min and 1 h views)
+enum { THERMO_FINE_FLAME = 1, THERMO_FINE_HEAT = 2 };  // burner on / on for the radiators
+typedef struct {
+    uint32_t t;             // epoch, 0 = clock not set
+    int16_t room_c10, target_c10, flow_c10;  // INT16_MIN = no value
+    uint8_t flags;
+} thermo_fine_t;
+#define THERMO_FINE_LEN 720
+int thermo_fine(thermo_fine_t *out, int max);  // oldest first
 
 void thermo_start(void);
 void thermo_get(thermo_state_t *out);

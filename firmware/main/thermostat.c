@@ -53,8 +53,8 @@ static volatile int s_rssi;
 #define LOG_RECS 1440   // 24 h of minutes (longer raw history: MQTT -> VictoriaMetrics / Grafana)
 #define LOG_BURNS 512
 #define LOG_HOURS 840   // 35 days of hourly summaries (week chart)
-static thermo_sample_t *s_hist;   // PSRAM ring
-static int s_hist_head, s_hist_count;
+static thermo_fine_t *s_fine;     // PSRAM ring, 5 s
+static int s_fine_head, s_fine_count;
 
 #define LOCK()   xSemaphoreTake(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_lock)
@@ -310,32 +310,54 @@ static void boiler_read(otb_status_t *b)
 
 /* --------------------------------------------------------------- history */
 
-static void history_add(void)
+// 5-second samples for the last hour (chart: 5 min and 1 h views); RAM only.
+static void fine_add(void)
 {
     LOCK();
-    thermo_sample_t s = {
-        .t = timekeep_valid() ? time(NULL) : 0,
+    thermo_fine_t f = {
+        .t = timekeep_valid() ? (uint32_t)time(NULL) : 0,
         .room_c10 = s_st.sensor_ok ? (int16_t)lroundf(s_st.room_c * 10) : INT16_MIN,
-        .humidity = (uint8_t)lroundf(s_st.humidity),
-        .setpoint_c10 = (int16_t)lroundf(
+        .target_c10 = (int16_t)lroundf(
             (s_st.mode == THERMO_MODE_HEAT && s_st.sched_src != SCHED_SRC_SUMMER ? s_st.target_c : s_cfg.frost_room_c) * 10),
-        .demand = s_st.demand,
+        .flow_c10 = s_st.boiler_online ? (int16_t)lroundf(s_st.flow_c * 10) : INT16_MIN,
+        .flags = (s_st.flame ? THERMO_FINE_FLAME : 0) | (s_st.flame && !s_st.dhw_active ? THERMO_FINE_HEAT : 0),
     };
-    s_hist[s_hist_head] = s;
-    s_hist_head = (s_hist_head + 1) % THERMO_HISTORY_LEN;
-    if (s_hist_count < THERMO_HISTORY_LEN) {
-        s_hist_count++;
+    s_fine[s_fine_head] = f;
+    s_fine_head = (s_fine_head + 1) % THERMO_FINE_LEN;
+    if (s_fine_count < THERMO_FINE_LEN) {
+        s_fine_count++;
     }
     UNLOCK();
 }
 
+int thermo_fine(thermo_fine_t *out, int max)
+{
+    LOCK();
+    int n = s_fine_count < max ? s_fine_count : max;
+    int start = (s_fine_head - n + THERMO_FINE_LEN) % THERMO_FINE_LEN;
+    for (int i = 0; i < n && s_fine; i++) {
+        out[i] = s_fine[(start + i) % THERMO_FINE_LEN];
+    }
+    UNLOCK();
+    return s_fine ? n : 0;
+}
+
+// The last max minutes from the data log (kept in flash, so it survives restarts), oldest first.
 int thermo_history(thermo_sample_t *out, int max)
 {
     LOCK();
-    int n = s_hist_count < max ? s_hist_count : max;
-    int start = (s_hist_head - n + THERMO_HISTORY_LEN) % THERMO_HISTORY_LEN;
+    int count = datalog_count(&s_dl);
+    int n = count < max ? count : max;
     for (int i = 0; i < n; i++) {
-        out[i] = s_hist[(start + i) % THERMO_HISTORY_LEN];
+        dl_rec_t r;
+        datalog_get(&s_dl, count - n + i, &r);
+        out[i] = (thermo_sample_t){
+            .t = (time_t)r.t,
+            .room_c10 = r.room_c100 == DL_NO_VALUE ? INT16_MIN : (int16_t)lround(r.room_c100 / 10.0),
+            .humidity = r.humidity,
+            .setpoint_c10 = r.target_c10,
+            .demand = (r.flags & DL_F_CH_EN) != 0,
+        };
     }
     UNLOCK();
     return n;
@@ -616,10 +638,10 @@ static void thermo_task(void *arg)
             save_svc(false, true);
         }
 
-        // 4. History (1 / min) and debounced save
-        if (now - last_hist >= 60LL * 1000000 || last_hist == 0) {
+        // 4. Fine history (every 5 s) and debounced save
+        if (now - last_hist >= 5LL * 1000000 || last_hist == 0) {
             last_hist = now;
-            history_add();
+            fine_add();
         }
         if (s_dirty_since_us && now - s_dirty_since_us > SAVE_DELAY_US) {
             s_dirty_since_us = 0;
@@ -652,7 +674,7 @@ static void thermo_task(void *arg)
 void thermo_start(void)
 {
     s_lock = xSemaphoreCreateMutex();
-    s_hist = heap_caps_calloc(THERMO_HISTORY_LEN, sizeof(thermo_sample_t), MALLOC_CAP_SPIRAM);
+    s_fine = heap_caps_calloc(THERMO_FINE_LEN, sizeof(thermo_fine_t), MALLOC_CAP_SPIRAM);
     load();
     load_ctrl_config();
     load_sched_config();

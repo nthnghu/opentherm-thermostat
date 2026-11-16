@@ -6,6 +6,7 @@
 typedef enum { MOTION_OFF, MOTION_WATCHING, MOTION_TOO_DARK, MOTION_PAUSED, MOTION_NO_CAMERA } motion_state_t;
 
 void motion_start(void);
+void motion_set_off(bool off);  // camera off until switched on again or restart (not saved)
 void motion_set_paused(bool paused);  // while the camera is used for the QR scan
 motion_state_t motion_state(void);
 const char *motion_state_name(void);
