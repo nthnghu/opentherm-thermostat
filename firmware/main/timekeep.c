@@ -29,24 +29,28 @@ static void sntp_sync_cb(struct timeval *tv)
     ESP_LOGI(TAG, "NTP sync");
 }
 
-static void apply_tz(void)
-{
-    setenv("TZ", settings_get()->tz, 1);
-    tzset();
-}
-
 void timekeep_apply_settings(void)
 {
-    apply_tz();
-    settings_t c;
-    settings_copy(&c);
+    // A copy taken under the settings lock (not the live struct, which a save may be writing), on the heap: the
+    // struct is 2.5 KB and this is called from tasks with small stacks.
+    settings_t *cp = malloc(sizeof(settings_t));
+    if (!cp) {
+        return;
+    }
+    settings_copy(cp);
+    setenv("TZ", cp->tz, 1);
+    tzset();
+    bool ntp_on = cp->ntp_on;
+    char ntp_server[sizeof(cp->ntp_server)];
+    strlcpy(ntp_server, cp->ntp_server, sizeof(ntp_server));
+    free(cp);
     if (s_sntp_running) {
         esp_netif_sntp_deinit();
         s_sntp_running = false;
     }
-    if (c.ntp_on) {
+    if (ntp_on) {
         static char server[64];  // SNTP keeps the pointer
-        strlcpy(server, c.ntp_server[0] ? c.ntp_server : "pool.ntp.org", sizeof(server));
+        strlcpy(server, ntp_server[0] ? ntp_server : "pool.ntp.org", sizeof(server));
         esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(server);
         cfg.sync_cb = sntp_sync_cb;
         cfg.start = true;  // retries on its own until the network is up

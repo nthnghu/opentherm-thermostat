@@ -452,7 +452,7 @@ void mqtt_ha_dump(void)
 
 static void on_command(const char *name, const char *v)
 {
-    ESP_LOGI(TAG, "command %s = %s", name, v);
+    ESP_LOGI(TAG, "command %s = %.16s", name, v);  // the values are short words or numbers: never log more
     if (strcmp(name, "setpoint") == 0) {
         char *end;
         float c = strtof(v, &end);

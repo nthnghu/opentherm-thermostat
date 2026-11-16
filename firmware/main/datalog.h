@@ -22,6 +22,8 @@ enum {
 };
 
 // One second of input (filled by the thermostat task).
+#define DL_BACKSTEP_MAX_S 7200  // a clock step back by up to this much: wait for it to catch up
+
 typedef struct {
     int64_t epoch;               // 0 = clock not set
     bool sensor_ok;
@@ -111,6 +113,7 @@ typedef struct {
     dl_hour_t *hours;
     int nhours, hhead, hcount;
     uint32_t rec_seq, burn_seq, hour_seq;  // records added so far (histstore writes the new ones)
+    uint32_t skipped;                      // minute records left out after the clock was set back
     // Hour in progress
     uint32_t h_t;
     int h_n, h_nroom, h_nflow;

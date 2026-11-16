@@ -189,6 +189,83 @@ static void test_hours_and_restore(void)
     free(recs), free(recs2), free(burns), free(burns2), free(hours), free(hours2);
 }
 
+// The clock set back: records stay in time order (a gap for a small step, a fresh log for a large one).
+static void minute(dl_t *d, int64_t epoch_end)
+{
+    for (int t = 59; t >= 0; t--) {
+        dl_sample_t s = {.epoch = epoch_end - t, .sensor_ok = true, .room_c = 20, .target_c = 21, .heat_mode = true,
+                         .ch_allowed = true};
+        datalog_tick(d, &s);
+    }
+}
+
+static bool in_order(const dl_t *d)
+{
+    uint32_t prev = 0;
+    for (int i = 0; i < datalog_count(d); i++) {
+        dl_rec_t r;
+        if (!datalog_get(d, i, &r) || r.t <= prev) {
+            return false;
+        }
+        prev = r.t;
+    }
+    return true;
+}
+
+static void test_clock_steps(void)
+{
+    static dl_rec_t recs[200];
+    static dl_burn_t burns[8];
+    static dl_hour_t hours[50];
+    dl_t d;
+    datalog_init(&d, recs, 200, burns, 8, hours, 50);
+    int64_t t = 1790000000;
+    for (int m = 0; m < 30; m++) {
+        minute(&d, t += 60);
+    }
+    CHECK(datalog_count(&d) == 30 && in_order(&d), "30 minutes logged in order");
+
+    // NTP sets the clock back by 10 minutes: nothing is stored until it has passed the newest record
+    t -= 600;
+    for (int m = 0; m < 10; m++) {
+        minute(&d, t += 60);
+    }
+    CHECK(datalog_count(&d) == 30 && d.skipped == 10, "10 minutes left out after a 10-minute step back (%d, %u)",
+          datalog_count(&d), (unsigned)d.skipped);
+    minute(&d, t += 60);
+    CHECK(datalog_count(&d) == 31 && in_order(&d), "logging continues once the clock has caught up");
+    dl_kpi_t k;
+    datalog_kpi(&d, 1, &k);
+    CHECK(k.window_h == 1, "KPI pass works on the log with the gap");
+
+    // A forward step is just a gap
+    minute(&d, t += 3 * 3600);
+    CHECK(datalog_count(&d) == 32 && in_order(&d), "a step forward adds the next record");
+
+    // The clock had been far ahead and is corrected by a day: the old times were wrong, the log starts again
+    t -= 86400;
+    minute(&d, t += 60);
+    CHECK(datalog_count(&d) == 1 && in_order(&d), "a step back by a day starts a fresh log (%d)", datalog_count(&d));
+
+    // Records without a clock are never held back, and timed ones may follow them
+    dl_sample_t s = {.sensor_ok = true, .room_c = 20, .target_c = 21};
+    for (int i = 0; i < 60; i++) {
+        datalog_tick(&d, &s);
+    }
+    minute(&d, t += 60);
+    CHECK(datalog_count(&d) == 3, "records without a clock are stored, timed ones follow (%d)", datalog_count(&d));
+
+    // Restoring from flash applies the same rule (records replayed in the order they were written)
+    dl_t e;
+    static dl_rec_t recs2[200];
+    datalog_init(&e, recs2, 200, burns, 8, NULL, 0);
+    dl_rec_t a = {.t = 1790000600}, b = {.t = 1790000300}, c = {.t = 1790000660};
+    datalog_restore_rec(&e, &a);
+    datalog_restore_rec(&e, &b);
+    datalog_restore_rec(&e, &c);
+    CHECK(datalog_count(&e) == 2 && in_order(&e), "restore keeps the order too (%d)", datalog_count(&e));
+}
+
 static void test_alerts(void)
 {
     alert_config_t c;
@@ -278,6 +355,7 @@ int main(void)
     test_closed_loop_kpis();
     test_ring_wrap();
     test_hours_and_restore();
+    test_clock_steps();
     test_alerts();
     TEST_DONE();
 }

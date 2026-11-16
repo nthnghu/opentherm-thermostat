@@ -52,10 +52,24 @@ void datalog_init(dl_t *d, dl_rec_t *recs, int nrecs, dl_burn_t *burns, int nbur
     hour_reset(d, 0);
 }
 
-static void put_rec(dl_t *d, const dl_rec_t *r)
+// Records stay in time order. When the clock was set back (an NTP correction), a new record that is not later
+// than the newest stored one is left out until the clock has passed it: a gap as long as the step. A step back by
+// more than DL_BACKSTEP_MAX_S means the stored times were wrong (the clock had been set far ahead): those records
+// are dropped and the log starts again. The same rule applies when records are restored from flash.
+static bool put_rec(dl_t *d, const dl_rec_t *r)
 {
     if (!d->recs || d->nrecs <= 0) {
-        return;
+        return false;
+    }
+    if (r->t > 0 && d->count > 0) {
+        uint32_t last_t = d->recs[(d->head - 1 + d->nrecs) % d->nrecs].t;
+        if (last_t > 0 && r->t <= last_t) {
+            if (last_t - r->t <= DL_BACKSTEP_MAX_S) {
+                d->skipped++;
+                return false;
+            }
+            d->count = 0;
+        }
     }
     d->recs[d->head] = *r;
     d->head = (d->head + 1) % d->nrecs;
@@ -63,6 +77,7 @@ static void put_rec(dl_t *d, const dl_rec_t *r)
         d->count++;
     }
     d->rec_seq++;
+    return true;
 }
 
 static void put_burn(dl_t *d, const dl_burn_t *b)
@@ -82,6 +97,15 @@ static void put_hour(dl_t *d, const dl_hour_t *h)
 {
     if (!d->hours || d->nhours <= 0) {
         return;
+    }
+    if (h->t > 0 && d->hcount > 0) {  // time order, as for the minute records
+        uint32_t last_t = d->hours[(d->hhead - 1 + d->nhours) % d->nhours].t;
+        if (last_t > 0 && h->t <= last_t) {
+            if (last_t - h->t <= DL_BACKSTEP_MAX_S) {
+                return;
+            }
+            d->hcount = 0;
+        }
     }
     d->hours[d->hhead] = *h;
     d->hhead = (d->hhead + 1) % d->nhours;
@@ -305,8 +329,9 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
             .min_s = (uint8_t)d->min_s,
             .wh = (uint16_t)lround(fmin(d->wh, 65535)),
         };
-        put_rec(d, &r);
-        hour_add(d, &r);
+        if (put_rec(d, &r)) {
+            hour_add(d, &r);
+        }
     }
     reset_minute(d);
     return true;
@@ -370,15 +395,18 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k)
     int64_t now_t = 0;
     if (d->count) {
         dl_rec_t last;
-        datalog_get(d, d->count - 1, &last);
-        now_t = last.t;
+        if (datalog_get(d, d->count - 1, &last)) {
+            now_t = last.t;
+        }
     }
     if (now_t > 0) {
         int64_t from_t = now_t - (int64_t)lroundf(window_h * 3600);
         n = 0;
         for (int j = d->count - 1; j >= 0; j--) {
             dl_rec_t r;
-            datalog_get(d, j, &r);
+            if (!datalog_get(d, j, &r)) {
+                break;
+            }
             if (r.t <= from_t || (r.t == 0 && n > 0)) {
                 break;
             }
@@ -389,7 +417,9 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k)
     int nroom = 0, nflow = 0, nret = 0;
     for (int j = d->count - n; j < d->count; j++) {
         dl_rec_t r;
-        datalog_get(d, j, &r);
+        if (!datalog_get(d, j, &r)) {
+            continue;
+        }
         k->ch_starts += r.ch_starts;
         k->dhw_starts += r.dhw_starts;
         k->burner_h += r.flame_s / 3600.0f;

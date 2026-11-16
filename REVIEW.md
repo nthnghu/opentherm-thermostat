@@ -40,6 +40,24 @@ Date: 2026-11-16 · Commit reviewed: `795f2fe` (firmware 0.3.1) · No code was c
 | Signed firmware | Skipped for now by decision. A signing key was generated at `~/.config/thermostat-signing-key.pem` and is unused; the firmware accepts unsigned images as before |
 | Home Assistant over `https://` | Not a firmware change; depends on the HA setup |
 
+**Low findings, fixed later** (L10 left as it is by decision, until the real boiler's wiring and noise are known):
+
+| # | Fix |
+|---|---|
+| L1 | Setpoint, offset and away end time are range-checked when loaded |
+| L2 | The "save needed" time is a 32-bit value (stored in one step on this chip) |
+| L3 | The simulated-room and simulated-boiler flags are read under the lock |
+| L4 | The KPI passes run without the lock; only the results are copied in under it |
+| L5 | The time zone and NTP settings are taken from a locked copy, not the live struct |
+| L6 | No 2.5 KB settings struct on the stack: the login check copies three fields, timekeeping uses the heap |
+| L7 | `debug.c` header says the console is reachable through `/api/cmd` |
+| L8 | The PIN dots buffer is sized from the PIN buffer |
+| L9 | History stays in time order: after a clock step back by up to 2 h new records wait until the clock has caught up; a larger step back starts a fresh log; the same on restore from flash. Host test `test_clock_steps` |
+| L11 | MQTT command values are logged with at most 16 characters; the Home Assistant address is logged as "set", not in full |
+| L12 | `datalog_get()` results are checked in the KPI pass (the three analyzer warnings) |
+
+Checked: host tests (datalog suite 59 checks, 8 new); on the device a normal start, history restore, debounced save and time settings. The locking changes (L2–L5) cannot be shown by a test.
+
 Severity: **High** = can leave the house unheated, or gives control of the device to someone else. **Medium** = degrades reliability or security in a realistic case. **Low** = hardening or cleanup.
 
 Items marked *(verify)* are conclusions from reading code that I did not reproduce on the device.

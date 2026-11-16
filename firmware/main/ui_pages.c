@@ -1013,7 +1013,7 @@ static void sv_update(void);
 
 static void pin_show(void)
 {
-    char dots[16] = "";
+    char dots[sizeof(s_pin) * 2 + 1] = "";  // two characters per digit
     for (size_t i = 0; i < strlen(s_pin); i++) {
         strcat(dots, "* ");
     }

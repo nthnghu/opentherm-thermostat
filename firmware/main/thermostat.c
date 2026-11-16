@@ -27,7 +27,7 @@ static const char *TAG = "thermo";
 
 #define LOOP_MS          1000
 #define SENSOR_STALE_US  ((int64_t)THERMO_SENSOR_STALE_S * 1000000)
-#define SAVE_DELAY_US    (5LL * 1000000)
+#define SAVE_DELAY_MS    5000
 #define SENSOR_STUCK_N   150  // reads (2 s each): 5 minutes of bit-identical values
 #define SMOOTH_ALPHA     (2.0f / 30.0f)  // reading every 2 s -> ~30 s exponential average
 #define SHOW_BAND_C      0.08f           // shown temperature moves only past this from the smoothed value
@@ -36,7 +36,14 @@ static const char *TAG = "thermo";
 static SemaphoreHandle_t s_lock;
 static thermo_state_t s_st;
 static int64_t s_last_reading_us;
-static int64_t s_dirty_since_us;  // 0 = nothing to save
+// When something to save last changed, in ms since start (|1 so it is never 0 = nothing to save). 32 bits: written
+// by other tasks without the lock, which is only safe for a value this chip stores in one step.
+static volatile uint32_t s_dirty_ms;
+
+static uint32_t dirty_now(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000) | 1;
+}
 static ctrl_t s_ctrl;            // used by the thermostat task only
 static ctrl_config_t s_cfg;       // current configuration (under s_lock)
 static bool s_cfg_changed;
@@ -234,7 +241,7 @@ static void load(void)
         if (nvs_get_u8(h, "mode", &b) == ESP_OK) {
             s_st.mode = b ? THERMO_MODE_HEAT : THERMO_MODE_OFF;
         }
-        if (nvs_get_i32(h, "ofs", &v) == ESP_OK) {
+        if (nvs_get_i32(h, "ofs", &v) == ESP_OK && v >= -50 && v <= 50) {  // the setter's limits: -5..+5 K
             s_st.offset = v / 10.0f;
         }
         if (nvs_get_u8(h, "sim", &b) == ESP_OK) {
@@ -246,7 +253,9 @@ static void load(void)
             s_st.sim_room = b;
         }
         int64_t until;
-        if (nvs_get_u8(h, "away", &b) == ESP_OK && b && nvs_get_i64(h, "awayuntil", &until) == ESP_OK) {
+        // An end time must be 0 (open-ended) or a plausible date (2025..2100), not a damaged value
+        if (nvs_get_u8(h, "away", &b) == ESP_OK && b && nvs_get_i64(h, "awayuntil", &until) == ESP_OK &&
+            (until == 0 || (until > 1735689600LL && until < 4102444800LL))) {
             s_st.away = true;
             s_st.away_until = until;
         }
@@ -289,20 +298,20 @@ static bool save(void)
 
 static void mark_dirty(void)
 {
-    s_dirty_since_us = esp_timer_get_time();
+    s_dirty_ms = dirty_now();
 }
 
 static void mark_scfg_dirty(void)
 {
     s_scfg_dirty = true;
-    s_dirty_since_us = esp_timer_get_time();
+    s_dirty_ms = dirty_now();
 }
 
 static void mark_cfg_dirty(void)
 {
     s_cfg_changed = true;
     s_cfg_dirty = true;
-    s_dirty_since_us = esp_timer_get_time();
+    s_dirty_ms = dirty_now();
 }
 
 /* ---------------------------------------------------------------- boiler */
@@ -473,7 +482,10 @@ static void thermo_task(void *arg)
             }
             // Bench testing: the simulated house replaces the SHT40 temperature (humidity stays real).
             float sim_t;
-            if (s_st.sim_room && s_st.boiler_sim && otbus_sim_room(&sim_t)) {
+            LOCK();
+            bool use_sim_room = s_st.sim_room && s_st.boiler_sim;
+            UNLOCK();
+            if (use_sim_room && otbus_sim_room(&sim_t)) {
                 t = sim_t;
                 if (err != ESP_OK) {
                     h = 45;
@@ -553,7 +565,7 @@ static void thermo_task(void *arg)
             if (b.link == OTB_LINK_UP) {
                 s_boiler_auto = false;
                 s_boiler_chosen = true;
-                s_dirty_since_us = now;  // save the choice
+                s_dirty_ms = dirty_now();  // save the choice
                 ESP_LOGI(TAG, "boiler found on the OpenTherm bus: using the real boiler");
             } else if (loop >= BOILER_DETECT_S) {
                 s_boiler_auto = false;
@@ -649,10 +661,7 @@ static void thermo_task(void *arg)
             .rssi = (int8_t)s_rssi, .ot_errors = b.timeouts + b.bad,
             .cap_kw = cap, .min_kw = cap * ((b.valid & OTB_V_CAPS) ? b.min_mod_pct : 0) / 100.0f,
         };
-        if (datalog_tick(&s_dl, &ds) || loop == 0) {
-            datalog_kpi(&s_dl, 1, &s_kpi1);
-            datalog_kpi(&s_dl, 24, &s_kpi24);
-        }
+        bool kpi_due = datalog_tick(&s_dl, &ds) || loop == 0;  // computed after the lock is released, see below
         s_st.gas_kwh_total = s_dl.total_kwh;
         s_st.ch_starts_total = s_dl.total_ch_starts;
         s_st.dhw_starts_total = s_dl.total_dhw_starts;
@@ -727,6 +736,17 @@ static void thermo_task(void *arg)
         otb_flags_t sf = vo->flags;
         bool svc_save = vo->record_changed;
         UNLOCK();
+        if (kpi_due) {
+            // The KPI passes read up to a day of records. Only this task changes s_dl, so they run without the
+            // lock (the screen and the web page never wait for them); the results are copied in under it.
+            static dl_kpi_t k1, k24;
+            datalog_kpi(&s_dl, 1, &k1);
+            datalog_kpi(&s_dl, 24, &k24);
+            LOCK();
+            s_kpi1 = k1;
+            s_kpi24 = k24;
+            UNLOCK();
+        }
         histstore_sync(&s_dl);  // new minute / burn / hour to flash (only this task changes s_dl)
 
         // 3. Boiler
@@ -748,10 +768,11 @@ static void thermo_task(void *arg)
             last_hist = now;
             fine_add();
         }
-        if (s_dirty_since_us && now - s_dirty_since_us > SAVE_DELAY_US) {
-            s_dirty_since_us = 0;
+        uint32_t dirty = s_dirty_ms, now_ms = (uint32_t)(now / 1000);
+        if (dirty && (int32_t)(now_ms - dirty) > SAVE_DELAY_MS) {
+            s_dirty_ms = 0;
             if (!save()) {
-                s_dirty_since_us = now + 55LL * 1000000;  // SAVE_DELAY_US after this = one minute from now
+                s_dirty_ms = (now_ms + 55000) | 1;  // SAVE_DELAY_MS after this = one minute from now
             }
             if (s_cfg_dirty) {
                 s_cfg_dirty = false;
@@ -1020,7 +1041,7 @@ void thermo_set_alert_config(const alert_config_t *c)
     s_acfg_changed = true;
     s_acfg_dirty = true;
     UNLOCK();
-    s_dirty_since_us = esp_timer_get_time();
+    s_dirty_ms = dirty_now();
 }
 
 void thermo_get_kpi(dl_kpi_t *h1, dl_kpi_t *h24)
@@ -1176,5 +1197,5 @@ void thermo_set_svc_config(const svc_config_t *c)
     svc_set_config(&s_svc, c);
     s_svccfg_dirty = true;
     UNLOCK();
-    s_dirty_since_us = esp_timer_get_time();
+    s_dirty_ms = dirty_now();
 }

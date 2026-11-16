@@ -98,8 +98,9 @@ void settings_load(void)
     if (n && c->ha_url[n - 1] == '/') {
         c->ha_url[n - 1] = 0;
     }
-    ESP_LOGI(TAG, "Wi-Fi: %s, HA: %s, token %s, web login %s", c->ssid[0] ? c->ssid : "(none)", c->ha_url,
-             c->ha_token[0] ? "set" : "missing", c->web_hash[0] ? "set" : "not set");
+    // The log is served by /api/log: names only, no addresses or secrets
+    ESP_LOGI(TAG, "Wi-Fi: %s, HA address %s, token %s, web login %s", c->ssid[0] ? c->ssid : "(none)",
+             c->ha_url[0] ? "set" : "missing", c->ha_token[0] ? "set" : "missing", c->web_hash[0] ? "set" : "not set");
 }
 
 const settings_t *settings_get(void)
@@ -214,17 +215,22 @@ void settings_set_web_password(settings_t *s, const char *user, const char *pass
 
 bool settings_check_web_password(const char *user, const char *password)
 {
-    settings_t c;
-    settings_copy(&c);
-    if (!c.web_hash[0] || strcmp(user, c.web_user) != 0) {
+    // Only the three login fields are copied (not the 2.5 KB settings struct): this runs for every web request.
+    char web_user[sizeof(s_cfg.web_user)], salt[sizeof(s_cfg.web_salt)], want[sizeof(s_cfg.web_hash)];
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    memcpy(web_user, s_cfg.web_user, sizeof(web_user));
+    memcpy(salt, s_cfg.web_salt, sizeof(salt));
+    memcpy(want, s_cfg.web_hash, sizeof(want));
+    xSemaphoreGive(s_lock);
+    if (!want[0] || strcmp(user, web_user) != 0) {
         return false;
     }
     char h[65];
-    hash_pw(c.web_salt, password, h);
+    hash_pw(salt, password, h);
     // constant-time compare
     unsigned diff = 0;
     for (int i = 0; i < 64; i++) {
-        diff |= (unsigned)(h[i] ^ c.web_hash[i]);
+        diff |= (unsigned)(h[i] ^ want[i]);
     }
     return diff == 0;
 }

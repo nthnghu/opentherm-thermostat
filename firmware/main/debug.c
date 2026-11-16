@@ -1,4 +1,5 @@
-// Development helper on the USB serial port only (not reachable over the network):
+// Console commands. They arrive on the USB serial port and, behind the web login, through POST /api/cmd
+// (webui.c), so everything here is reachable over the network by whoever has that login:
 // "GO <screen>\n" switches screens; "SIM ..." drives the simulated boiler; "OTSTAT" prints the bus state; "CFG [name value]" lists/sets the control and schedule settings; "PROG [day text]" the weekly program; "BOOST|DHWBOOST|PASTEUR on|off", "AWAY <hours>|on|off"; "MODE heat|off", "SP <C>" for bench tests; "SNAP\n" makes the device answer "SNAP <bytes>\n" followed by the raw RGB565 frame buffer.
 #include "esp_heap_caps.h"
 #include "esp_core_dump.h"
