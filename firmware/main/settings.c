@@ -69,7 +69,7 @@ void settings_load(void)
     load_u8(h, "night_lvl", &c->night_level, 5);
     load_u16(h, "home_s", &c->home_after_s, 60);
     load_u16(h, "off_s", &c->off_after_s, 0);
-    load_u16(h, "wifiwd", &c->wifi_wd_min, 10);
+    load_u16(h, "wifiwd", &c->wifi_wd_min, 3);
     uint8_t b8;
     load_u8(h, "keep_on", &b8, 0);
     c->keep_on = b8;

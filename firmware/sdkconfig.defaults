@@ -55,3 +55,7 @@ CONFIG_LV_USE_LABEL=y
 
 # Console on the USB port (logs + the USB debug commands share the driver)
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Wi-Fi co-processor (ESP32-C6) link: 20 MHz instead of 40 MHz. At 40 MHz the C6 stopped answering
+# (SDIO tx failures) within minutes on the bench board; the thermostat needs little bandwidth.
+CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=20000
