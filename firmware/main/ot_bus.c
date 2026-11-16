@@ -25,6 +25,8 @@ static SemaphoreHandle_t s_lock;   // s_cmd, s_flags, s_pub, s_support
 static SemaphoreHandle_t s_sim_lock;
 static otb_core_t s_core;          // owned by the task
 static otb_cmd_t s_cmd;
+static int64_t s_cmd_at_us;        // when the controller last handed over a command (under s_lock)
+static bool s_cmd_stale;           // bus task only
 static otb_flags_t s_flags;
 static otb_status_t s_pub;
 static uint8_t s_support[128];
@@ -148,6 +150,7 @@ static void bus_task(void *arg)
         s_cycle_start_us = esp_timer_get_time();
         LOCK();
         s_core.cmd = s_cmd;
+        int64_t cmd_age_ms = s_cmd_at_us ? (s_cycle_start_us - s_cmd_at_us) / 1000 : 0;  // 0 = before the first one
         s_core.flags = s_flags;
         s_core.silent = s_silent;
         if (s_manual_req.pending && !s_core.manual.pending) {
@@ -155,6 +158,15 @@ static void bus_task(void *arg)
             s_manual_req.pending = false;
         }
         UNLOCK();
+        bool stale = otb_cmd_guard(&s_core.cmd, cmd_age_ms);
+        if (stale != s_cmd_stale) {
+            s_cmd_stale = stale;
+            if (stale) {
+                ESP_LOGE(TAG, "no command from the controller for %lld s: heating off", cmd_age_ms / 1000);
+            } else {
+                ESP_LOGW(TAG, "controller commands are back");
+            }
+        }
         int64_t now_ms = s_cycle_start_us / 1000;
         if (s_sim) {
             xSemaphoreTake(s_sim_lock, portMAX_DELAY);
@@ -210,6 +222,7 @@ void otbus_set_cmd(const otb_cmd_t *cmd)
 {
     LOCK();
     s_cmd = *cmd;
+    s_cmd_at_us = esp_timer_get_time();
     UNLOCK();
 }
 

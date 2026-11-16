@@ -205,13 +205,22 @@ static void save_alert_config(void)
     ESP_LOGI(TAG, "alert settings saved");
 }
 
+// True while the simulated/real boiler choice has never been saved. The thermostat then talks to the real bus
+// for BOILER_DETECT_S: a boiler that answers is kept (and saved); with no answer the simulator takes over, unsaved,
+// so the next start looks again. Lost settings on an installed thermostat therefore never end in "simulated".
+#define BOILER_DETECT_S 120
+static bool s_boiler_auto;
+static bool s_boiler_chosen;  // the choice is a real one (saved, set by hand, or a boiler answered): save() may store it
+
 static void load(void)
 {
     s_st.setpoint = 21.0f;
     s_st.mode = THERMO_MODE_HEAT;
     s_st.offset = 0.0f;
     s_st.hysteresis = 0.2f;
-    s_st.boiler_sim = true;
+    // No saved choice (new device, or the settings were lost): look for a real boiler first, see thermo_task.
+    s_st.boiler_sim = false;
+    s_boiler_auto = true;
     s_st.sim_room = false;
     nvs_handle_t h;
     if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
@@ -228,6 +237,8 @@ static void load(void)
         }
         if (nvs_get_u8(h, "sim", &b) == ESP_OK) {
             s_st.boiler_sim = b;
+            s_boiler_auto = false;
+            s_boiler_chosen = true;
         }
         if (nvs_get_u8(h, "simroom", &b) == ESP_OK) {
             s_st.sim_room = b;
@@ -253,7 +264,9 @@ static void save(void)
     nvs_set_i32(h, "sp", (int32_t)lroundf(c.setpoint * 10));
     nvs_set_u8(h, "mode", c.mode);
     nvs_set_i32(h, "ofs", (int32_t)lroundf(c.offset * 10));
-    nvs_set_u8(h, "sim", c.boiler_sim);
+    if (s_boiler_chosen) {  // a simulator that only stepped in for a missing boiler is never stored
+        nvs_set_u8(h, "sim", c.boiler_sim);
+    }
     nvs_set_u8(h, "simroom", c.sim_room);
     nvs_set_u8(h, "away", c.away);
     nvs_set_i64(h, "awayuntil", c.away_until);
@@ -470,6 +483,19 @@ static void thermo_task(void *arg)
             }
             if (back) {
                 ESP_LOGI(TAG, "%d burner starts of the last hour restored (starts-per-hour limit)", back);
+            }
+        }
+        if (s_boiler_auto) {
+            if (b.link == OTB_LINK_UP) {
+                s_boiler_auto = false;
+                s_boiler_chosen = true;
+                s_dirty_since_us = now;  // save the choice
+                ESP_LOGI(TAG, "boiler found on the OpenTherm bus: using the real boiler");
+            } else if (loop >= BOILER_DETECT_S) {
+                s_boiler_auto = false;
+                s_st.boiler_sim = true;
+                ESP_LOGW(TAG, "no boiler answered in %d s: simulated boiler (not saved; set it in Settings)",
+                         BOILER_DETECT_S);
             }
         }
         if (s_cfg_changed) {
@@ -801,6 +827,8 @@ void thermo_set_sim_room(bool on)
 void thermo_set_boiler_sim(bool sim)
 {
     LOCK();
+    s_boiler_auto = false;
+    s_boiler_chosen = true;
     s_st.boiler_sim = sim;
     s_st.boiler_online = false;
     UNLOCK();

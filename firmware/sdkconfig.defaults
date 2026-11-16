@@ -52,8 +52,10 @@ CONFIG_APP_PROJECT_VER="0.3.1"
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=256
 
-# Task watchdog also covers the thermostat task (added at runtime)
+# Task watchdog covers the thermostat and bus tasks (added at runtime). A task that hangs for 10 s restarts the
+# device: a warning in the log alone would leave the heating uncontrolled.
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_LV_USE_LABEL=y
 
 # Console on the USB port (logs + the USB debug commands share the driver)

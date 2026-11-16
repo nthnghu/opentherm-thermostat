@@ -55,6 +55,16 @@ const char *otb_link_name(otb_link_t l)
     return l == OTB_LINK_UP ? "up" : (l == OTB_LINK_LOST ? "lost" : "unknown");
 }
 
+bool otb_cmd_guard(otb_cmd_t *cmd, int64_t age_ms)
+{
+    if (age_ms <= OTB_CMD_MAX_AGE_MS) {
+        return false;
+    }
+    cmd->ch_enable = false;  // hot water stays as it was: the boiler limits the tank by itself
+    cmd->tset = 10;
+    return true;
+}
+
 void otb_init(otb_core_t *c)
 {
     memset(c, 0, sizeof(*c));

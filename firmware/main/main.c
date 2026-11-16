@@ -24,23 +24,38 @@ static const char *TAG = "main";
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
+    bool nvs_erased = false;
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_erased = true;
         nvs_flash_erase();
-        nvs_flash_init();
+        err = nvs_flash_init();
     }
     logring_start();  // keep a copy of the log for the web page (/api/log)
+    if (nvs_erased || err != ESP_OK) {
+        ESP_LOGE(TAG, "settings storage (NVS): %s%s", nvs_erased ? "was full or outdated and has been erased; " : "",
+                 err == ESP_OK ? "all settings are back at their defaults" : esp_err_to_name(err));
+    }
     settings_load();
-    ESP_ERROR_CHECK(board_display_init());
+
+    // Heating first: nothing below (display, self-test, Wi-Fi) can keep the thermostat from starting.
+    if (board_i2c_init() != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus failed: no room sensor (the sensor-loss fallback applies)");
+    }
+    sht4x_init(board_i2c_bus());
+    otbus_start();  // OpenTherm cadence from here on
+    thermo_start();
+
+    if (board_display_init() != ESP_OK) {
+        // Not even the drawing library came up (out of memory): the rest of the firmware needs it. Heating keeps
+        // running on the saved settings, without screen, Wi-Fi or web page.
+        ESP_LOGE(TAG, "user interface could not start: heating only");
+        return;
+    }
     board_backlight(settings_get()->bright);
 
     lvgl_port_lock(0);
     ui_theme_init();  // dark until the day/night logic runs
     lvgl_port_unlock();
-
-    // The thermostat starts before anything slow, so it runs even while the hardware check waits.
-    sht4x_init(board_i2c_bus());
-    otbus_start();  // OpenTherm cadence from here on
-    thermo_start();
 
     bool hw_ok = selftest_run();  // also brings up audio, camera and Wi-Fi
 

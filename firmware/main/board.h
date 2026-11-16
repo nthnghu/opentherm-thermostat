@@ -24,7 +24,9 @@
 #define AUDIO_SAMPLE_RATE  16000
 
 // I2C bus, display, touch and LVGL. Must be called first.
-esp_err_t board_display_init(void);
+esp_err_t board_i2c_init(void);      // shared bus (room sensor, touch, codec); safe to call twice
+esp_err_t board_display_init(void);  // a failed panel is not an error: the UI then runs on a display that draws nowhere
+bool board_display_ok(void);         // a real screen is attached and working
 // Backlight brightness 0 (off) .. 100 %.
 void board_backlight(int pct);
 bool board_touch_ok(void);

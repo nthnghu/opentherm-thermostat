@@ -172,6 +172,33 @@ static void test_never_answered(void)
     CHECK(o->active[ALERT_LINK], "link alert %u s after the bus gave up", k.link_s);
 }
 
+// A controller that stops handing over commands must not leave the last "heat" command on the bus forever.
+static void test_cmd_guard(void)
+{
+    otb_cmd_t c = {.ch_enable = true, .dhw_enable = true, .tset = 55, .dhw_set = 50};
+    CHECK(!otb_cmd_guard(&c, 0) && !otb_cmd_guard(&c, OTB_CMD_MAX_AGE_MS), "fresh command untouched");
+    CHECK(c.ch_enable && c.tset == 55, "fresh command keeps heating");
+    CHECK(otb_cmd_guard(&c, OTB_CMD_MAX_AGE_MS + 1), "stale command caught");
+    CHECK(!c.ch_enable && c.tset == 10, "stale: heating off, low flow setpoint");
+    CHECK(c.dhw_enable && c.dhw_set == 50, "stale: hot water left as it was");
+
+    // On the bus: the simulated boiler stops heating once the stale command is in force
+    ot_sim_t b;
+    ot_sim_init(&b, 18, 8);
+    otb_core_t k;
+    otb_init(&k);
+    int64_t now = 0;
+    k.cmd = (otb_cmd_t){.ch_enable = true, .tset = 55};
+    run(&k, &b, &now, 60);
+    bool ch;
+    ot_sim_effective_target(&b, &ch);
+    CHECK(ch, "heating while commands are fresh");
+    otb_cmd_guard(&k.cmd, OTB_CMD_MAX_AGE_MS + 1);
+    run(&k, &b, &now, 10);
+    ot_sim_effective_target(&b, &ch);
+    CHECK(!ch, "boiler told to stop after the controller went silent");
+}
+
 static void test_link_loss(void)
 {
     ot_sim_t b;
@@ -219,6 +246,7 @@ int main(void)
     test_immergas_quirks();
     test_misses_and_e31();
     test_link_loss();
+    test_cmd_guard();
     test_never_answered();
     test_plant();
     TEST_DONE();

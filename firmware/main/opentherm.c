@@ -108,7 +108,11 @@ esp_err_t ot_init(void)
     gpio_isr_handler_add(OT_PIN_IN, rx_edge, NULL);
 
     gptimer_config_t tc = {.clk_src = GPTIMER_CLK_SRC_DEFAULT, .direction = GPTIMER_COUNT_UP, .resolution_hz = 1000000};
-    ESP_ERROR_CHECK(gptimer_new_timer(&tc, &s_timer));
+    err = gptimer_new_timer(&tc, &s_timer);  // not fatal: without the bus the link alert reports it
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "timer: %s", esp_err_to_name(err));
+        return err;
+    }
     gptimer_event_callbacks_t cbs = {.on_alarm = tx_alarm};
     gptimer_register_event_callbacks(s_timer, &cbs, NULL);
     gptimer_alarm_config_t ac = {.alarm_count = 500, .reload_count = 0, .flags.auto_reload_on_alarm = true};

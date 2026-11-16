@@ -135,9 +135,12 @@ static esp_err_t touch_init(lv_display_t *disp)
     return lvgl_port_add_touch(&lt) ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t board_display_init(void)
+esp_err_t board_i2c_init(void)
 {
-    // Shared I2C bus: touch (GT911) + codec (ES8311)
+    if (s_i2c) {
+        return ESP_OK;
+    }
+    // Shared I2C bus: room sensor (SHT40), touch (GT911), codec (ES8311)
     i2c_master_bus_config_t i2c_cfg = {
         .i2c_port = I2C_NUM_0,
         .sda_io_num = BOARD_I2C_SDA,
@@ -146,8 +149,12 @@ esp_err_t board_display_init(void)
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_cfg, &s_i2c), TAG, "i2c");
+    return i2c_new_master_bus(&i2c_cfg, &s_i2c);
+}
 
+// Backlight, DSI bus and the panel. Any failure here leaves the device without a screen but running.
+static esp_err_t panel_init(esp_lcd_panel_io_handle_t *io_out, esp_lcd_panel_handle_t *panel_out)
+{
     // Backlight: LEDC PWM, off until the panel shows something
     ledc_timer_config_t lt = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -215,13 +222,50 @@ esp_err_t board_display_init(void)
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_dpi(dsi, &dpi_cfg, &panel), TAG, "dpi panel");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel), TAG, "panel init");
-    s_panel = panel;
+    *io_out = io;
+    *panel_out = panel;
+    return ESP_OK;
+}
+
+static void headless_flush(lv_display_t *d, const lv_area_t *area, uint8_t *px)
+{
+    lv_display_flush_ready(d);
+}
+
+esp_err_t board_display_init(void)
+{
+    esp_err_t ierr = board_i2c_init();
+    if (ierr != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus: %s (no room sensor, no touch)", esp_err_to_name(ierr));
+    }
+    esp_lcd_panel_io_handle_t io = NULL;
+    esp_lcd_panel_handle_t panel = NULL;
+    esp_err_t perr = panel_init(&io, &panel);
 
     // LVGL
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     port_cfg.task_stack = 8192;
     port_cfg.task_affinity = 0;  // core 1 belongs to the thermostat
     ESP_RETURN_ON_ERROR(lvgl_port_init(&port_cfg), TAG, "lvgl port");
+
+    if (perr != ESP_OK) {
+        // No screen: the thermostat, the web page and MQTT keep working. The UI is built on a display that
+        // draws nowhere, so the rest of the firmware needs no special case.
+        ESP_LOGE(TAG, "display failed (%s): running without a screen", esp_err_to_name(perr));
+        size_t sz = BOARD_LCD_H_RES * 40 * 2;
+        void *buf = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+        ESP_RETURN_ON_FALSE(buf, ESP_ERR_NO_MEM, TAG, "headless buffer");
+        lvgl_port_lock(0);
+        lv_display_t *hd = lv_display_create(BOARD_LCD_H_RES, BOARD_LCD_V_RES);
+        if (hd) {
+            lv_display_set_color_format(hd, LV_COLOR_FORMAT_RGB565);
+            lv_display_set_buffers(hd, buf, NULL, sz, LV_DISPLAY_RENDER_MODE_PARTIAL);
+            lv_display_set_flush_cb(hd, headless_flush);
+        }
+        lvgl_port_unlock();
+        return hd ? ESP_OK : ESP_ERR_NO_MEM;
+    }
+    s_panel = panel;
 
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io,
@@ -246,6 +290,11 @@ esp_err_t board_display_init(void)
         ESP_LOGE(TAG, "touch init failed; continuing without touch");
     }
     return ESP_OK;
+}
+
+bool board_display_ok(void)
+{
+    return s_panel != NULL;
 }
 
 void board_backlight(int pct)

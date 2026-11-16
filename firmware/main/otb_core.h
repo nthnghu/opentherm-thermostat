@@ -112,6 +112,11 @@ typedef struct {
 } otb_core_t;
 
 void otb_init(otb_core_t *c);
+
+// The controller hands over a command every second. When it stops (hung or crashed task), the last command must
+// not be repeated forever: after OTB_CMD_MAX_AGE_MS heating is switched off. Returns true when it stepped in.
+#define OTB_CMD_MAX_AGE_MS 10000
+bool otb_cmd_guard(otb_cmd_t *cmd, int64_t age_ms);
 // One bus cycle at time now_ms. The transfer function may return OTB_XFER_SKIP to end the cycle early.
 void otb_cycle(otb_core_t *c, int64_t now_ms, otb_xfer_fn xfer, void *ctx);
 // Queues a one-off frame; false while another one is pending.

@@ -1,6 +1,7 @@
 #include "webui.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <math.h>
@@ -195,6 +196,45 @@ static bool check_auth(httpd_req_t *req)
     httpd_resp_set_status(req, "401 Unauthorized");
     httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Thermostat\", charset=\"UTF-8\"");
     httpd_resp_sendstr(req, "Login required");
+    return false;
+}
+
+// Cross-site request check for everything that changes the device (forms, console, firmware upload). A browser
+// that is logged in sends the login along with any request, also one started by a page from another site; it
+// then names that site in Origin (or Referer). Such requests are refused. Tools without these headers (curl,
+// tools/ota.sh) still need the login and pass.
+static bool origin_host_ok(const char *url, const char *host)
+{
+    const char *p = strstr(url, "://");
+    if (!p) {
+        return false;  // "null" and anything else that is not a URL
+    }
+    p += 3;
+    size_t n = strcspn(p, "/");
+    return n == strlen(host) && strncasecmp(p, host, n) == 0;
+}
+
+static bool check_origin(httpd_req_t *req)
+{
+    char host[96] = "", from[200] = "";
+    bool have = httpd_req_get_hdr_value_str(req, "Origin", from, sizeof(from)) == ESP_OK;
+    if (!have && httpd_req_get_hdr_value_len(req, "Origin") > 0) {
+        from[0] = 0;  // too long to be ours
+        have = true;
+    }
+    if (!have) {
+        have = httpd_req_get_hdr_value_str(req, "Referer", from, sizeof(from)) == ESP_OK ||
+               httpd_req_get_hdr_value_len(req, "Referer") > 0;
+    }
+    if (!have) {
+        return true;  // not a browser
+    }
+    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK && host[0] && origin_host_ok(from, host)) {
+        return true;
+    }
+    ESP_LOGW(TAG, "refused a request that came from another site (%s)", req->uri);
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_sendstr(req, "Refused: this request was started by another web page.");
     return false;
 }
 
@@ -1047,7 +1087,7 @@ static esp_err_t get_log(httpd_req_t *req)
 
 static esp_err_t post_save(httpd_req_t *req)
 {
-    if (!check_auth(req)) {
+    if (!check_auth(req) || !check_origin(req)) {
         return ESP_OK;
     }
     char *body = read_body(req, 12288);  // the settings and import forms are a few KB
@@ -1357,7 +1397,7 @@ static esp_err_t post_save(httpd_req_t *req)
 // POST /api/cmd, body = one serial command (STAT, CFG, SVC, OTSTAT, SIM, GO ...). Answers its output as text.
 static esp_err_t post_cmd(httpd_req_t *req)
 {
-    if (!check_auth(req)) {
+    if (!check_auth(req) || !check_origin(req)) {
         return ESP_OK;
     }
     char *line = read_body(req, 200);
@@ -1393,7 +1433,7 @@ static esp_err_t post_cmd(httpd_req_t *req)
 // Wi-Fi chip, or only together with flash writes (OTA)?
 static esp_err_t post_sink(httpd_req_t *req)
 {
-    if (!check_auth(req)) {
+    if (!check_auth(req) || !check_origin(req)) {
         return ESP_OK;
     }
     char *buf = malloc(4096);
@@ -1497,7 +1537,7 @@ static esp_err_t get_version(httpd_req_t *req)
 
 static esp_err_t post_ota(httpd_req_t *req)
 {
-    if (!check_auth(req)) {
+    if (!check_auth(req) || !check_origin(req)) {
         return ESP_OK;
     }
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
