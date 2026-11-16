@@ -1344,6 +1344,37 @@ static esp_err_t post_cmd(httpd_req_t *req)
     return ESP_OK;
 }
 
+// POST /api/sink: reads the body and throws it away (no flash writes). Test: does upload traffic alone upset the
+// Wi-Fi chip, or only together with flash writes (OTA)?
+static esp_err_t post_sink(httpd_req_t *req)
+{
+    if (!check_auth(req)) {
+        return ESP_OK;
+    }
+    char *buf = malloc(4096);
+    if (!buf) {
+        return httpd_resp_send_500(req);
+    }
+    size_t left = req->content_len, got = 0;
+    int64_t t0 = esp_timer_get_time();
+    while (left > 0) {
+        int r = httpd_req_recv(req, buf, left < 4096 ? left : 4096);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (r <= 0) {
+            break;
+        }
+        left -= (size_t)r;
+        got += (size_t)r;
+    }
+    free(buf);
+    double s = (esp_timer_get_time() - t0) / 1e6;
+    ESP_LOGI(TAG, "sink: %u bytes in %.1f s", (unsigned)got, s);
+    sendf(req, "sink: %u bytes in %.1f s (%.0f KB/s)\n", (unsigned)got, s, s > 0 ? got / 1024.0 / s : 0);
+    return ESP_OK;
+}
+
 // GET /api/log: the last 64 KB of the device log (oldest first).
 static esp_err_t get_devlog(httpd_req_t *req)
 {
@@ -1513,6 +1544,7 @@ esp_err_t webui_start(void)
         {.uri = "/ota", .method = HTTP_POST, .handler = post_ota},
         {.uri = "/api/cmd", .method = HTTP_POST, .handler = post_cmd},
         {.uri = "/api/log", .method = HTTP_GET, .handler = get_devlog},
+        {.uri = "/api/sink", .method = HTTP_POST, .handler = post_sink},
         {.uri = "/api/screen.bmp", .method = HTTP_GET, .handler = get_screen},
         {.uri = "/api/version", .method = HTTP_GET, .handler = get_version},
     };
