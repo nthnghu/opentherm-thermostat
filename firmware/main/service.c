@@ -85,7 +85,7 @@ static const struct {
      "Test 8. Writes the tank setpoint (ID 56) and max CH setpoint (ID 57) by a few degrees, reads back, restores. "
      "About 30 s, no burn."},
     {"setpoint", "Which setpoint it heats to",
-     "Test 7. ID 57 = 60, then ID 1 = 30, 45, 40 (svc_step_min each); compares the flow. Burns gas, ~30 min."},
+     "Test 7. ID 57 = 60, then ID 1 = 30, 45, 40 (each for the 'Setpoint test: step length' setting); compares the flow. Burns gas, ~30 min."},
     {"ch_off", "CH-off semantics",
      "Tests 9+15. During a burn clears the CH bit with ID 1 kept, then with ID 1 = 10; times the pump post-run. "
      "Burns gas, ~10 min."},
@@ -93,12 +93,12 @@ static const struct {
      "Test 10. During a burn writes ID 14 = 30, 100, 0 % and watches ID 17. Burns gas, ~12 min."},
     {"min_fire", "Minimum-fire flow (OPV)",
      "Test 12. Holds TSet = flow - 3 at minimum modulation until the flow is stable. Use a mild day with all "
-     "radiators open. Burns gas, up to svc_opv_max_min."},
+     "radiators open. Burns gas, up to the 'Min-fire test: give up after' setting."},
     {"cutout", "Cut-out, anti-cycle, ramp",
      "Tests 13+14. Lowers TSet below the flow until the burner stops, then asks for heat and times re-ignition "
      "and the ramp to full power. Burns gas, ~15 min."},
     {"comm_loss", "Comm loss (E31)",
-     "Tests 18+20. Stays silent for svc_silence_s, then checks E31 and whether heating works again. The boiler "
+     "Tests 18+20. Stays silent for the 'Comm-loss test: silence' setting, then checks E31 and whether heating works again. The boiler "
      "may need a power cycle afterwards. Needs confirmation."},
 };
 

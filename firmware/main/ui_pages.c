@@ -11,6 +11,7 @@
 #include "ui_theme.h"
 #include "thermostat.h"
 #include "cfgall.h"
+#include "cfgtext.h"
 #include "settings.h"
 #include "timekeep.h"
 
@@ -72,35 +73,104 @@ static void back_cb(lv_event_t *e)
     lv_screen_load(s_thermo_scr);
 }
 
-// Friendly text for a setting value.
+// Friendly text for a setting value ("2 °C", "On", "Time windows", "1 h 30 min").
 static void pretty(const ct_field_t *f, const char *v, char *out, size_t size)
 {
-    if (f->type == CT_BOOL) {
-        snprintf(out, size, "%s", strcmp(v, "0") ? "On" : "Off");
-    } else if (strcmp(f->name, "dhw_mode") == 0) {
-        static const char *n[] = {"Always", "Windows", "Off"};
-        int k = atoi(v);
-        snprintf(out, size, "%s", k >= 0 && k <= 2 ? n[k] : v);
-    } else if (strcmp(f->name, "loss_mode") == 0) {
-        static const char *n[] = {"Keep last", "Heating off", "Fixed flow"};
-        int k = atoi(v);
-        snprintf(out, size, "%s", k >= 0 && k <= 2 ? n[k] : v);
-    } else if (strcmp(f->name, "strategy") == 0) {
-        snprintf(out, size, "%s", atoi(v) ? "PI" : "On/off");
-    } else if (strcmp(f->name, "pasteur_day") == 0) {
-        int k = atoi(v);
-        snprintf(out, size, "%s", k >= 0 && k < 7 ? DAYS[k] : v);
-    } else if (f->type == CT_FLOAT) {
-        float x = strtof(v, NULL);
-        snprintf(out, size, fabsf(x - roundf(x)) < 0.005f ? "%.0f" : (fabsf(x * 10 - roundf(x * 10)) < 0.05f ? "%.1f" : "%.2f"), x);
-    } else {
-        snprintf(out, size, "%s", v);
+    cfgtext_format(f, v, out, size);
+}
+
+static const cfgtext_t *text_of(int idx)
+{
+    const ct_field_t *f = cfgall_field(idx, NULL);
+    return f ? cfgtext_get(f->name) : NULL;
+}
+
+static const char *title_of(int idx)
+{
+    const cfgtext_t *t = text_of(idx);
+    return t ? t->title : cfgall_field(idx, NULL)->name;
+}
+
+// False when the setting this one belongs to is off (or set to another choice): shown dimmed.
+static bool in_use(const cfgtext_t *t)
+{
+    char pn[32], v[24];
+    int pv;
+    if (!cfgtext_parent(t, pn, sizeof(pn), &pv)) {
+        return true;
     }
+    int k = cfgall_find(pn);
+    return k < 0 || !cfgall_get(k, v, sizeof(v)) || atoi(v) == pv;
+}
+
+// "Used only while 'Hot water' is 'Time windows'."
+static void parent_note(const cfgtext_t *t, char *out, size_t size)
+{
+    char pn[32];
+    int pv;
+    out[0] = 0;
+    if (!cfgtext_parent(t, pn, sizeof(pn), &pv)) {
+        return;
+    }
+    const cfgtext_t *p = cfgtext_get(pn);
+    int k = cfgall_find(pn);
+    if (!p || k < 0) {
+        return;
+    }
+    char raw[8], val[32];
+    snprintf(raw, sizeof(raw), "%d", pv);
+    pretty(cfgall_field(k, NULL), raw, val, sizeof(val));
+    snprintf(out, size, "Used only while '%s' is '%s'.", p->title, val);
+}
+
+// A list row: title (left), value (right), one-line description below. Returns the value label.
+static lv_obj_t *setting_row(lv_obj_t *parent, int idx, int x, int y, int w, lv_event_cb_t cb, void *user)
+{
+    const cfgtext_t *t = text_of(idx);
+    lv_obj_t *b = lv_button_create(parent);
+    if (y >= 0) {
+        lv_obj_set_pos(b, x, y);
+    } else {
+        lv_obj_set_style_margin_left(b, x, 0);
+    }
+    lv_obj_set_size(b, w, 64);
+    lv_obj_set_style_bg_color(b, ui_c(UI_SURFACE), 0);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
+    lv_obj_t *n = lv_label_create(b);
+    lv_obj_set_style_text_color(n, ui_c(UI_TEXT), 0);
+    lv_label_set_text(n, title_of(idx));
+    lv_obj_set_pos(n, 12, 8);
+    lv_obj_t *d = lv_label_create(b);
+    lv_obj_set_style_text_font(d, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(d, ui_c(UI_MUTED), 0);
+    lv_obj_set_width(d, w - 24);
+    lv_label_set_long_mode(d, LV_LABEL_LONG_DOT);
+    lv_label_set_text(d, t ? t->brief : "");
+    lv_obj_set_pos(d, 12, 38);
+    lv_obj_t *v = lv_label_create(b);
+    lv_obj_set_style_text_color(v, ui_c(UI_VALUE), 0);
+    lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -12, 8);
+    return v;
+}
+
+// Updates a row's value and dims it while the setting is not in use.
+static void row_refresh(lv_obj_t *val, int idx)
+{
+    char v[24], p[32];
+    if (!cfgall_get(idx, v, sizeof(v))) {
+        return;
+    }
+    pretty(cfgall_field(idx, NULL), v, p, sizeof(p));
+    lv_label_set_text(val, p);
+    const cfgtext_t *t = text_of(idx);
+    lv_obj_set_style_opa(lv_obj_get_parent(val), !t || in_use(t) ? LV_OPA_COVER : LV_OPA_50, 0);
 }
 
 /* ------------------------------------------------------- field editor */
 
-static lv_obj_t *s_fe_scr, *s_fe_name, *s_fe_help, *s_fe_val, *s_fe_table;
+static lv_obj_t *s_fe_scr, *s_fe_group, *s_fe_name, *s_fe_help, *s_fe_val, *s_fe_desc, *s_fe_info, *s_fe_btn[2];
 static lv_obj_t *s_fe_return;
 static int s_fe_idx = -1;
 static char s_fe_cur[24];
@@ -109,18 +179,33 @@ static void (*s_fe_done)(void);
 static void fe_show(void)
 {
     const ct_field_t *f = cfgall_field(s_fe_idx, NULL);
+    const cfgtext_t *t = cfgtext_get(f->name);
     char p[32];
     pretty(f, s_fe_cur, p, sizeof(p));
     lv_label_set_text(s_fe_val, p);
+    int k = atoi(s_fe_cur);
+    lv_label_set_text(s_fe_desc, t && t->opts && k >= 0 && k < t->nopts ? t->opts[k].desc : "");
+    if (f->type == CT_BOOL) {
+        bool on = k != 0;
+        lv_obj_set_style_bg_color(s_fe_btn[0], ui_c(on ? 0x37474F : 0x1565C0), 0);
+        lv_obj_set_style_bg_color(s_fe_btn[1], ui_c(on ? 0x2E7D32 : 0x37474F), 0);
+    } else {
+        lv_obj_set_style_bg_color(s_fe_btn[0], ui_c(0x1565C0), 0);
+        lv_obj_set_style_bg_color(s_fe_btn[1], ui_c(0xD84315), 0);
+    }
 }
 
 static void fe_step_cb(lv_event_t *e)
 {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
     const ct_field_t *f = cfgall_field(s_fe_idx, NULL);
-    char n[24];
-    ct_step_value(f, s_fe_cur, dir, n, sizeof(n));
-    strlcpy(s_fe_cur, n, sizeof(s_fe_cur));
+    if (f->type == CT_BOOL) {
+        strlcpy(s_fe_cur, dir > 0 ? "1" : "0", sizeof(s_fe_cur));
+    } else {
+        char n[24];
+        ct_step_value(f, s_fe_cur, dir, n, sizeof(n));
+        strlcpy(s_fe_cur, n, sizeof(s_fe_cur));
+    }
     fe_show();
 }
 
@@ -136,7 +221,7 @@ static void fe_save_cb(lv_event_t *e)
 {
     const ct_field_t *f = cfgall_field(s_fe_idx, NULL);
     if (!cfgall_set(f->name, s_fe_cur)) {
-        lv_label_set_text(s_fe_val, "refused");
+        lv_label_set_text(s_fe_desc, "Not accepted, please try another value");
         return;
     }
     fe_close();
@@ -149,44 +234,76 @@ static void fe_cancel_cb(lv_event_t *e)
 
 static void open_field(int idx, lv_obj_t *ret, void (*done)(void))
 {
-    cfg_table_t t;
-    const ct_field_t *f = cfgall_field(idx, &t);
+    cfg_table_t tb;
+    const ct_field_t *f = cfgall_field(idx, &tb);
     if (!f) {
         return;
     }
+    const cfgtext_t *t = cfgtext_get(f->name);
     if (!s_fe_scr) {
         lv_obj_t *c;
         s_fe_scr = screen("Setting", &c, fe_cancel_cb);
-        s_fe_table = label(c, "", 20, 12, 440, UI_MUTED, NULL);
-        s_fe_name = label(c, "", 20, 40, 440, UI_TEXT, &lv_font_montserrat_28);
-        s_fe_help = label(c, "", 20, 86, 440, UI_MUTED, NULL);
-        s_fe_val = label(c, "", 0, 230, 0, UI_VALUE, &lv_font_montserrat_48);
+        s_fe_group = label(c, "", 20, 8, 440, UI_MUTED, &lv_font_montserrat_14);
+        s_fe_name = label(c, "", 20, 28, 440, UI_TEXT, &lv_font_montserrat_28);
+        s_fe_help = label(c, "", 20, 72, 440, UI_CARD_TEXT, NULL);
+        s_fe_val = label(c, "", 0, 290, 0, UI_VALUE, &lv_font_montserrat_40);
         lv_obj_set_width(s_fe_val, 480);
         lv_obj_set_style_text_align(s_fe_val, LV_TEXT_ALIGN_CENTER, 0);
+        s_fe_desc = label(c, "", 20, 342, 440, UI_MUTED, NULL);
+        lv_obj_set_style_text_align(s_fe_desc, LV_TEXT_ALIGN_CENTER, 0);
         for (int k = 0; k < 2; k++) {
-            lv_obj_t *b = button(c, k ? LV_SYMBOL_PLUS : LV_SYMBOL_MINUS, k ? 0xD84315 : 0x1565C0, fe_step_cb,
-                                 (void *)(intptr_t)(k ? 1 : -1), k ? 300 : 20, 320, 160, 90);
-            lv_obj_add_event_cb(b, fe_step_cb, LV_EVENT_LONG_PRESSED_REPEAT, (void *)(intptr_t)(k ? 1 : -1));
-            lv_obj_set_style_text_font(lv_obj_get_child(b, 0), &lv_font_montserrat_40, 0);
+            s_fe_btn[k] = button(c, "", k ? 0xD84315 : 0x1565C0, fe_step_cb, (void *)(intptr_t)(k ? 1 : -1),
+                                 k ? 300 : 20, 410, 160, 84);
+            lv_obj_add_event_cb(s_fe_btn[k], fe_step_cb, LV_EVENT_LONG_PRESSED_REPEAT, (void *)(intptr_t)(k ? 1 : -1));
         }
-        button(c, "Cancel", 0x37474F, fe_cancel_cb, NULL, 20, 560, 210, 72);
-        button(c, LV_SYMBOL_OK " Save", 0x2E7D32, fe_save_cb, NULL, 250, 560, 210, 72);
+        s_fe_info = label(c, "", 20, 510, 440, UI_FAINT, NULL);
+        lv_obj_set_style_text_align(s_fe_info, LV_TEXT_ALIGN_CENTER, 0);
+        button(c, "Cancel", 0x37474F, fe_cancel_cb, NULL, 20, 590, 210, 72);
+        button(c, LV_SYMBOL_OK " Save", 0x2E7D32, fe_save_cb, NULL, 250, 590, 210, 72);
     }
     s_fe_idx = idx;
     s_fe_return = ret;
     s_fe_done = done;
     cfgall_get(idx, s_fe_cur, sizeof(s_fe_cur));
-    char range[64];
+
+    lv_label_set_text(s_fe_group, t ? cfgtext_group_title(t->group) : cfgall_table_title(tb));
+    lv_label_set_text(s_fe_name, t ? t->title : f->name);
+    char help[420], note[96];
+    parent_note(t, note, sizeof(note));
+    snprintf(help, sizeof(help), "%s%s%s", t ? t->help : f->help, note[0] ? "\n\n" : "", note);
+    lv_label_set_text(s_fe_help, help);
+
+    // Buttons: Off / On, previous / next choice, or minus / plus
+    const lv_font_t *big = &lv_font_montserrat_40;
     if (f->type == CT_BOOL) {
-        snprintf(range, sizeof(range), "%s  -  on / off", cfgall_table_title(t));
-    } else if (f->type == CT_TIME || f->type == CT_TIME_OPT) {
-        snprintf(range, sizeof(range), "%s  -  time of day", cfgall_table_title(t));
+        set_btn_text(s_fe_btn[0], "Off");
+        set_btn_text(s_fe_btn[1], "On");
+        big = &lv_font_montserrat_28;
+    } else if (t && t->opts) {
+        set_btn_text(s_fe_btn[0], LV_SYMBOL_LEFT);
+        set_btn_text(s_fe_btn[1], LV_SYMBOL_RIGHT);
     } else {
-        snprintf(range, sizeof(range), "%s  -  %g to %g", cfgall_table_title(t), f->min, f->max);
+        set_btn_text(s_fe_btn[0], LV_SYMBOL_MINUS);
+        set_btn_text(s_fe_btn[1], LV_SYMBOL_PLUS);
     }
-    lv_label_set_text(s_fe_table, range);
-    lv_label_set_text(s_fe_name, f->name);
-    lv_label_set_text(s_fe_help, f->help);
+    for (int k = 0; k < 2; k++) {
+        lv_obj_set_style_text_font(lv_obj_get_child(s_fe_btn[k], 0), big, 0);
+    }
+
+    char range[64], def[24], defp[32], info[128];
+    cfgtext_range(f, range, sizeof(range));
+    cfgall_get_default(idx, def, sizeof(def));
+    pretty(f, def, defp, sizeof(defp));
+    if (range[0]) {
+        snprintf(info, sizeof(info), "Range %s\nFactory setting: %s", range, defp);
+    } else if (f->type == CT_TIME_OPT) {
+        snprintf(info, sizeof(info), "Steps of 15 min, below 00:00 = not used\nFactory setting: %s", defp);
+    } else if (f->type == CT_TIME) {
+        snprintf(info, sizeof(info), "Steps of 15 min\nFactory setting: %s", defp);
+    } else {
+        snprintf(info, sizeof(info), "Factory setting: %s", defp);
+    }
+    lv_label_set_text(s_fe_info, info);
     fe_show();
     lv_screen_load(s_fe_scr);
 }
@@ -207,6 +324,22 @@ void ui_pages_boiler(lv_obj_t *p)
         s_bl_val[i] = label(p, "-", 190, 66 + i * 40, 280, UI_TEXT, NULL);
     }
     s_bl_alerts = label(p, "", 20, 66 + BL_ROWS * 40 + 10, 440, UI_OK, NULL);
+}
+
+// Plain words for the controller state and the hot water reason (the internal names go to MQTT and logs).
+static const char *ctrl_words(ctrl_state_t s)
+{
+    static const char *const n[] = {"idle",          "on/off heating",     "modulating",      "keeping small flame",
+                                    "pulsing: burn", "pulsing: pause", "sensor lost: gentle heat", "frost protection"};
+    return s <= CTRL_ST_FROST ? n[s] : "?";
+}
+
+static const char *dhw_words(sched_dhw_reason_t r)
+{
+    static const char *const n[] = {"allowed",      "allowed (window)",   "on (tank too cold)", "on (after heating)",
+                                    "on (boost)",   "on (hot cycle)",     "allowed (no clock)", "off (outside windows)",
+                                    "off",          "off (away)"};
+    return r <= DHW_R_AWAY ? n[r] : "?";
 }
 
 void ui_pages_boiler_update(void)
@@ -230,11 +363,11 @@ void ui_pages_boiler_update(void)
         lv_label_set_text(s_bl_val[5], "not reported");
     }
     if (st.tank_valid) {
-        lv_label_set_text_fmt(s_bl_val[6], "%.1f °C, hot water %s", st.tank_c, sched_dhw_reason_name(st.dhw_reason));
+        lv_label_set_text_fmt(s_bl_val[6], "%.1f °C, %s", st.tank_c, dhw_words(st.dhw_reason));
     } else {
         lv_label_set_text(s_bl_val[6], "not reported");
     }
-    lv_label_set_text_fmt(s_bl_val[7], "%s, asks %.1f °C", ctrl_state_name(st.ctrl_state), st.req_c);
+    lv_label_set_text_fmt(s_bl_val[7], "%s, wants %.1f °C", ctrl_words(st.ctrl_state), st.req_c);
     lv_label_set_text_fmt(s_bl_val[8], "%u last hour, %.1f/h (24 h)", k1.ch_starts, k24.ch_starts_h);
     if (k24.ch_burns) {
         lv_label_set_text_fmt(s_bl_val[9], "median %.0f min, %.0f %% short", k24.median_burn_min, k24.short_pct);
@@ -400,9 +533,11 @@ void ui_pages_schedule_update(void)
     if (st.tank_valid) {
         snprintf(tank, sizeof(tank), "tank %.1f °C", st.tank_c);
     }
-    lv_label_set_text_fmt(s_sched_info, "Hot water %s (%s), %s.\nPasteurisation: %s%s.", st.dhw_enable ? "enabled" : "off",
-                          sched_dhw_reason_name(st.dhw_reason), tank, c.pasteur_on ? "weekly, last " : "off",
-                          c.pasteur_on ? sched_pasteur_name(st.pasteur_result) : "");
+    static const char *const pres[] = {"not run yet", "finished",        "timed out", "boiler ignored the temperature",
+                                       "no tank reading", "no tank temperature", "cancelled"};
+    const char *pr = st.pasteur_result <= PASTEUR_CANCELLED ? pres[st.pasteur_result] : "?";
+    lv_label_set_text_fmt(s_sched_info, "Hot water %s, %s.\nWeekly hot cycle: %s%s.", dhw_words(st.dhw_reason), tank,
+                          c.pasteur_on ? "on, last " : "off", c.pasteur_on ? pr : "");
 }
 
 /* --------------------------------------------------------- day editor */
@@ -557,24 +692,75 @@ static void day_editor_open(int d)
     lv_screen_load(s_de_scr);
 }
 
-/* ---------------------------------------------------- advanced list */
+/* ------------------------------------------------- all settings by topic */
 
-static lv_obj_t *s_adv_scr, **s_adv_val;
-static int s_adv_n;
+#define GRP_MAX 24
+static lv_obj_t *s_adv_scr, *s_grp_scr, *s_grp_title, *s_grp_list, *s_grp_val[GRP_MAX];
+static int s_grp_idx[GRP_MAX], s_grp_n;
 
-static void adv_refresh(void)
+static void grp_refresh(void)
 {
-    char v[24], p[32];
-    for (int i = 0; i < s_adv_n; i++) {
-        cfgall_get(i, v, sizeof(v));
-        pretty(cfgall_field(i, NULL), v, p, sizeof(p));
-        lv_label_set_text(s_adv_val[i], p);
+    for (int i = 0; i < s_grp_n; i++) {
+        row_refresh(s_grp_val[i], s_grp_idx[i]);
     }
 }
 
-static void adv_row_cb(lv_event_t *e)
+static void grp_row_cb(lv_event_t *e)
 {
-    open_field((int)(intptr_t)lv_event_get_user_data(e), s_adv_scr, adv_refresh);
+    open_field(s_grp_idx[(int)(intptr_t)lv_event_get_user_data(e)], s_grp_scr, grp_refresh);
+}
+
+static void grp_back_cb(lv_event_t *e)
+{
+    lv_screen_load(s_adv_scr);
+}
+
+static void group_open(cfg_group_t g)
+{
+    if (!s_grp_scr) {
+        lv_obj_t *c;
+        s_grp_scr = screen("Settings", &c, grp_back_cb);
+        s_grp_list = lv_obj_create(c);
+        lv_obj_set_size(s_grp_list, 480, UI_CONTENT_H);
+        lv_obj_set_style_bg_opa(s_grp_list, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(s_grp_list, 0, 0);
+        lv_obj_set_style_pad_hor(s_grp_list, 20, 0);
+        lv_obj_set_style_pad_ver(s_grp_list, 12, 0);
+        lv_obj_set_flex_flow(s_grp_list, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(s_grp_list, 8, 0);
+    }
+    lv_obj_clean(s_grp_list);
+    s_grp_title = lv_label_create(s_grp_list);
+    lv_obj_set_style_text_color(s_grp_title, ui_c(UI_TEXT), 0);
+    lv_obj_set_style_text_font(s_grp_title, &lv_font_montserrat_28, 0);
+    lv_label_set_text(s_grp_title, cfgtext_group_title(g));
+    lv_obj_t *hint = lv_label_create(s_grp_list);
+    lv_obj_set_width(hint, 440);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(hint, ui_c(UI_MUTED), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+    lv_label_set_text(hint, "Tap a setting to see what it does and change it. Indented settings belong to the one "
+                            "above them; dimmed ones are not in use now.");
+    s_grp_n = 0;
+    for (int i = 0; i < cfgtext_count() && s_grp_n < GRP_MAX; i++) {
+        const cfgtext_t *t = cfgtext_at(i);
+        int k = t->group == g ? cfgall_find(t->name) : -1;
+        if (k < 0) {
+            continue;
+        }
+        int indent = t->parent ? 24 : 0;
+        s_grp_idx[s_grp_n] = k;
+        s_grp_val[s_grp_n] = setting_row(s_grp_list, k, indent, -1, 440 - indent, grp_row_cb, (void *)(intptr_t)s_grp_n);
+        s_grp_n++;
+    }
+    grp_refresh();
+    lv_obj_scroll_to_y(s_grp_list, 0, LV_ANIM_OFF);
+    lv_screen_load(s_grp_scr);
+}
+
+static void adv_group_cb(lv_event_t *e)
+{
+    group_open((cfg_group_t)(intptr_t)lv_event_get_user_data(e));
 }
 
 static void advanced_open(void)
@@ -582,39 +768,29 @@ static void advanced_open(void)
     if (!s_adv_scr) {
         lv_obj_t *c;
         s_adv_scr = screen("All settings", &c, NULL);
-        lv_obj_t *list = lv_obj_create(c);
-        lv_obj_set_size(list, 480, UI_CONTENT_H);
-        lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(list, 0, 0);
-        lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_row(list, 6, 0);
-        s_adv_n = cfgall_count();
-        s_adv_val = calloc(s_adv_n, sizeof(lv_obj_t *));
-        int last_t = -1;
-        for (int i = 0; i < s_adv_n; i++) {
-            cfg_table_t t;
-            const ct_field_t *f = cfgall_field(i, &t);
-            if ((int)t != last_t) {
-                lv_obj_t *h = lv_label_create(list);
-                lv_obj_set_style_text_color(h, ui_c(UI_VALUE), 0);
-                lv_obj_set_style_pad_top(h, 10, 0);
-                lv_label_set_text(h, cfgall_table_title(t));
-                last_t = (int)t;
-            }
-            lv_obj_t *b = lv_button_create(list);
-            lv_obj_set_size(b, 440, 48);
+        for (int g = 0; g < CG_COUNT; g++) {
+            lv_obj_t *b = lv_button_create(c);
+            lv_obj_set_pos(b, 20, 12 + g * 74);
+            lv_obj_set_size(b, 440, 66);
             lv_obj_set_style_bg_color(b, ui_c(UI_SURFACE), 0);
             lv_obj_set_style_radius(b, 8, 0);
-            lv_obj_add_event_cb(b, adv_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+            lv_obj_set_style_pad_all(b, 0, 0);
+            lv_obj_add_event_cb(b, adv_group_cb, LV_EVENT_CLICKED, (void *)(intptr_t)g);
             lv_obj_t *n = lv_label_create(b);
-            lv_label_set_text(n, f->name);
-            lv_obj_align(n, LV_ALIGN_LEFT_MID, 4, 0);
-            s_adv_val[i] = lv_label_create(b);
-            lv_obj_set_style_text_color(s_adv_val[i], ui_c(UI_VALUE), 0);
-            lv_obj_align(s_adv_val[i], LV_ALIGN_RIGHT_MID, -4, 0);
+            lv_obj_set_style_text_color(n, ui_c(UI_TEXT), 0);
+            lv_label_set_text(n, cfgtext_group_title(g));
+            lv_obj_set_pos(n, 12, 9);
+            lv_obj_t *d = lv_label_create(b);
+            lv_obj_set_style_text_font(d, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(d, ui_c(UI_MUTED), 0);
+            lv_label_set_text(d, cfgtext_group_brief(g));
+            lv_obj_set_pos(d, 12, 39);
+            lv_obj_t *a = lv_label_create(b);
+            lv_obj_set_style_text_color(a, ui_c(UI_MUTED), 0);
+            lv_label_set_text(a, LV_SYMBOL_RIGHT);
+            lv_obj_align(a, LV_ALIGN_RIGHT_MID, -12, 0);
         }
     }
-    adv_refresh();
     lv_screen_load(s_adv_scr);
 }
 
@@ -743,7 +919,7 @@ static void sv_start_cb(lv_event_t *e)
         return;
     }
     if (s_sv_sel == SVC_COMM_LOSS) {
-        lv_obj_t *box = lv_msgbox_create(NULL);
+        lv_obj_t *box = lv_msgbox_create(s_sv_scr);  // on the service screen: gone when the screen changes
         lv_msgbox_add_title(box, "Comm-loss test");
         lv_msgbox_add_text(box, "The thermostat goes silent. The boiler may then refuse heating until it is "
                                 "power-cycled. Start only if you can get to the boiler.");
@@ -893,8 +1069,8 @@ static void service_open(void)
 
 /* ----------------------------------------------------------- settings */
 
-static const char *EVERYDAY[] = {"prog_on", "eco_setback_k", "summer_on", "dhw_mode", "loss_mode", "frost_on",
-                                 "frost_room_c", "ufh_on"};
+static const char *EVERYDAY[] = {"prog_on", "eco_setback_k", "dhw_mode", "summer_on", "frost_on", "frost_room_c",
+                                 "loss_mode", "ufh_on"};
 #define N_EVERYDAY ((int)(sizeof(EVERYDAY) / sizeof(EVERYDAY[0])))
 static lv_obj_t *s_ev_val[N_EVERYDAY];
 
@@ -915,37 +1091,22 @@ static void svc_cb(lv_event_t *e)
 
 void ui_pages_settings(lv_obj_t *p)
 {
-    label(p, "Settings", 20, 16, 0, UI_TEXT, &lv_font_montserrat_28);
-    static const char *titles[N_EVERYDAY] = {"Weekly program",     "Eco setback (K)",   "Summer mode (auto)",
-                                             "Hot water",          "Room sensor lost",  "Frost protection",
-                                             "Frost limit (°C)",   "Underfloor floor"};
+    label(p, "Settings", 20, 12, 0, UI_TEXT, &lv_font_montserrat_28);
+    label(p, "Tap a row to see what it does and change it.", 20, 50, 440, UI_MUTED, &lv_font_montserrat_14);
     for (int i = 0; i < N_EVERYDAY; i++) {
-        lv_obj_t *b = lv_button_create(p);
-        lv_obj_set_pos(b, 20, 64 + i * 58);
-        lv_obj_set_size(b, 440, 50);
-        lv_obj_set_style_bg_color(b, ui_c(UI_SURFACE), 0);
-        lv_obj_set_style_radius(b, 8, 0);
-        lv_obj_add_event_cb(b, ev_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        lv_obj_t *n = lv_label_create(b);
-        lv_label_set_text(n, titles[i]);
-        lv_obj_align(n, LV_ALIGN_LEFT_MID, 4, 0);
-        s_ev_val[i] = lv_label_create(b);
-        lv_obj_set_style_text_color(s_ev_val[i], ui_c(UI_VALUE), 0);
-        lv_obj_align(s_ev_val[i], LV_ALIGN_RIGHT_MID, -4, 0);
+        int k = cfgall_find(EVERYDAY[i]);
+        s_ev_val[i] = setting_row(p, k, 20, 76 + i * 70, 440, ev_cb, (void *)(intptr_t)i);
     }
-    button(p, LV_SYMBOL_LIST " All settings", 0x37474F, adv_cb, NULL, 20, 544, 212, 64);
-    button(p, LV_SYMBOL_SETTINGS " Service", 0x6A1B9A, svc_cb, NULL, 248, 544, 212, 64);
-    label(p, "The same settings are on the web page, with export and import.", 20, 624, 440, UI_FAINT, NULL);
+    button(p, LV_SYMBOL_LIST " All settings", 0x37474F, adv_cb, NULL, 20, 642, 212, 60);
+    button(p, LV_SYMBOL_SETTINGS " Service", 0x6A1B9A, svc_cb, NULL, 248, 642, 212, 60);
 }
 
 void ui_pages_settings_update(void)
 {
-    char v[24], pr[32];
     for (int i = 0; i < N_EVERYDAY; i++) {
         int k = cfgall_find(EVERYDAY[i]);
-        if (k >= 0 && cfgall_get(k, v, sizeof(v))) {
-            pretty(cfgall_field(k, NULL), v, pr, sizeof(pr));
-            lv_label_set_text(s_ev_val[i], pr);
+        if (k >= 0) {
+            row_refresh(s_ev_val[i], k);
         }
     }
 }
@@ -963,6 +1124,8 @@ void ui_pages_debug(const char *what)
         open_field(cfgall_find(what + 5), s_thermo_scr, NULL);
     } else if (strcmp(what, "advanced") == 0) {
         advanced_open();
+    } else if (strncmp(what, "group ", 6) == 0) {
+        group_open((cfg_group_t)(atoi(what + 6) % CG_COUNT));
     } else if (strcmp(what, "service") == 0) {
         service_open();
     } else if (strncmp(what, "day ", 4) == 0) {

@@ -287,8 +287,14 @@ static void idle_cb(lv_timer_t *t)
     const settings_t *c = settings_get();
     uint32_t idle_s = lv_display_get_inactive_time(NULL) / 1000;
 
-    if (c->home_after_s && idle_s >= c->home_after_s && !s_busy && lv_screen_active() != s_apps[APP_THERMO]) {
-        ui_go_thermostat();
+    // Back to the thermostat's main page: from another app, from an editor screen, or from pages 2-5
+    if (c->home_after_s && idle_s >= c->home_after_s && !s_busy) {
+        if (lv_screen_active() != s_apps[APP_THERMO]) {
+            ui_go_thermostat();
+        }
+        if (app_thermo_page() != 0) {
+            app_thermo_show_page(0);
+        }
     }
 
     ui_theme_update();
@@ -443,7 +449,7 @@ void ui_debug_go(const char *what)
         return;
     }
     if (strncmp(what, "edit ", 5) == 0 || strcmp(what, "advanced") == 0 || strcmp(what, "service") == 0 ||
-        strncmp(what, "day ", 4) == 0) {
+        strncmp(what, "day ", 4) == 0 || strncmp(what, "group ", 6) == 0) {
         ui_go_thermostat();
         ui_pages_debug(what);
         return;

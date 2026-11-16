@@ -164,3 +164,39 @@ void cfgall_defaults(void)
     svc_default_config(&v);
     thermo_set_svc_config(&v);
 }
+
+bool cfgall_get_default(int i, char *out, size_t size)
+{
+    cfg_table_t t;
+    const ct_field_t *f = cfgall_field(i, &t);
+    if (!f) {
+        return false;
+    }
+    switch (t) {
+    case CFG_T_CTRL: {
+        ctrl_config_t c;
+        ctrl_default_config(&c);
+        ct_get(&c, f, out, size);
+        break;
+    }
+    case CFG_T_SCHED: {
+        sched_config_t c;
+        sched_default_config(&c);
+        ct_get(&c, f, out, size);
+        break;
+    }
+    case CFG_T_ALERT: {
+        alert_config_t c;
+        alert_default_config(&c);
+        ct_get(&c, f, out, size);
+        break;
+    }
+    default: {
+        svc_config_t c;
+        svc_default_config(&c);
+        ct_get(&c, f, out, size);
+        break;
+    }
+    }
+    return true;
+}

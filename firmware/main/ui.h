@@ -38,6 +38,7 @@ lv_obj_t *app_blocks_create(void);
 lv_obj_t *app_setup_create(void);
 
 void app_thermo_show_page(int page);
+int app_thermo_page(void);  // the page shown in the thermostat app (0 = main)
 void app_setup_open_panel(int i);  // -1 = close all
 // Debug (USB serial): "launcher", "thermo", "ha", "calc", "blocks", "setup", "page N", "panel N".
 void ui_debug_go(const char *what);

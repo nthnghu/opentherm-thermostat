@@ -351,6 +351,11 @@ static void screen_cb(lv_event_t *e)
     update_main();
 }
 
+int app_thermo_page(void)
+{
+    return active_page();
+}
+
 void app_thermo_show_page(int page)
 {
     lv_obj_update_layout(s_tv);

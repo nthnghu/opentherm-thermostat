@@ -24,7 +24,7 @@ static const ct_field_t FIELDS[] = {
     F(cold_on, CT_BOOL, 0, 1, "alert: room not reaching the target on/off"),
     F(cold_k, CT_FLOAT, 0.3f, 5, "cold room: below target - this (K)"),
     F(cold_h, CT_FLOAT, 0.5f, 24, "cold room: for this long (h)"),
-    F(pasteur_on, CT_BOOL, 0, 1, "alert: pasteurisation did not finish on/off"),
+    {"alert_pasteur_on", CT_BOOL, offsetof(alert_config_t, pasteur_on), 0, 1, "alert: pasteurisation did not finish on/off"},
     F(clock_on, CT_BOOL, 0, 1, "alert: no valid clock on/off"),
     F(clock_s, CT_U16, 60, 3600, "no clock: after this long (s)"),
 };

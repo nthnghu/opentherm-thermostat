@@ -24,6 +24,7 @@
 #include "ot_frame.h"
 #include "mqtt_ha.h"
 #include "cfgall.h"
+#include "cfgtext.h"
 #include "cJSON.h"
 
 static const char *TAG = "web";
@@ -337,34 +338,59 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
 
     // All settings (cfgall: the same tables as the device editor and the serial CFG command)
     {
-        SEND(req, "<h2>Thermostat settings</h2><form method=post action=/save/cfg><input type=hidden name=cfgform value=1>");
-        int last_t = -1;
-        char val[24];
-        for (int i = 0; i < cfgall_count(); i++) {
-            cfg_table_t t;
-            const ct_field_t *f = cfgall_field(i, &t);
-            if ((int)t != last_t) {
-                sendf(req, "%s<h3>%s</h3>", last_t >= 0 ? "" : "", cfgall_table_title(t));
-                last_t = (int)t;
+        SEND(req, "<h2>Thermostat settings</h2><p class=hint>The same settings as on the device "
+                  "(Settings page). Indented settings belong to the one above them.</p>"
+                  "<form method=post action=/save/cfg><input type=hidden name=cfgform value=1>");
+        int last_g = -1;
+        char val[24], txt[48], def[24], range[64];
+        for (int n = 0; n < cfgtext_count(); n++) {
+            const cfgtext_t *t = cfgtext_at(n);
+            int i = cfgall_find(t->name);
+            if (i < 0) {
+                continue;
+            }
+            const ct_field_t *f = cfgall_field(i, NULL);
+            if ((int)t->group != last_g) {
+                sendf(req, "<h3>%s</h3><p class=hint>%s</p>", cfgtext_group_title(t->group),
+                      cfgtext_group_brief(t->group));
+                last_g = (int)t->group;
             }
             cfgall_get(i, val, sizeof(val));
+            sendf(req, "<div title='%s'%s>", f->name, t->parent ? " style='margin-left:24px'" : "");
             if (f->type == CT_BOOL) {
                 sendf(req, "<label><input type=checkbox name=%s value=1%s> %s</label>", f->name,
-                      strcmp(val, "0") ? " checked" : "", f->name);
+                      strcmp(val, "0") ? " checked" : "", t->title);
+            } else if (t->opts) {
+                sendf(req, "<label for=%s>%s</label><select id=%s name=%s>", f->name, t->title, f->name, f->name);
+                for (int k = 0; k < t->nopts; k++) {
+                    sendf(req, "<option value=%d%s>%s</option>", k, atoi(val) == k ? " selected" : "", t->opts[k].label);
+                }
+                SEND(req, "</select>");
             } else {
-                sendf(req, "<label for=%s>%s</label><input id=%s name=%s value='%s'>", f->name, f->name, f->name, f->name,
-                      val);
+                const char *u = (f->type == CT_TIME || f->type == CT_TIME_OPT) ? "HH:MM" : t->unit;
+                sendf(req, "<label for=%s>%s%s%s%s</label><input id=%s name=%s value='%s'>", f->name, t->title,
+                      u[0] ? " (" : "", u, u[0] ? ")" : "", f->name, f->name, val);
             }
             SEND(req, "<p class=hint>");
-            send_escaped(req, f->help);
-            if (f->type == CT_TIME_OPT) {
-                SEND(req, " (HH:MM or -)");
-            } else if (f->type == CT_TIME) {
-                SEND(req, " (HH:MM)");
-            } else if (f->type != CT_BOOL) {
-                sendf(req, " [%g..%g]", f->min, f->max);
+            send_escaped(req, t->help);
+            for (int k = 0; t->opts && k < t->nopts && t->opts[k].desc[0]; k++) {
+                SEND(req, "<br><b>");
+                send_escaped(req, t->opts[k].label);
+                SEND(req, "</b>: ");
+                send_escaped(req, t->opts[k].desc);
             }
-            SEND(req, "</p>");
+            cfgtext_range(f, range, sizeof(range));
+            cfgall_get_default(i, def, sizeof(def));
+            cfgtext_format(f, def, txt, sizeof(txt));
+            if (f->type == CT_TIME_OPT) {
+                SEND(req, " Empty or - = not used.");
+            }
+            if (range[0]) {
+                sendf(req, " Range %s.", range);
+            }
+            SEND(req, " Factory setting: ");
+            send_escaped(req, txt);
+            SEND(req, ".</p></div>");
         }
         SEND(req, "<button>Save settings</button></form>");
 
@@ -372,7 +398,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
         thermo_get_sched_config(&sc);
         SEND(req, "<h2>Weekly program</h2><form method=post action=/save/prog><p class=hint>Switch times per day, "
                   "e.g. <code>06:00=c 08:00=e 17:00=c 22:30=e</code> (c = Comfort = your setpoint, e = Eco). Empty = "
-                  "the day continues the previous one. Used when prog_on is ticked.</p>");
+                  "the day continues the previous one. Used when Weekly program is ticked.</p>");
         static const char *dn[7] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
         char day[100];
         for (int d = 0; d < 7; d++) {

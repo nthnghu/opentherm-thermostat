@@ -15,5 +15,7 @@ int cfgall_find(const char *name);                           // -1 = unknown
 bool cfgall_get(int i, char *out, size_t size);
 // Range-checked; false on an unknown name or a bad value.
 bool cfgall_set(const char *name, const char *value);
+// The factory value of setting i (text as from cfgall_get).
+bool cfgall_get_default(int i, char *out, size_t size);
 // Factory values for every table.
 void cfgall_defaults(void);
