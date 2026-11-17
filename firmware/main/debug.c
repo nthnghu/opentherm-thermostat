@@ -116,6 +116,13 @@ void debug_exec(const char *line, FILE *o)
         fprintf(o, "HEAP %s\n", b);
         return;
     }
+    if (strcmp(line, "PERF") == 0) {  // drawing speed since the last PERF
+        uint32_t n, ms, mx;
+        ui_perf(&n, &ms, &mx);
+        fprintf(o, "PERF frames=%lu draw_ms=%lu avg_ms=%.1f max_ms=%lu\n", (unsigned long)n, (unsigned long)ms,
+                n ? (double)ms / n : 0.0, (unsigned long)mx);
+        return;
+    }
     if (strcmp(line, "TASKS") == 0) {  // CPU per task since the last TASKS
         char *b = malloc(1536);
         if (b) {

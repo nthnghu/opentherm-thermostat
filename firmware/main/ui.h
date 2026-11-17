@@ -60,3 +60,5 @@ int app_thermo_page(void);  // the page shown in the thermostat app (0 = main)
 void app_setup_open_panel(int i);  // -1 = close all
 // Debug (console GO ...): "launcher", "thermo", "ha", "calc", "blocks", "setup", "page N", "panel N".
 void ui_debug_go(const char *what);
+// Frames drawn, the time they took and the slowest one since the last call (console: PERF).
+void ui_perf(uint32_t *frames, uint32_t *total_ms, uint32_t *max_ms);

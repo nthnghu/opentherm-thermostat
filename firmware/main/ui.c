@@ -519,6 +519,29 @@ static void swipe_guard_install(void)
     }
 }
 
+/* ------------------------------------------------------- drawing speed */
+
+// Time spent drawing frames since the last PERF console command: the measure for "the UI feels slow".
+static uint32_t s_perf_frames, s_perf_ms, s_perf_max, s_perf_t0;
+
+static void perf_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_RENDER_START) {
+        s_perf_t0 = lv_tick_get();
+    } else {
+        uint32_t ms = lv_tick_elaps(s_perf_t0);
+        s_perf_frames++;
+        s_perf_ms += ms;
+        s_perf_max = ms > s_perf_max ? ms : s_perf_max;
+    }
+}
+
+void ui_perf(uint32_t *frames, uint32_t *total_ms, uint32_t *max_ms)
+{
+    *frames = s_perf_frames, *total_ms = s_perf_ms, *max_ms = s_perf_max;
+    s_perf_frames = s_perf_ms = s_perf_max = 0;
+}
+
 void ui_shell_create(void)
 {
     swipe_guard_install();
@@ -531,6 +554,8 @@ void ui_shell_create(void)
     quickpanel_create();  // before the status bar, which stays on top of it
     create_status_bar();
     lv_timer_create(idle_cb, 1000, NULL);
+    lv_display_add_event_cb(lv_display_get_default(), perf_cb, LV_EVENT_RENDER_START, NULL);
+    lv_display_add_event_cb(lv_display_get_default(), perf_cb, LV_EVENT_RENDER_READY, NULL);
     lv_screen_load(s_apps[APP_THERMO]);
 }
 

@@ -12,6 +12,7 @@
 #include "thermostat.h"
 #include "timekeep.h"
 #include "ui_pages.h"
+#include "core/lv_obj_event_private.h"  // lv_hit_test_info_t (the dial's knob-only touch area)
 
 
 static lv_obj_t *s_scr, *s_tv;
@@ -37,6 +38,22 @@ static void plus_cb(lv_event_t *e)
 static void arc_cb(lv_event_t *e)
 {
     thermo_set_target(lv_arc_get_value(s_arc) / 2.0f);
+}
+
+// The dial takes a touch only on its knob (with some room for a fingertip). Anywhere else on it, a touch goes
+// to the page below, so a swipe across the dial changes the page and can no longer drag the target along.
+#define DIAL_GRAB_PX 46
+static void arc_hit_cb(lv_event_t *e)
+{
+    lv_hit_test_info_t *info = lv_event_get_param(e);
+    lv_area_t a;
+    lv_obj_get_coords(s_arc, &a);
+    float f = (float)(lv_arc_get_value(s_arc) - lv_arc_get_min_value(s_arc)) /
+              (float)(lv_arc_get_max_value(s_arc) - lv_arc_get_min_value(s_arc));
+    float ang = (135 + 270 * f) * (float)M_PI / 180;
+    int kx = (a.x1 + a.x2) / 2 + (int)lroundf(169 * cosf(ang)), ky = (a.y1 + a.y2) / 2 + (int)lroundf(169 * sinf(ang));
+    int dx = info->point->x - kx, dy = info->point->y - ky;
+    info->res = dx * dx + dy * dy <= DIAL_GRAB_PX * DIAL_GRAB_PX;
 }
 
 static void boost_cb(lv_event_t *e)
@@ -272,6 +289,8 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_style_arc_width(s_arc, 22, LV_PART_INDICATOR);
     lv_obj_set_style_pad_all(s_arc, 8, LV_PART_KNOB);
     lv_obj_add_event_cb(s_arc, arc_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_flag(s_arc, LV_OBJ_FLAG_ADV_HITTEST);
+    lv_obj_add_event_cb(s_arc, arc_hit_cb, LV_EVENT_HIT_TEST, NULL);
     lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_SCROLL_CHAIN);
 
     lv_obj_t *rl = lv_label_create(s_arc);
