@@ -296,7 +296,7 @@ static void poll_page(void)
     } else if (errors && last_status < 0) {
         set_status("Can't reach Home Assistant");
     } else {
-        set_status("%d cards, updated every %d s", n, POLL_MS / 1000);
+        set_status("%d cards, every %d s", n, POLL_MS / 1000);
     }
 }
 

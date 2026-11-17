@@ -18,7 +18,7 @@ enum { APP_THERMO, APP_HA, APP_CALC, APP_BLOCKS, APP_SETUP, APP_COUNT };
 
 static lv_obj_t *s_apps[APP_COUNT];
 static lv_obj_t *s_launcher;
-static lv_obj_t *s_clock, *s_heat, *s_warn, *s_ha, *s_wifi;
+static lv_obj_t *s_clock, *s_heat, *s_warn, *s_ha, *s_wifi, *s_bars[4];
 static lv_obj_t *s_wake;  // full-screen catcher while dimmed: the first touch only wakes the screen
 static bool s_busy;
 
@@ -170,9 +170,9 @@ static void open_app_cb(lv_event_t *e)
 
 static void status_cb(lv_timer_t *t)
 {
-    // Clock. The Thermostat page shows its own large clock, so the status bar shows only a hint there.
+    // Clock. The thermostat's main page shows its own large clock, so the status bar shows only a hint there.
     unsigned long muted = (unsigned long)ui_hex(UI_MUTED);
-    bool thermo = lv_screen_active() == s_apps[APP_THERMO];
+    bool thermo = lv_screen_active() == s_apps[APP_THERMO] && app_thermo_page() == 0;
     if (timekeep_valid()) {
         time_t now = time(NULL);
         struct tm lt;
@@ -203,14 +203,15 @@ static void status_cb(lv_timer_t *t)
     ha_state_t hs = ha_state();
     lv_obj_set_style_text_color(s_ha, ui_c(hs == HA_STATE_OK ? UI_OK : hs == HA_STATE_ERROR ? UI_ERR : UI_FAINT), 0);
 
+    // Wi-Fi: four signal bars (the dBm figure is in the quick panel); "off" when not connected
     int rssi = board_wifi_rssi();
-    if (board_wifi_connected()) {
-        lv_label_set_text_fmt(s_wifi, LV_SYMBOL_WIFI " %d", rssi);
-        lv_obj_set_style_text_color(s_wifi, ui_c(rssi > -67 ? UI_OK : rssi > -78 ? UI_WARN : UI_ERR), 0);
-    } else {
-        lv_label_set_text(s_wifi, LV_SYMBOL_WIFI " off");
-        lv_obj_set_style_text_color(s_wifi, ui_c(UI_FAINT), 0);
+    bool up = board_wifi_connected();
+    int n = !up ? 0 : rssi > -60 ? 4 : rssi > -68 ? 3 : rssi > -78 ? 2 : 1;
+    uint32_t col = n >= 3 ? UI_OK : n == 2 ? UI_WARN : UI_ERR;
+    for (int i = 0; i < 4; i++) {
+        lv_obj_set_style_bg_color(s_bars[i], ui_c(i < n ? col : UI_DOT_OFF), 0);
     }
+    lv_obj_set_hidden(s_wifi, up);
 }
 
 static void bar_cb(lv_event_t *e)
@@ -248,15 +249,26 @@ static void create_status_bar(void)
     lv_label_set_text(s_heat, LV_SYMBOL_CHARGE " HEAT");
     lv_obj_align(s_heat, LV_ALIGN_CENTER, 10, 0);
 
-    s_wifi = lv_label_create(bar);
-    lv_obj_align(s_wifi, LV_ALIGN_RIGHT_MID, 0, 0);
+    for (int i = 0; i < 4; i++) {
+        s_bars[i] = lv_obj_create(bar);
+        lv_obj_remove_style_all(s_bars[i]);
+        lv_obj_set_size(s_bars[i], 5, 6 + i * 4);
+        lv_obj_set_style_radius(s_bars[i], 1, 0);
+        lv_obj_set_style_bg_opa(s_bars[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(s_bars[i], ui_c(UI_DOT_OFF), 0);
+        lv_obj_align(s_bars[i], LV_ALIGN_BOTTOM_RIGHT, -(3 - i) * 8, -9);
+    }
+    s_wifi = lv_label_create(bar);  // "off", left of the empty bars
+    lv_obj_set_style_text_color(s_wifi, ui_c(UI_FAINT), 0);
+    lv_label_set_text(s_wifi, "off");
+    lv_obj_align(s_wifi, LV_ALIGN_RIGHT_MID, -38, 0);
     s_ha = lv_label_create(bar);
     lv_label_set_text(s_ha, LV_SYMBOL_HOME);
-    lv_obj_align(s_ha, LV_ALIGN_RIGHT_MID, -96, 0);
+    lv_obj_align(s_ha, LV_ALIGN_RIGHT_MID, -78, 0);
     s_warn = lv_label_create(bar);
     lv_obj_set_style_text_color(s_warn, ui_c(UI_ERR), 0);
     lv_label_set_text(s_warn, LV_SYMBOL_WARNING);
-    lv_obj_align(s_warn, LV_ALIGN_RIGHT_MID, -136, 0);
+    lv_obj_align(s_warn, LV_ALIGN_RIGHT_MID, -116, 0);
 
     status_cb(NULL);
     lv_timer_create(status_cb, 1000, NULL);
@@ -398,11 +410,11 @@ static void create_launcher(void)
         const char *icon, *name;
         uint32_t color;
     } items[APP_COUNT] = {
-        [APP_THERMO] = {LV_SYMBOL_HOME, "Thermostat", 0xD84315},
-        [APP_HA] = {LV_SYMBOL_LIST, "Home Assistant", 0x1565C0},
-        [APP_CALC] = {LV_SYMBOL_KEYBOARD, "Calculator", 0x2E7D32},
-        [APP_BLOCKS] = {LV_SYMBOL_PLAY, "Blocks", 0x6A1B9A},
-        [APP_SETUP] = {LV_SYMBOL_SETTINGS, "Setup", 0x455A64},
+        [APP_THERMO] = {UI_ICON_THERMO, "Thermostat", 0xD84315},
+        [APP_HA] = {LV_SYMBOL_HOME, "Home Assistant", 0x1565C0},
+        [APP_CALC] = {UI_ICON_CALC, "Calculator", 0x2E7D32},
+        [APP_BLOCKS] = {UI_ICON_GAME, "Blocks", 0x6A1B9A},
+        [APP_SETUP] = {LV_SYMBOL_SETTINGS, "Settings", 0x455A64},
     };
     for (int i = 0; i < APP_COUNT; i++) {
         lv_obj_t *b = lv_button_create(content);
@@ -411,7 +423,7 @@ static void create_launcher(void)
         lv_obj_set_style_radius(b, 16, 0);
         lv_obj_add_event_cb(b, open_app_cb, LV_EVENT_CLICKED, s_apps[i]);
         lv_obj_t *ic = lv_label_create(b);
-        lv_obj_set_style_text_font(ic, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_font(ic, &font_icons_48, 0);
         lv_label_set_text(ic, items[i].icon);
         lv_obj_align(ic, LV_ALIGN_CENTER, 0, -22);
         lv_obj_t *nm = lv_label_create(b);

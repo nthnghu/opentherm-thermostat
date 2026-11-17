@@ -46,6 +46,7 @@ static lv_obj_t *button(lv_obj_t *p, const char *txt, uint32_t color, lv_event_c
                         int w, int h)
 {
     lv_obj_t *b = ui_button(p, txt, ui_c(color), cb, user);
+    lv_obj_set_style_text_align(lv_obj_get_child(b, 0), LV_TEXT_ALIGN_CENTER, 0);  // two-line texts
     lv_obj_set_pos(b, x, y);
     lv_obj_set_size(b, w, h);
     return b;
@@ -146,7 +147,7 @@ static lv_obj_t *setting_row(lv_obj_t *parent, int idx, int x, int y, int w, lv_
     lv_label_set_text(n, title_of(idx));
     lv_obj_set_pos(n, 12, 8);
     lv_obj_t *d = lv_label_create(b);
-    lv_obj_set_style_text_font(d, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(d, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(d, ui_c(UI_MUTED), 0);
     lv_obj_set_width(d, w - 24);
     lv_label_set_long_mode(d, LV_LABEL_LONG_DOT);
@@ -246,7 +247,7 @@ static void open_field(int idx, lv_obj_t *ret, void (*done)(void))
     if (!s_fe_scr) {
         lv_obj_t *c;
         s_fe_scr = screen("Setting", &c, fe_cancel_cb);
-        s_fe_group = label(c, "", 20, 8, 440, UI_MUTED, &lv_font_montserrat_14);
+        s_fe_group = label(c, "", 20, 8, 440, UI_MUTED, &lv_font_montserrat_16);
         s_fe_name = label(c, "", 20, 28, 440, UI_TEXT, &lv_font_montserrat_28);
         s_fe_help = label(c, "", 20, 72, 440, UI_CARD_TEXT, NULL);
         s_fe_val = label(c, "", 0, 290, 0, UI_VALUE, &lv_font_montserrat_40);
@@ -346,30 +347,32 @@ void ui_pages_boiler(lv_obj_t *p)
     lv_label_set_text(s_bl_icon_sym, LV_SYMBOL_CHARGE);
     lv_obj_center(s_bl_icon_sym);
     s_bl_state = label(c, "", 104, 18, 230, UI_TEXT, &lv_font_montserrat_28);
-    s_bl_sub = label(c, "", 104, 70, 330, UI_MUTED, &lv_font_montserrat_14);
+    s_bl_sub = label(c, "", 104, 70, 330, UI_MUTED, &lv_font_montserrat_16);
     s_bl_flow = label(c, "", 300, 18, 124, UI_VALUE, &lv_font_montserrat_40);
     lv_obj_set_style_text_align(s_bl_flow, LV_TEXT_ALIGN_RIGHT, 0);
 
     // Tiles
     static const char *titles[6] = {"Water out / back", "Burner power", "Water pressure",
-                                    "Hot water tank",   "Burner starts", "Efficiency (24 h)"};
+                                    "Hot water tank",   "Burner starts", "Condensing (24 h)"};
     for (int i = 0; i < 6; i++) {
         lv_obj_t *t = card(p, 20 + (i % 2) * 228, 208 + (i / 2) * 118, 212, 108);
-        label(t, titles[i], 14, 10, 190, UI_MUTED, &lv_font_montserrat_14);
-        s_bl_val[i] = label(t, "-", 14, 32, 190, UI_TEXT, &lv_font_montserrat_28);
-        s_bl_note[i] = label(t, "", 14, 76, 190, UI_MUTED, &lv_font_montserrat_14);
+        label(t, titles[i], 12, 10, 196, UI_MUTED, &lv_font_montserrat_16);
+        s_bl_val[i] = label(t, "-", 12, 32, 196, UI_TEXT, &lv_font_montserrat_28);
+        s_bl_note[i] = label(t, "", 12, 76, 196, UI_MUTED, &lv_font_montserrat_16);
+        lv_label_set_long_mode(s_bl_note[i], LV_LABEL_LONG_DOT);  // one line, never over the card edge
+        lv_obj_set_height(s_bl_note[i], 20);
         if (i == 1) {
             s_bl_mod_bar = lv_bar_create(t);
             lv_obj_set_size(s_bl_mod_bar, 184, 10);
-            lv_obj_set_pos(s_bl_mod_bar, 14, 70);
+            lv_obj_set_pos(s_bl_mod_bar, 12, 70);
             lv_bar_set_range(s_bl_mod_bar, 0, 100);
             lv_obj_set_style_bg_color(s_bl_mod_bar, ui_c(UI_SURFACE_ALT), LV_PART_MAIN);
             lv_obj_set_style_bg_color(s_bl_mod_bar, ui_c(UI_HEAT), LV_PART_INDICATOR);
             lv_obj_set_y(s_bl_note[i], 84);
         }
     }
-    s_bl_gas = label(p, "", 20, 562, 440, UI_MUTED, &lv_font_montserrat_14);
-    s_bl_alerts = label(p, "", 20, 606, 440, UI_OK, NULL);
+    s_bl_gas = label(p, "", 20, 562, 440, UI_MUTED, &lv_font_montserrat_16);
+    s_bl_alerts = label(p, "", 20, 610, 440, UI_WARN, NULL);
 }
 
 // Plain words for the controller state and the hot water reason (the internal names go to MQTT and logs).
@@ -432,7 +435,7 @@ void ui_pages_boiler_update(void)
     float mod = st.flame ? (st.modulation > 100 ? 100 : st.modulation) : 0;
     lv_label_set_text_fmt(s_bl_val[1], st.flame ? "%.0f %%" : "off", mod);
     lv_bar_set_value(s_bl_mod_bar, (int32_t)mod, LV_ANIM_OFF);
-    lv_label_set_text_fmt(s_bl_note[1], "24 h average %.0f %%", k24.mean_mod);
+    lv_label_set_text_fmt(s_bl_note[1], "average 24 h: %.0f %%", k24.mean_mod);
     if (st.press_valid) {
         bool low = st.pressure_bar < ac.pressure_min_bar;
         lv_label_set_text_fmt(s_bl_val[2], "%.2f bar", st.pressure_bar);
@@ -450,19 +453,19 @@ void ui_pages_boiler_update(void)
     lv_label_set_text(s_bl_note[3], dhw_words(st.dhw_reason));
     lv_label_set_text_fmt(s_bl_val[4], "%u last hour", k1.ch_starts);
     if (k24.ch_burns) {
-        lv_label_set_text_fmt(s_bl_note[4], "24 h: %u, typical burn %.0f min", k24.ch_starts, k24.median_burn_min);
+        lv_label_set_text_fmt(s_bl_note[4], "24 h: %u, burns %.0f min", k24.ch_starts, k24.median_burn_min);
     } else {
         lv_label_set_text_fmt(s_bl_note[4], "24 h: %u starts", k24.ch_starts);
     }
     if (k24.burner_h > 0) {
         lv_label_set_text_fmt(s_bl_val[5], "%.0f %%", k24.cond_pct);
-        lv_label_set_text(s_bl_note[5], "of the time condensing");
+        lv_label_set_text(s_bl_note[5], "of the burner time");
     } else {
         lv_label_set_text(s_bl_val[5], "-");
         lv_label_set_text(s_bl_note[5], "no burns yet");
     }
 
-    lv_label_set_text_fmt(s_bl_gas, "Gas used (estimate): %.1f kWh in 24 h, %.1f kWh last hour", k24.gas_kwh,
+    lv_label_set_text_fmt(s_bl_gas, "Gas (estimate): %.1f kWh in 24 h, %.1f kWh last hour", k24.gas_kwh,
                           k1.gas_kwh);
     if (st.alert_count) {
         char a[300];
@@ -480,8 +483,10 @@ void ui_pages_boiler_update(void)
 
 /* ----------------------------------------------------------- schedule */
 
-static lv_obj_t *s_week[7], *s_prog_btn, *s_boost_btn, *s_away_btn, *s_dhw_btn, *s_dhwb_btn, *s_sched_info;
+static lv_obj_t *s_week[7], *s_day_lbl[7], *s_now, *s_prog_btn, *s_boost_btn, *s_away_btn, *s_dhw_btn, *s_dhwb_btn;
+static lv_obj_t *s_sched_info;
 static sched_config_t s_week_cache;
+static float s_week_sp;  // the setpoint the Comfort / Eco labels were drawn with
 static bool s_week_valid;
 
 // Colour of a level: Comfort orange, Eco blue, fixed temperatures violet (lighter = cooler, deeper = warmer).
@@ -500,7 +505,7 @@ static uint32_t level_color(uint8_t level)
     return out;
 }
 
-// "Comfort", "Eco" or "21.5°"
+// "Comfort", "Eco" or "21.5 °C"
 static void level_label(uint8_t level, char *out, size_t size)
 {
     if (sched_level_is_fixed(level)) {
@@ -511,7 +516,7 @@ static void level_label(uint8_t level, char *out, size_t size)
     }
 }
 
-static void draw_day(int d, const sched_config_t *c)
+static void draw_day(int d, const sched_config_t *c, float setpoint)
 {
     lv_obj_t *bar = s_week[d];
     lv_obj_clean(bar);
@@ -535,11 +540,13 @@ static void draw_day(int d, const sched_config_t *c)
         int x0 = start * w / 1440, x1 = m * w / 1440;
         lv_obj_set_pos(r, x0, 0);
         lv_obj_set_size(r, x1 - x0, LV_PCT(100));
-        if (sched_level_is_fixed(cur) && x1 - x0 >= 44) {
-            char t[12];
-            level_label(cur, t, sizeof(t));
+        // The temperature of the segment, when it is wide enough: Comfort = the setpoint, Eco = setpoint - drop
+        float tc = sched_level_is_fixed(cur) ? cur / 4.0f : cur == SCHED_COMFORT ? setpoint : setpoint - c->eco_setback_k;
+        char t[12];
+        snprintf(t, sizeof(t), tc == (int)tc ? "%.0f °C" : "%.1f °C", tc);
+        if (c->prog_on && x1 - x0 >= (strlen(t) > 6 ? 66 : 52)) {
             lv_obj_t *lt = lv_label_create(r);
-            lv_obj_set_style_text_font(lt, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_font(lt, &lv_font_montserrat_16, 0);
             lv_obj_set_style_text_color(lt, lv_color_white(), 0);
             lv_label_set_text(lt, t);
             lv_obj_center(lt);
@@ -600,7 +607,7 @@ void ui_pages_schedule(lv_obj_t *p)
         lv_obj_set_x(l, 76 + h * 96 - lv_obj_get_width(l) / 2);
     }
     for (int d = 0; d < 7; d++) {
-        label(p, DAYS[d], 20, 106 + d * 44, 0, UI_MUTED, NULL);
+        s_day_lbl[d] = label(p, DAYS[d], 20, 106 + d * 44, 0, UI_MUTED, NULL);
         lv_obj_t *bar = lv_obj_create(p);
         lv_obj_set_pos(bar, 76, 100 + d * 44);
         lv_obj_set_size(bar, 384, 34);
@@ -611,29 +618,54 @@ void ui_pages_schedule(lv_obj_t *p)
         lv_obj_add_event_cb(bar, day_cb, LV_EVENT_CLICKED, (void *)(intptr_t)d);
         s_week[d] = bar;
     }
+    label(p, LV_SYMBOL_EDIT " tap a day to edit", 160, 34, 0, UI_FAINT, &lv_font_montserrat_16);
+    // "Now" marker on today's bar
+    s_now = lv_obj_create(p);
+    lv_obj_remove_style_all(s_now);
+    lv_obj_set_size(s_now, 4, 42);
+    lv_obj_set_style_radius(s_now, 2, 0);
+    lv_obj_set_style_bg_opa(s_now, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_now, ui_c(UI_TEXT), 0);
+    lv_obj_set_style_outline_width(s_now, 1, 0);
+    lv_obj_set_style_outline_color(s_now, ui_c(UI_BG), 0);
+    lv_obj_add_flag(s_now, LV_OBJ_FLAG_HIDDEN);
     s_prog_btn = button(p, "", 0x37474F, prog_cb, NULL, 20, 414, 440, 52);
     s_boost_btn = button(p, "", 0xD84315, boost_cb, NULL, 20, 476, 212, 64);
     s_away_btn = button(p, "", 0x37474F, away_cb, NULL, 248, 476, 212, 64);
     label(p, "Hot water", 20, 548, 0, UI_MUTED, NULL);
     s_dhw_btn = button(p, "", 0x37474F, dhw_mode_cb, NULL, 20, 574, 212, 60);
     s_dhwb_btn = button(p, "", 0x00838F, dhw_boost_cb, NULL, 248, 574, 212, 60);
-    s_sched_info = label(p, "", 20, 642, 440, UI_MUTED, &lv_font_montserrat_14);
+    s_sched_info = label(p, "", 20, 642, 440, UI_MUTED, &lv_font_montserrat_16);
 }
 
 void ui_pages_schedule_update(void)
 {
     sched_config_t c;
     thermo_get_sched_config(&c);
-    if (!s_week_valid || memcmp(&c, &s_week_cache, sizeof(c)) != 0) {
-        lv_obj_update_layout(s_week[0]);
-        for (int d = 0; d < 7; d++) {
-            draw_day(d, &c);
-        }
-        s_week_cache = c;
-        s_week_valid = true;
-    }
     thermo_state_t st;
     thermo_get(&st);
+    if (!s_week_valid || st.setpoint != s_week_sp || memcmp(&c, &s_week_cache, sizeof(c)) != 0) {
+        lv_obj_update_layout(s_week[0]);
+        for (int d = 0; d < 7; d++) {
+            draw_day(d, &c, st.setpoint);
+        }
+        s_week_cache = c;
+        s_week_sp = st.setpoint;
+        s_week_valid = true;
+    }
+    // Today's row and the time of day
+    int today = -1;
+    if (timekeep_valid()) {
+        time_t now = time(NULL);
+        struct tm lt;
+        localtime_r(&now, &lt);
+        today = (lt.tm_wday + 6) % 7;
+        lv_obj_set_pos(s_now, 76 + (lt.tm_hour * 60 + lt.tm_min) * 384 / 1440 - 2, 96 + today * 44);
+    }
+    lv_obj_set_hidden(s_now, today < 0);
+    for (int d = 0; d < 7; d++) {
+        lv_obj_set_style_text_color(s_day_lbl[d], ui_c(d == today ? UI_TEXT : UI_MUTED), 0);
+    }
     char b[96];
     if (!c.prog_on) {
         snprintf(b, sizeof(b), "Program off: constant %.1f °C", st.setpoint);
@@ -873,7 +905,7 @@ static void day_editor_open(int d)
         s_lp_temp = label(s_lp, "", 140, 440, 200, UI_VALUE, &lv_font_montserrat_40);
         lv_obj_set_style_text_align(s_lp_temp, LV_TEXT_ALIGN_CENTER, 0);
         label(s_lp, "Changing the temperature selects \"Fixed temperature\".", 20, 516, 440, UI_MUTED,
-              &lv_font_montserrat_14);
+              &lv_font_montserrat_16);
         button(s_lp, LV_SYMBOL_OK " Done", 0x2E7D32, lp_done_cb, NULL, 20, 600, 440, 72);
     }
     lv_obj_add_flag(s_lp, LV_OBJ_FLAG_HIDDEN);
@@ -899,7 +931,7 @@ static void day_editor_open(int d)
 /* ------------------------------------------------- all settings by topic */
 
 #define GRP_MAX 24
-static lv_obj_t *s_adv_scr, *s_grp_scr, *s_grp_title, *s_grp_list, *s_grp_val[GRP_MAX];
+static lv_obj_t *s_grp_scr, *s_grp_title, *s_grp_list, *s_grp_val[GRP_MAX];
 static int s_grp_idx[GRP_MAX], s_grp_n;
 
 static void grp_refresh(void)
@@ -916,7 +948,7 @@ static void grp_row_cb(lv_event_t *e)
 
 static void grp_back_cb(lv_event_t *e)
 {
-    lv_screen_load(s_adv_scr);
+    ui_open_setup_section(-1);  // the Settings list the group was opened from
 }
 
 static void group_open(cfg_group_t g)
@@ -942,7 +974,7 @@ static void group_open(cfg_group_t g)
     lv_obj_set_width(hint, 440);
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_color(hint, ui_c(UI_MUTED), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, 0);
     lv_label_set_text(hint, "Tap a setting to see what it does and change it. Indented settings belong to the one "
                             "above them; dimmed ones are not in use now.");
     s_grp_n = 0;
@@ -962,40 +994,11 @@ static void group_open(cfg_group_t g)
     lv_screen_load(s_grp_scr);
 }
 
-static void adv_group_cb(lv_event_t *e)
+void ui_pages_open_group(int g)
 {
-    group_open((cfg_group_t)(intptr_t)lv_event_get_user_data(e));
-}
-
-static void advanced_open(void)
-{
-    if (!s_adv_scr) {
-        lv_obj_t *c;
-        s_adv_scr = screen("All settings", &c, NULL);
-        for (int g = 0; g < CG_COUNT; g++) {
-            lv_obj_t *b = lv_button_create(c);
-            lv_obj_set_pos(b, 20, 12 + g * 74);
-            lv_obj_set_size(b, 440, 66);
-            lv_obj_set_style_bg_color(b, ui_c(UI_SURFACE), 0);
-            lv_obj_set_style_radius(b, 8, 0);
-            lv_obj_set_style_pad_all(b, 0, 0);
-            lv_obj_add_event_cb(b, adv_group_cb, LV_EVENT_CLICKED, (void *)(intptr_t)g);
-            lv_obj_t *n = lv_label_create(b);
-            lv_obj_set_style_text_color(n, ui_c(UI_TEXT), 0);
-            lv_label_set_text(n, cfgtext_group_title(g));
-            lv_obj_set_pos(n, 12, 9);
-            lv_obj_t *d = lv_label_create(b);
-            lv_obj_set_style_text_font(d, &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(d, ui_c(UI_MUTED), 0);
-            lv_label_set_text(d, cfgtext_group_brief(g));
-            lv_obj_set_pos(d, 12, 39);
-            lv_obj_t *a = lv_label_create(b);
-            lv_obj_set_style_text_color(a, ui_c(UI_MUTED), 0);
-            lv_label_set_text(a, LV_SYMBOL_RIGHT);
-            lv_obj_align(a, LV_ALIGN_RIGHT_MID, -12, 0);
-        }
+    if (g >= 0 && g < CG_COUNT) {
+        group_open((cfg_group_t)g);
     }
-    lv_screen_load(s_adv_scr);
 }
 
 /* -------------------------------------------------------------- service */
@@ -1295,7 +1298,7 @@ static void ev_cb(lv_event_t *e)
 
 static void adv_cb(lv_event_t *e)
 {
-    advanced_open();
+    ui_open_setup_section(-1);  // the Settings list: every heating group and the device sections
 }
 
 static void svc_cb(lv_event_t *e)
@@ -1305,8 +1308,7 @@ static void svc_cb(lv_event_t *e)
 
 void ui_pages_settings(lv_obj_t *p)
 {
-    label(p, "Settings", 20, 14, 0, UI_TEXT, &lv_font_montserrat_28);
-    label(p, "Tap a row to see what it does and change it.", 20, 52, 310, UI_MUTED, &lv_font_montserrat_14);
+    label(p, "Settings", 20, 24, 0, UI_TEXT, &lv_font_montserrat_28);
     for (int i = 0; i < N_EVERYDAY; i++) {
         int k = cfgall_find(EVERYDAY[i]);
         s_ev_val[i] = setting_row(p, k, 20, 76 + i * 70, 440, ev_cb, (void *)(intptr_t)i);
@@ -1337,7 +1339,7 @@ void ui_pages_debug(const char *what)
     if (strncmp(what, "edit ", 5) == 0) {
         open_field(cfgall_find(what + 5), s_thermo_scr, NULL);
     } else if (strcmp(what, "advanced") == 0) {
-        advanced_open();
+        ui_open_setup_section(-1);
     } else if (strncmp(what, "group ", 6) == 0) {
         group_open((cfg_group_t)(atoi(what + 6) % CG_COUNT));
     } else if (strcmp(what, "service") == 0) {

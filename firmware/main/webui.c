@@ -288,6 +288,19 @@ static const char PAGE_HEAD[] =
     "nav a{padding:8px 12px;border-radius:8px;background:#1e2a38;color:#e6edf3;white-space:nowrap;cursor:pointer}"
     "nav a.on{background:#1565c0}section>h2:first-child{border-top:0;margin-top:8px}"
     "details{border:1px solid #263238;border-radius:8px;padding:0 12px;margin:10px 0}"
+    ".row{display:flex;gap:8px;align-items:center;margin:10px 0}.row button{margin:0;flex:1}"
+    "#tm,#tp{font-size:26px;padding:6px 18px}.tgt{flex:1;text-align:center;font-size:26px}button.on{background:#d84315}button.g{background:#37474f}"
+    "#alert{white-space:pre-line;color:#ffb74d;margin:8px 0}"
+    ".cards{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}"
+    ".cards div{background:#1e2a38;border-radius:8px;padding:10px;color:#90a4ae;font-size:14px}"
+    ".cards b{display:block;color:#e6edf3;font-size:22px;font-weight:600}"
+    ".day summary{display:flex;gap:10px;align-items:center}.day summary span{width:90px}"
+    ".bar{position:relative;flex:1;height:26px;background:#0d141b;border-radius:6px;overflow:hidden}"
+    ".bar i{position:absolute;top:0;bottom:0;font:12px system-ui;color:#fff;text-align:center;line-height:26px;overflow:hidden}"
+    ".pt{display:flex;gap:6px;margin:8px 0}.pt input,.pt select{width:auto;flex:1;min-width:0}"
+    ".pt button{margin:0;background:#6d4c41;padding:8px 12px}"
+    ".save{position:sticky;bottom:0;background:#111a22;padding:2px 0 10px;border-top:1px solid #263238}"
+    ".save button{margin-top:8px}button.dirty{background:#2e7d32}"
     "summary{padding:12px 0;font-weight:600;font-size:16px;cursor:pointer}summary span{font-weight:400}"
     "</style></head><body>";
 
@@ -314,6 +327,34 @@ static void tab(httpd_req_t *req, const char *id)
     sendf(req, "</section><section data-t=%s>", id);
 }
 
+// A choice of waiting times in seconds, shown as "30 s", "5 min", "never" (0).
+static void secs_select(httpd_req_t *req, const char *label, const char *name, const uint16_t *opts, int n, unsigned cur)
+{
+    sendf(req, "<label for=%s>%s</label><select id=%s name=%s>", name, label, name, name);
+    bool listed = false;
+    for (int i = 0; i <= n; i++) {
+        unsigned v = i < n ? opts[i] : cur;
+        if (i == n && listed) {
+            break;  // the saved value is one of the choices
+        }
+        listed |= v == cur;
+        char t[16];
+        if (v == 0) {
+            snprintf(t, sizeof(t), "never");
+        } else if (v < 60 || v % 60) {
+            snprintf(t, sizeof(t), "%u s", v);
+        } else if (v < 3600) {
+            snprintf(t, sizeof(t), "%u min", v / 60);
+        } else {
+            snprintf(t, sizeof(t), "%u h", v / 3600);
+        }
+        sendf(req, "<option value=%u%s>%s</option>", v, v == cur ? " selected" : "", t);
+    }
+    SEND(req, "</select>");
+}
+
+extern const char page_js_start[] asm("_binary_page_js_start");
+
 static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
 {
     settings_t *c = malloc(sizeof(settings_t));
@@ -329,11 +370,19 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
               "<a data-t=net>Network</a><a data-t=dev>Device</a><a data-t=svc>Service</a><a data-t=sys>System</a></nav>"
               "<section>");
 
-    // Thermostat (read-only, refreshed by script)
+    // Thermostat: state, the main-page controls and the boiler values (filled and refreshed by the script)
     tab(req, "home");
-    SEND(req, "<h2>Thermostat (view only)</h2><div class=big id=room>--</div>"
-              "<div id=info class=hint>loading...</div><svg id=chart viewBox='0 0 1440 160' preserveAspectRatio=none></svg>"
-              "<div class=hint>Last 24 h: room (blue), setpoint (orange), heating (red band).</div>");
+    SEND(req, "<h2>Thermostat</h2><div id=alert></div><div class=big id=room>--</div><div id=hum class=hint></div>"
+              "<div class=row><button id=tm title='Cooler'>&minus;</button><div class=tgt><div id=tgt>--</div>"
+              "<div id=src class=hint></div></div><button id=tp class=on title='Warmer'>+</button></div>"
+              "<div class=row><button id=bmode class=g>Heating</button><button id=bboost class=g hidden>Boost</button>"
+              "<button id=baway class=g hidden>Away</button><button id=bprog class=g hidden>Back to program</button></div>"
+              "<div id=info class=hint>loading...</div>"
+              "<div class=cards><div><b id=c_flow>&ndash;</b>Water out / back</div><div><b id=c_mod>&ndash;</b>Burner power</div>"
+              "<div><b id=c_pres>&ndash;</b>Water pressure</div><div><b id=c_tank>&ndash;</b><span id=c_dhw>Hot water tank</span></div>"
+              "<div><b id=c_starts>&ndash;</b>Burner starts, last hour</div></div>"
+              "<svg id=chart viewBox='0 0 1440 160' preserveAspectRatio=none></svg>"
+              "<div class=hint>Last 24 h: room (blue), target (orange), heating (red band).</div>");
 
     // Wi-Fi
     tab(req, "net");
@@ -363,8 +412,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     sendf(req, "<label for=token>Long-lived access token</label><textarea id=token name=token spellcheck=false "
                "placeholder='%s'></textarea>",
           c->ha_token[0] ? "A token is saved. Paste a new one to replace it." : "Paste the token");
-    SEND(req, "<p class=hint>HA: profile &rarr; Security &rarr; Long-lived access tokens &rarr; Create token. "
-              "Or scan the token's QR code with the device camera (Setup &rarr; Home Assistant).</p>"
+    SEND(req, "<p class=hint>HA: profile &rarr; Security &rarr; Long-lived access tokens &rarr; Create token.</p>"
               "<p class=hint>Last test: ");
     send_escaped(req, ha_last_result()[0] ? ha_last_result() : "none yet");
     SEND(req, "</p><button>Save and test</button></form>");
@@ -469,7 +517,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
         tab(req, "heat");
         SEND(req, "<h2>Thermostat settings</h2><p class=hint>The same settings as on the device "
                   "(Settings page). Indented settings belong to the one above them.</p>"
-                  "<form method=post action=/save/cfg><input type=hidden name=cfgform value=1>");
+                  "<form method=post action=/save/cfg data-dirty><input type=hidden name=cfgform value=1>");
         int last_g = -1;
         char val[24], txt[48], def[24], range[64];
         for (int n = 0; n < cfgtext_count(); n++) {
@@ -521,22 +569,25 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
             send_escaped(req, txt);
             SEND(req, ".</p></div>");
         }
-        SEND(req, last_g >= 0 ? "</details><button>Save settings</button></form>" : "<button>Save settings</button></form>");
+        SEND(req, last_g >= 0 ? "</details>" : "");
+        SEND(req, "<div class=save><button>Save settings</button></div></form>");
 
         sched_config_t sc;
         thermo_get_sched_config(&sc);
         tab(req, "prog");
-        SEND(req, "<h2>Weekly program</h2><form method=post action=/save/prog><p class=hint>Switch times per day, "
-                  "e.g. <code>06:00=c 08:00=e 17:00=21.5 22:30=e</code> (c = Comfort = your setpoint, e = Eco, a number = that "
-                  "temperature, 5-30 °C). Empty = "
-                  "the day continues the previous one. Used when Weekly program is ticked.</p>");
+        SEND(req, "<h2>Weekly program</h2><form method=post action=/save/prog data-dirty><p class=hint>Open a day to "
+                  "change its switch times. Comfort is your setpoint, Eco is the setpoint minus the Eco drop, or pick a "
+                  "fixed temperature. Used when Weekly program is on (Heating tab).</p><div id=week></div>"
+                  "<details><summary>As text</summary><p class=hint>Switch times per day, "
+                  "e.g. <code>06:00=c 08:00=e 17:00=21.5 22:30=e</code> (c = Comfort, e = Eco, a number = that "
+                  "temperature, 5-30 °C). Empty = the day continues the previous one.</p>");
         static const char *dn[7] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
         char day[100];
         for (int d = 0; d < 7; d++) {
             sched_prog_format(&sc, d, day, sizeof(day));
             sendf(req, "<label for=prog%d>%s</label><input id=prog%d name=prog%d value='%s'>", d, dn[d], d, d, day);
         }
-        SEND(req, "<button>Save program</button></form>");
+        SEND(req, "</details><div class=save><button>Save program</button></div></form>");
 
         tab(req, "sys");
         SEND(req, "<h2>Export / import</h2><p class=hint><a href='/api/config?download=1'>Download the configuration "
@@ -551,7 +602,21 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     SEND(req, "<h2>Clock</h2><form method=post action=/save/clock>");
     sendf(req, "<label><input type=checkbox name=ntp value=1 %s> Use NTP</label>", c->ntp_on ? "checked" : "");
     input(req, "NTP server", "server", c->ntp_server, "text");
-    input(req, "Time zone (POSIX TZ)", "tz", c->tz, "text");
+    SEND(req, "<label for=tz>Time zone</label><select id=tz name=tz>");
+    bool listed = false;
+    for (int i = 0; i < TIMEKEEP_ZONE_COUNT; i++) {
+        bool sel = strcmp(TIMEKEEP_ZONES[i].tz, c->tz) == 0;
+        listed |= sel;
+        sendf(req, "<option value='%s'%s>%s</option>", TIMEKEEP_ZONES[i].tz, sel ? " selected" : "", TIMEKEEP_ZONES[i].name);
+    }
+    if (!listed) {  // a zone set by hand earlier (import, console): keep it selectable
+        SEND(req, "<option selected value=\"");
+        send_escaped(req, c->tz);
+        SEND(req, "\">Other: ");
+        send_escaped(req, c->tz);
+        SEND(req, "</option>");
+    }
+    SEND(req, "</select>");
     {
         char now[40] = "not set";
         if (timekeep_valid()) {
@@ -560,8 +625,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
             localtime_r(&t, &lt);
             strftime(now, sizeof(now), "%Y-%m-%d %H:%M:%S", &lt);
         }
-        sendf(req, "<p class=hint>Device time: %s (%s). Europe/Budapest = CET-1CEST,M3.5.0,M10.5.0/3</p>", now,
-              timekeep_source_name());
+        sendf(req, "<p class=hint>Device time: %s (%s).</p>", now, timekeep_source_name());
     }
     SEND(req, "<label for=manual>Set the time by hand (only used with NTP off)</label>"
               "<input id=manual name=manual type=datetime-local><button>Save clock</button></form>");
@@ -571,22 +635,21 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     SEND(req, "<h2>Display</h2><form method=post action=/save/display>");
     sendf(req,
           "<label>Brightness %%</label><input name=bright type=number min=5 max=100 value=%u>"
-          "<label>Dimmed brightness %%</label><input name=dim type=number min=1 max=100 value=%u>"
-          "<label>Dim after (s, 0 = never)</label><input name=dim_s type=number min=0 max=3600 value=%u>",
-          c->bright, c->dim_level, c->dim_after_s);
-    sendf(req,
-          "<label>Back to the thermostat after (s, 0 = never)</label><input name=home_s type=number min=0 max=3600 value=%u>"
-          "<label><input type=checkbox name=night value=1 %s> Night mode</label>",
-          c->home_after_s, c->night_on ? "checked" : "");
+          "<label>Dimmed brightness %%</label><input name=dim type=number min=1 max=100 value=%u>",
+          c->bright, c->dim_level);
+    static const uint16_t dim_s[] = {0, 15, 30, 60, 120, 300, 600}, off_s[] = {0, 60, 120, 300, 600, 1800, 3600},
+                          home_s[] = {0, 30, 60, 120, 300};  // the choices of the device's Display settings
+    secs_select(req, "Dim after", "dim_s", dim_s, 7, c->dim_after_s);
+    secs_select(req, "Back to the thermostat after", "home_s", home_s, 5, c->home_after_s);
+    sendf(req, "<label><input type=checkbox name=night value=1 %s> Night mode</label>", c->night_on ? "checked" : "");
     sendf(req,
           "<label>Night from (HH:MM)</label><input name=n_st type=time value='%02u:%02u'>"
           "<label>Night until (HH:MM)</label><input name=n_en type=time value='%02u:%02u'>"
           "<label>Night brightness %%</label><input name=n_lvl type=number min=1 max=100 value=%u>",
           c->night_start / 60, c->night_start % 60, c->night_end / 60, c->night_end % 60, c->night_level);
-    sendf(req,
-          "<label>Screen off after (s, 0 = never)</label><input name=off_s type=number min=0 max=3600 value=%u>"
-          "<label><input type=checkbox name=keep value=1 %s> Keep the screen on between</label>",
-          c->off_after_s, c->keep_on ? "checked" : "");
+    secs_select(req, "Screen off after", "off_s", off_s, 7, c->off_after_s);
+    sendf(req, "<label><input type=checkbox name=keep value=1 %s> Keep the screen on between</label>",
+          c->keep_on ? "checked" : "");
     sendf(req,
           "<label>from (HH:MM)</label><input name=k_st type=time value='%02u:%02u'>"
           "<label>until (HH:MM)</label><input name=k_en type=time value='%02u:%02u'>",
@@ -648,48 +711,25 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
     SEND(req, "<h2>Hardware check</h2><table>");
     const selftest_item_t *it;
     int n = selftest_items(&it);
+    thermo_state_t sim_st;
+    thermo_get(&sim_st);
     for (int i = 0; i < n; i++) {
         static const char *cls[] = {"hint", "ok", "warn", "err"};
         static const char *word[] = {"...", "OK", "warning", "FAILED"};
-        sendf(req, "<tr><td>%s</td><td class=%s>%s</td><td class=hint>", it[i].name, cls[it[i].result],
-              word[it[i].result]);
-        send_escaped(req, it[i].detail);
+        // No boiler on the OpenTherm input is expected while the simulated boiler is in use: a note, not a warning
+        bool sim_note = it[i].result == ST_WARN && sim_st.boiler_sim && strstr(it[i].name, "OpenTherm");
+        sendf(req, "<tr><td>%s</td><td class=%s>%s</td><td class=hint>", it[i].name, sim_note ? "hint" : cls[it[i].result],
+              sim_note ? "not used" : word[it[i].result]);
+        send_escaped(req, sim_note ? "no boiler connected; the simulated boiler is in use" : it[i].detail);
         SEND(req, "</td></tr>");
     }
     sendf(req, "</table><p class=hint>IP %s, free heap %u KB internal / %u KB PSRAM, up %lld min.</p>", board_wifi_ip(),
           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), esp_timer_get_time() / 60000000);
 
-    SEND(req,
-         "</section><script>"
-         "function show(t){document.querySelectorAll('section[data-t]').forEach(e=>e.style.display=e.dataset.t==t?'':'none');"
-         "document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.t==t));"
-         "try{localStorage.setItem('tab',t)}catch(e){}}"
-         "document.querySelectorAll('#nav a').forEach(a=>a.onclick=()=>{show(a.dataset.t);scrollTo(0,0)});"
-         "{let t='home';try{t=localStorage.getItem('tab')||t}catch(e){}"
-         "if(!document.querySelector('section[data-t='+t+']'))t='home';show(t);}"
-         "async function upd(){try{const r=await fetch('/api/status');const s=await r.json();"
-         "document.getElementById('room').textContent=s.sensor_ok?s.room.toFixed(1)+' \\u00b0C':'sensor error';"
-         "document.getElementById('info').textContent='Set '+s.setpoint.toFixed(1)+' \\u00b0C \\u00b7 '+s.mode+"
-         "' \\u00b7 '+(s.demand?'heating':'idle')+' \\u00b7 humidity '+s.humidity.toFixed(0)+' % \\u00b7 boiler '+"
-         "(s.boiler_sim?'simulated':'real')+(s.boiler_online?', flow '+s.flow.toFixed(1)+' \\u00b0C, mod '+s.mod.toFixed(0)+' %':', offline');"
-         "const h=s.history,c=document.getElementById('chart');let lo=99,hi=-99;"
-         "h.forEach(p=>{if(p[0]!=null){lo=Math.min(lo,p[0],p[1]);hi=Math.max(hi,p[0],p[1]);}});"
-         "if(lo>hi){lo=15;hi=25;}lo-=0.5;hi+=0.5;const y=v=>160-(v-lo)/(hi-lo)*160,x=i=>i*1440/Math.max(h.length-1,1);"
-         "let d='',sp='',band='';h.forEach((p,i)=>{if(p[0]!=null)d+=(d?'L':'M')+x(i)+' '+y(p[0]);"
-         "sp+=(sp?'L':'M')+x(i)+' '+y(p[1]);if(p[2])band+=`<rect x='${x(i)}' y='150' width='${1440/h.length+1}' height='10' fill='#e57373'/>`;});"
-         "c.innerHTML=band+`<path d='${sp}' stroke='#ffb74d' fill='none' stroke-width='3' vector-effect='non-scaling-stroke'/>`+"
-         "`<path d='${d}' stroke='#4fc3f7' fill='none' stroke-width='3' vector-effect='non-scaling-stroke'/>`+"
-         "`<text x='8' y='18' fill='#90a4ae' font-size='16'>${hi.toFixed(1)}</text><text x='8' y='154' fill='#90a4ae' font-size='16'>${lo.toFixed(1)}</text>`;"
-         "}catch(e){document.getElementById('info').textContent='offline';}}"
-         "upd();setInterval(upd,5000);"
-         "async function upload(){const f=document.getElementById('fw').files[0],m=document.getElementById('fwmsg');"
-         "if(!f){m.textContent='Choose a .bin file first';return;}m.textContent='Uploading '+f.name+'...';"
-         "try{const r=await fetch('/ota',{method:'POST',body:f});m.textContent=await r.text();}catch(e){m.textContent='Upload failed: '+e;}}"
-         "async function runcmd(){const c=document.getElementById('cmd').value||'STAT',o=document.getElementById('cmdout');"
-         "o.textContent='...';try{const r=await fetch('/api/cmd',{method:'POST',body:c});o.textContent=await r.text()||'(no output)';}"
-         "catch(e){o.textContent='failed: '+e;}}"
-         "</script></body></html>");
+    SEND(req, "</section><script>");
+    SEND(req, page_js_start);  // main/web/page.js
+    SEND(req, "</script></body></html>");
     free(c);
     return httpd_resp_send_chunk(req, NULL, 0);
 }
@@ -733,8 +773,16 @@ static esp_err_t get_status(httpd_req_t *req)
     if (st.outside_mean_valid) {
         snprintf(mean, sizeof(mean), "%.1f", st.outside_mean_c);
     }
+    sched_config_t sc;
+    thermo_get_sched_config(&sc);
+    char press[16] = "null";
+    if (st.press_valid) {
+        snprintf(press, sizeof(press), "%.2f", st.pressure_bar);
+    }
+    sendf(req, "\"pressure\":%s,\"schedule\":{\"boost_on\":%s,\"away_on\":%s,", press, sc.boost_on ? "true" : "false",
+          sc.away_on ? "true" : "false");
     sendf(req,
-          "\"schedule\":{\"source\":\"%s\",\"target\":%.1f,\"next_change_min\":%d,\"next_level\":\"%s\","
+          "\"source\":\"%s\",\"target\":%.1f,\"next_change_min\":%d,\"next_level\":\"%s\","
           "\"boost_left_s\":%d,\"away\":%s,\"away_until\":%lld,\"summer\":%s,\"outside_mean\":%s},",
           sched_src_name(st.sched_src), st.target_c, st.next_change_min, nlv,
           st.boost_left_s, st.away ? "true" : "false", (long long)st.away_until, st.summer ? "true" : "false",
@@ -752,6 +800,14 @@ static esp_err_t get_status(httpd_req_t *req)
     for (int a = 0; a < ALERT_COUNT; a++) {
         if (st.alerts & (1u << a)) {
             sendf(req, "%s\"%s\"", firsta ? "" : ",", alert_name(a));
+            firsta = false;
+        }
+    }
+    SEND(req, "],\"titles\":[");
+    firsta = true;
+    for (int a = 0; a < ALERT_COUNT; a++) {
+        if (st.alerts & (1u << a)) {
+            sendf(req, "%s\"%s\"", firsta ? "" : ",", alert_title(a));
             firsta = false;
         }
     }

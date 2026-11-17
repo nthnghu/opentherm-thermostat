@@ -35,10 +35,14 @@ static void refresh(void)
 
     const char *ha = ha_last_result();
     ha_state_t hs = ha_state();
-    ui_label_fmt(s_status, "%s Wi-Fi: %s\n%s HA: %s\n%s Clock: %s",
-                 LV_SYMBOL_WIFI, board_wifi_status(), LV_SYMBOL_HOME,
+    char sig[20] = "";
+    if (board_wifi_connected()) {
+        snprintf(sig, sizeof(sig), " (%d dBm)", board_wifi_rssi());
+    }
+    ui_label_fmt(s_status, "%s  Wi-Fi: %s%s\n%s  Home Assistant: %s\n%s  Clock: %s",
+                 LV_SYMBOL_WIFI, board_wifi_status(), sig, LV_SYMBOL_HOME,
                  hs == HA_STATE_OK ? "connected" : hs == HA_STATE_ERROR ? (ha[0] ? ha : "error") : "not checked yet",
-                 LV_SYMBOL_BELL, timekeep_source_name());
+                 UI_ICON_CLOCK, timekeep_source_name());
 }
 
 static void timer_cb(lv_timer_t *t)
@@ -136,7 +140,7 @@ static void off_cb(lv_event_t *e)
 static void theme_cb(lv_event_t *e)
 {
     uint32_t sel = lv_buttonmatrix_get_selected_button(s_theme);
-    if (sel > 2) {
+    if (sel > 3) {
         return;
     }
     settings_copy(&s_tmp);
@@ -200,13 +204,14 @@ void quickpanel_create(void)
     lv_obj_set_style_border_width(s_panel, 0, 0);
     lv_obj_set_style_bg_color(s_panel, ui_c(UI_SURFACE), 0);
     lv_obj_set_style_pad_all(s_panel, 0, 0);
+    lv_obj_set_style_text_font(s_panel, &font_icons_20, 0);  // the top layer has no theme font: UI_ICON_* need this
     lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_GESTURE_BUBBLE);  // swipe up on the panel or its buttons: close
     lv_obj_add_event_cb(s_panel, gesture_cb, LV_EVENT_GESTURE, NULL);
 
     // Brightness + screen off
-    label(s_panel, LV_SYMBOL_IMAGE "  Brightness", 20, 22);
+    label(s_panel, UI_ICON_SUN "  Brightness", 20, 22);
     s_bright = lv_slider_create(s_panel);
     lv_slider_set_range(s_bright, 5, 100);
     lv_obj_set_size(s_bright, 230, 14);
@@ -218,7 +223,7 @@ void quickpanel_create(void)
     lv_obj_set_size(off, 440, 56);
 
     // Theme
-    label(s_panel, LV_SYMBOL_EYE_OPEN "  Theme", 20, 150);
+    label(s_panel, UI_ICON_PALETTE "  Theme", 20, 150);
     static const char *map[] = {"Sun", "Light", "Dark", "Hours", ""};
     s_theme = lv_buttonmatrix_create(s_panel);
     lv_buttonmatrix_set_map(s_theme, map);
@@ -229,7 +234,7 @@ void quickpanel_create(void)
     lv_obj_add_event_cb(s_theme, theme_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // Wake on motion
-    label(s_panel, LV_SYMBOL_EYE_OPEN "  Wake on motion", 20, 222);
+    label(s_panel, UI_ICON_WALK "  Wake on motion", 20, 222);
     s_motion = lv_switch_create(s_panel);
     lv_obj_set_pos(s_motion, 390, 216);
     lv_obj_add_event_cb(s_motion, motion_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -243,14 +248,14 @@ void quickpanel_create(void)
     lv_obj_set_width(s_status, 440);
     lv_label_set_long_mode(s_status, LV_LABEL_LONG_DOT);
     lv_obj_set_height(s_status, 90);
-    lv_obj_set_style_text_color(s_status, ui_c(UI_MUTED), 0);
+    lv_obj_set_style_text_color(s_status, ui_c(UI_CARD_TEXT), 0);
     lv_obj_set_pos(s_status, 20, 296);
 
     // Shortcuts into Setup (section index as in app_setup.c)
     shortcut(s_panel, LV_SYMBOL_WIFI "  Wi-Fi", 0, 20, 400, 214);
     shortcut(s_panel, LV_SYMBOL_HOME "  Home Assistant", 1, 246, 400, 214);
-    shortcut(s_panel, LV_SYMBOL_BELL "  Clock", 2, 20, 466, 214);
-    shortcut(s_panel, LV_SYMBOL_IMAGE "  Display", 5, 246, 466, 214);
+    shortcut(s_panel, UI_ICON_CLOCK "  Clock", 2, 20, 466, 214);
+    shortcut(s_panel, UI_ICON_DISPLAY "  Display", 5, 246, 466, 214);
     shortcut(s_panel, LV_SYMBOL_SETTINGS "  All settings", -1, 20, 532, 440);
 
     lv_obj_t *handle = ui_button(s_panel, LV_SYMBOL_UP, lv_color_hex(0x37474F), close_cb, NULL);

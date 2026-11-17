@@ -11,5 +11,8 @@ void ui_pages_schedule_update(void);
 void ui_pages_settings(lv_obj_t *tile);
 void ui_pages_settings_update(void);
 
-// Debug (serial GO): "edit <name>", "advanced", "service", "day N"
+// Opens the list of one settings group (cfg_group_t); its Back button returns to the Settings list (app_setup.c).
+void ui_pages_open_group(int g);
+
+// Debug (console GO): "edit <name>", "advanced", "service", "day N", "group N"
 void ui_pages_debug(const char *what);

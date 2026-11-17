@@ -8,6 +8,16 @@
 #include "esp_sntp.h"
 #include "settings.h"
 
+const timekeep_zone_t TIMEKEEP_ZONES[] = {
+    {"Europe/Budapest", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/London", "GMT0BST,M3.5.0/1,M10.5.0"},
+    {"Europe/Helsinki", "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"UTC", "UTC0"},
+    {"US Eastern", "EST5EDT,M3.2.0,M11.1.0"},
+    {"US Pacific", "PST8PDT,M3.2.0,M11.1.0"},
+};
+const int TIMEKEEP_ZONE_COUNT = sizeof(TIMEKEEP_ZONES) / sizeof(TIMEKEEP_ZONES[0]);
+
 static const char *TAG = "time";
 
 // Survives a software reset (the system time itself is kept by the RTC timer across soft resets).

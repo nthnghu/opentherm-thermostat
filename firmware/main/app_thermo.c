@@ -18,7 +18,7 @@ static lv_obj_t *s_scr, *s_tv;
 LV_FONT_DECLARE(font_room_75);  // tools/gen_font.py: digits . - ° only
 
 static lv_obj_t *s_time, *s_date, *s_room, *s_hum, *s_arc, *s_set, *s_mode_btn, *s_mode_lbl, *s_info;
-static lv_obj_t *s_src, *s_boost_btn, *s_away_btn, *s_prog_btn;
+static lv_obj_t *s_src, *s_boost_btn, *s_away_btn, *s_prog_btn, *s_alert, *s_alert_lbl, *s_room_dot;
 static lv_obj_t *s_dots[5];
 
 /* ------------------------------------------------------------- main page */
@@ -185,45 +185,21 @@ static void update_main(void)
     lv_label_set_text(lv_obj_get_child(s_away_btn, 0), st.away ? LV_SYMBOL_HOME " I'm back" : LV_SYMBOL_GPS " Away");
     lv_obj_set_style_bg_color(s_away_btn, ui_c(st.away ? 0x26A69A : 0x455A64), 0);
     lv_obj_set_hidden(s_prog_btn, st.sched_src != SCHED_SRC_MANUAL);
-    lv_label_set_text(s_mode_lbl, heat ? LV_SYMBOL_POWER " Heat" : LV_SYMBOL_POWER " Off");
+    lv_label_set_text(s_mode_lbl, heat ? "Heating: on" : "Heating: off");
     lv_obj_set_style_bg_color(s_mode_btn, ui_c(heat ? 0xD84315 : 0x455A64), 0);
     lv_obj_set_style_arc_color(s_arc, ui_c(heat ? 0xFF7043 : 0x607D8B), LV_PART_INDICATOR);
 
-    char boiler[64];
-    if (st.boiler_online) {
-        snprintf(boiler, sizeof(boiler), "%sflow %.0f °C, %.0f %%", st.boiler_sim ? "sim. boiler: " : "boiler: ",
-                 st.flow_c, st.modulation);
+    // Boiler line: what it does now, in plain words
+    char boiler[80];
+    const char *sim = st.boiler_sim ? " (simulated)" : "";
+    if (!st.boiler_online) {
+        snprintf(boiler, sizeof(boiler), "%s", st.boiler_sim ? "simulated boiler offline" : "no boiler connected");
+    } else if (st.flame) {
+        snprintf(boiler, sizeof(boiler), "water %.0f °C  •  power %.0f %%%s", st.flow_c,
+                 st.modulation > 100 ? 100 : st.modulation, sim);
     } else {
-        snprintf(boiler, sizeof(boiler), "%s", st.boiler_sim ? "sim. boiler offline" : "no boiler connected");
+        snprintf(boiler, sizeof(boiler), "water %.0f °C  •  burner off%s", st.flow_c, sim);
     }
-    char plan[1] = "";  // the program state is shown in the dial now
-#if 0
-    if (st.sched_src == SCHED_SRC_BOOST) {
-        snprintf(plan, sizeof(plan), "Boost %.1f °C, %d min left  /  ", st.target_c, (st.boost_left_s + 59) / 60);
-    } else if (st.sched_src == SCHED_SRC_AWAY) {
-        if (st.away_until) {
-            time_t u = (time_t)st.away_until;
-            struct tm t;
-            localtime_r(&u, &t);
-            snprintf(plan, sizeof(plan), "Away %.0f °C until %02d.%02d %02d:%02d  /  ", st.target_c, t.tm_mon + 1,
-                     t.tm_mday, t.tm_hour, t.tm_min);
-        } else {
-            snprintf(plan, sizeof(plan), "Away %.0f °C  /  ", st.target_c);
-        }
-    } else if (st.sched_src == SCHED_SRC_SUMMER) {
-        snprintf(plan, sizeof(plan), "Summer: heating off  /  ");
-    } else if (st.sched_src == SCHED_SRC_ECO || st.sched_src == SCHED_SRC_COMFORT || st.sched_src == SCHED_SRC_FIXED) {
-        const char *lvl = st.sched_src == SCHED_SRC_ECO ? "Eco" : (st.sched_src == SCHED_SRC_COMFORT ? "Comfort" : "Program");
-        if (st.next_change_min >= 0) {
-            time_t u = time(NULL) + st.next_change_min * 60;
-            struct tm t;
-            localtime_r(&u, &t);
-            snprintf(plan, sizeof(plan), "%s %.1f °C until %02d:%02d  /  ", lvl, st.target_c, t.tm_hour, t.tm_min);
-        } else {
-            snprintf(plan, sizeof(plan), "%s %.1f °C  /  ", lvl, st.target_c);
-        }
-    }
-#endif
     ctrl_config_t cfg;
     thermo_get_ctrl_config(&cfg);
     char loss[64];
@@ -232,33 +208,45 @@ static void update_main(void)
     } else {
         snprintf(loss, sizeof(loss), "%s", cfg.loss_mode == CTRL_LOSS_HEAT_OFF ? "heating off" : "last setting kept");
     }
+    // Alert chip (tap: Boiler page) above the status line; hidden when there is nothing to report
+    char chip[200] = "";
+    uint32_t chip_col = UI_WARN;
     if (st.svc_running) {
-        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_SETTINGS " Service: %s# - %s", (unsigned long)ui_hex(UI_WARN),
-                              svc_routine_title(st.svc_routine), st.svc_step);
-    } else if (st.alert_count && !(st.alerts & (1u << ALERT_SENSOR))) {
-        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " %s#  /  %s%s", (unsigned long)ui_hex(UI_WARN),
-                              st.alert_text, plan, boiler);
+        snprintf(chip, sizeof(chip), LV_SYMBOL_SETTINGS " Service: %s - %s", svc_routine_title(st.svc_routine), st.svc_step);
     } else if (!st.sensor_ok) {
-        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering - %s#",
-                              (unsigned long)ui_hex(UI_ERR), loss);
+        snprintf(chip, sizeof(chip), LV_SYMBOL_WARNING " Room sensor not answering - %s", loss);
+        chip_col = UI_ERR;
     } else if (st.sensor_age_s >= 6) {
-        lv_label_set_text_fmt(s_info, "#%06lX " LV_SYMBOL_WARNING " Room sensor not answering for %d s - %s in %d s#",
-                              (unsigned long)ui_hex(UI_WARN), st.sensor_age_s, loss,
-                              THERMO_SENSOR_STALE_S - st.sensor_age_s);
-    } else if (st.demand) {
-        const char *why = st.ctrl_state == CTRL_ST_HOLD      ? " (min-fire hold)"
-                          : st.ctrl_state == CTRL_ST_DUTY_ON ? " (long burn, low load)"
+        snprintf(chip, sizeof(chip), LV_SYMBOL_WARNING " Room sensor silent for %d s - %s in %d s", st.sensor_age_s, loss,
+                 THERMO_SENSOR_STALE_S - st.sensor_age_s);
+    } else if (st.alert_count) {
+        snprintf(chip, sizeof(chip), LV_SYMBOL_WARNING " %s", st.alert_text);
+    }
+    lv_obj_set_hidden(s_alert, !chip[0]);
+    lv_label_set_text(s_alert_lbl, chip);
+    lv_obj_set_style_text_color(s_alert_lbl, ui_c(chip_col), 0);
+    lv_obj_set_y(s_info, chip[0] ? 666 : 640);
+
+    if (st.demand) {
+        const char *why = st.ctrl_state == CTRL_ST_HOLD      ? " (keeping the small flame)"
+                          : st.ctrl_state == CTRL_ST_DUTY_ON ? " (long burn, low demand)"
                           : st.ctrl_state == CTRL_ST_FROST   ? " (frost protection)"
                                                              : "";
-        lv_label_set_text_fmt(s_info, "#%06lX Heating# to %.0f °C%s  /  %s%s", (unsigned long)ui_hex(UI_HEAT),
-                              st.flow_setpoint, why, plan, boiler);
+        ui_label_fmt(s_info, "#FF7043 Heating# to %.0f °C%s\n%s", st.flow_setpoint, why, boiler);
     } else if (st.ctrl_state == CTRL_ST_DUTY_OFF && heat) {
-        lv_label_set_text_fmt(s_info, "Pausing (low load: fewer, longer burns)  /  %s%s", plan, boiler);
+        ui_label_fmt(s_info, "Pausing (low demand: fewer, longer burns)\n%s", boiler);
     } else if (!heat && cfg.frost_on) {
-        lv_label_set_text_fmt(s_info, "Idle (frost protection below %.0f °C)  /  %s", cfg.frost_room_c, boiler);
+        ui_label_fmt(s_info, "Idle (frost protection below %.0f °C)\n%s", cfg.frost_room_c, boiler);
     } else {
-        lv_label_set_text_fmt(s_info, "Idle  /  %s%s", heat ? plan : "", boiler);
+        ui_label_fmt(s_info, "Idle\n%s", boiler);
     }
+
+    // Where the room is on the dial (the knob is the target)
+    float f = (st.room_shown - THERMO_SP_MIN) / (THERMO_SP_MAX - THERMO_SP_MIN);
+    f = f < 0 ? 0 : (f > 1 ? 1 : f);
+    float ang = (135 + 270 * f) * (float)M_PI / 180;
+    lv_obj_set_pos(s_room_dot, 180 - 7 + (int)lroundf(169 * cosf(ang)), 180 - 7 + (int)lroundf(169 * sinf(ang)));
+    lv_obj_set_hidden(s_room_dot, !st.sensor_ok);
 }
 
 static void build_main(lv_obj_t *p)
@@ -304,42 +292,66 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_style_text_font(s_set, &lv_font_montserrat_28, 0);
     lv_obj_align(s_set, LV_ALIGN_CENTER, 0, 114);
 
+    // The room temperature on the dial: a dot on the ring (the knob is the target)
+    s_room_dot = lv_obj_create(s_arc);
+    lv_obj_remove_style_all(s_room_dot);
+    lv_obj_set_size(s_room_dot, 14, 14);
+    lv_obj_set_style_radius(s_room_dot, 7, 0);
+    lv_obj_set_style_bg_opa(s_room_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_room_dot, ui_c(UI_TEXT), 0);
+    lv_obj_set_style_border_width(s_room_dot, 2, 0);
+    lv_obj_set_style_border_color(s_room_dot, ui_c(UI_BG), 0);
+    lv_obj_remove_flag(s_room_dot, LV_OBJ_FLAG_CLICKABLE);
+
     lv_obj_t *minus = ui_button(p, LV_SYMBOL_MINUS, ui_c(0x1565C0), minus_cb, NULL);
-    lv_obj_set_size(minus, 120, 76);
+    lv_obj_set_size(minus, 104, 76);
     lv_obj_set_pos(minus, 20, 466);
     lv_obj_set_style_text_font(lv_obj_get_child(minus, 0), &lv_font_montserrat_40, 0);
     lv_obj_t *plus = ui_button(p, LV_SYMBOL_PLUS, ui_c(0xD84315), plus_cb, NULL);
-    lv_obj_set_size(plus, 120, 76);
-    lv_obj_set_pos(plus, 340, 466);
+    lv_obj_set_size(plus, 104, 76);
+    lv_obj_set_pos(plus, 356, 466);
     lv_obj_set_style_text_font(lv_obj_get_child(plus, 0), &lv_font_montserrat_40, 0);
     s_mode_btn = ui_button(p, "", ui_c(0xD84315), mode_cb, NULL);
-    lv_obj_set_size(s_mode_btn, 172, 76);
-    lv_obj_set_pos(s_mode_btn, 154, 466);
+    lv_obj_set_size(s_mode_btn, 208, 76);
+    lv_obj_set_pos(s_mode_btn, 136, 466);
     s_mode_lbl = lv_obj_get_child(s_mode_btn, 0);
     lv_obj_set_style_text_font(s_mode_lbl, &lv_font_montserrat_28, 0);
 
-    // Boost / Away / back to the program: a centred row; hidden buttons leave no gap
+    // Boost / Away / back to the program: a row the shown buttons share; hidden buttons leave no gap
     lv_obj_t *row = lv_obj_create(p);
     lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, 440, 60);
-    lv_obj_set_pos(row, 20, 554);
+    lv_obj_set_size(row, 440, 62);
+    lv_obj_set_pos(row, 20, 552);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, 12, 0);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     s_boost_btn = ui_button(row, LV_SYMBOL_UP " Boost", ui_c(0x455A64), boost_cb, NULL);
-    lv_obj_set_size(s_boost_btn, 138, 60);
+    lv_obj_set_height(s_boost_btn, 62);
+    lv_obj_set_flex_grow(s_boost_btn, 1);
     s_away_btn = ui_button(row, LV_SYMBOL_GPS " Away", ui_c(0x455A64), away_cb, NULL);
-    lv_obj_set_size(s_away_btn, 138, 60);
+    lv_obj_set_height(s_away_btn, 62);
+    lv_obj_set_flex_grow(s_away_btn, 1);
     s_prog_btn = ui_button(row, LV_SYMBOL_REFRESH " Program", ui_c(0x5E35B1), prog_cb, NULL);
-    lv_obj_set_size(s_prog_btn, 138, 60);
+    lv_obj_set_height(s_prog_btn, 62);
+    lv_obj_set_flex_grow(s_prog_btn, 1);
 
+    // Alert chip, then two status lines: what the thermostat does, what the boiler does. Both open the Boiler page.
+    s_alert = ui_button(p, "", ui_c(UI_SURFACE), info_cb, NULL);
+    lv_obj_set_size(s_alert, 440, 38);
+    lv_obj_set_pos(s_alert, 20, 622);
+    lv_obj_set_style_shadow_width(s_alert, 0, 0);
+    s_alert_lbl = lv_obj_get_child(s_alert, 0);
+    lv_obj_set_width(s_alert_lbl, 420);
+    lv_label_set_long_mode(s_alert_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_alert_lbl, LV_TEXT_ALIGN_CENTER, 0);
     s_info = lv_label_create(p);
     lv_label_set_recolor(s_info, true);
     lv_obj_set_width(s_info, 440);
-    lv_label_set_long_mode(s_info, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(s_info, 48);
+    lv_label_set_long_mode(s_info, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_info, 20, 626);
+    lv_obj_set_pos(s_info, 20, 640);
     lv_obj_add_flag(s_info, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_info, info_cb, LV_EVENT_CLICKED, NULL);
 }
@@ -353,12 +365,21 @@ static const int RANGE_S[R_COUNT] = {300, 3600, 6 * 3600, 86400, 7 * 86400};
 static const int RANGE_PTS[R_COUNT] = {60, 180, 180, 180, 168};
 #define MAX_PTS 180
 
-static lv_obj_t *s_chart, *s_heat, *s_chart_info, *s_yscale, *s_wscale, *s_xscale, *s_range;
-static lv_chart_series_t *s_ser_room, *s_ser_target, *s_ser_flow, *s_ser_heat;
+#define CH_X 62  // plot area on the page
+#define CH_Y 160
+#define CH_W 356
+#define CH_H 400
+#define X_TICKS 9
+
+static lv_obj_t *s_chart, *s_heat, *s_chart_info, *s_yscale, *s_wscale, *s_xscale, *s_range, *s_wlbl, *s_vgrid[X_TICKS];
+static lv_chart_series_t *s_ser_room, *s_ser_target, *s_ser_flow;
 static int s_rng = R_24H;
+static bool s_water_off;  // the water line is hidden (tap the legend)
 static void *s_cbuf;  // PSRAM scratch for the samples of one range
-static char s_ylbl[16][8], s_xlbl[5][24];
-static const char *s_ytxt[17], *s_xtxt[6];
+static char s_ylbl[16][8], s_xlbl[X_TICKS][24];
+static const char *s_ytxt[17], *s_xtxt[X_TICKS + 1];
+// Time labels sit on round clock times: every minute, 15 min, hour, 6 hours, day
+static const int TICK_S[R_COUNT] = {60, 900, 3600, 6 * 3600, 86400};
 
 typedef struct {
     double room, flow, heat;
@@ -496,21 +517,44 @@ static void update_chart(void)
     lv_scale_set_major_tick_every(s_yscale, 1);
     lv_scale_set_text_src(s_yscale, s_ytxt);
 
+    // Series colours follow the theme; the water line is paler so that the room line leads
+    lv_chart_set_series_color(s_chart, s_ser_room, ui_c(UI_VALUE));
+    lv_chart_set_series_color(s_chart, s_ser_target, ui_c(UI_WARN));
+    lv_chart_set_series_color(s_chart, s_ser_flow, lv_color_hex(ui_theme_is_dark() ? 0x8C4A4A : 0xEDB4B4));
+    lv_chart_hide_series(s_chart, s_ser_flow, s_water_off);
+    lv_obj_set_hidden(s_wscale, s_water_off);
+    lv_obj_set_hidden(s_wlbl, s_water_off);
+
     lv_chart_set_point_count(s_chart, npts);
-    lv_chart_set_point_count(s_heat, npts);
     lv_chart_set_axis_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, ylo, ylo + (ticks - 1) * step);
     lv_chart_set_hor_div_line_count(s_chart, ticks);
     lv_chart_set_series_values(s_chart, s_ser_room, room, npts);
     lv_chart_set_series_values(s_chart, s_ser_target, target, npts);
     lv_chart_set_series_values(s_chart, s_ser_flow, flow, npts);
-    lv_chart_set_series_values(s_heat, s_ser_heat, heat, npts);
     lv_chart_refresh(s_chart);
-    lv_chart_refresh(s_heat);
 
-    // Time labels: 5 evenly spaced points from the start of the range to now
-    for (int i = 0; i < 5; i++) {
-        time_t t = now - range_s + (time_t)i * range_s / 4;
-        if (!clock) {
+    // Heating band: one block per run of buckets with the burner on for the radiators
+    lv_obj_clean(s_heat);
+    for (int i = 0, from = -1; i <= npts; i++) {
+        bool on = i < npts && heat[i] > 0;
+        if (on && from < 0) {
+            from = i;
+        } else if (!on && from >= 0) {
+            lv_obj_t *r = lv_obj_create(s_heat);
+            lv_obj_remove_style_all(r);
+            lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(r, ui_c(UI_HEAT), 0);
+            int x0 = from * CH_W / npts, x1 = i * CH_W / npts;
+            lv_obj_set_pos(r, x0, 0);
+            lv_obj_set_size(r, x1 > x0 ? x1 - x0 : 1, 22);
+            from = -1;
+        }
+    }
+
+    // Time labels. With the clock set they sit on round times (TICK_S); without it, 5 evenly spaced "ago" labels.
+    int nt = 5, x0 = 0, xw = CH_W;
+    if (!clock) {
+        for (int i = 0; i < 5; i++) {
             int ago = (4 - i) * range_s / 4;
             if (ago == 0) {
                 snprintf(s_xlbl[i], sizeof(s_xlbl[i]), "now");
@@ -519,20 +563,39 @@ static void update_chart(void)
             } else {
                 snprintf(s_xlbl[i], sizeof(s_xlbl[i]), "-%d h", ago / 3600);
             }
-        } else {
-            struct tm lt;
-            localtime_r(&t, &lt);
-            if (s_rng == R_WEEK) {
-                strftime(s_xlbl[i], sizeof(s_xlbl[i]), "%a %H", &lt);
-            } else if (s_rng == R_5M) {
-                strftime(s_xlbl[i], sizeof(s_xlbl[i]), "%H:%M:%S", &lt);
-            } else {
-                strftime(s_xlbl[i], sizeof(s_xlbl[i]), "%H:%M", &lt);
-            }
         }
-        s_xtxt[i] = s_xlbl[i];
+    } else {
+        const int step = TICK_S[s_rng];
+        time_t start = now - range_s;
+        struct tm lt;
+        localtime_r(&start, &lt);
+        int into = (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec) % step;  // local time past the last round time
+        time_t first = start + (into ? step - into : 0);
+        nt = (int)((now - first) / step) + 1;
+        nt = nt > X_TICKS ? X_TICKS : nt;
+        x0 = (int)((first - start) * (long)CH_W / range_s);
+        xw = (int)((long)(nt - 1) * step * CH_W / range_s);
+        for (int i = 0; i < nt; i++) {
+            time_t t = first + (time_t)i * step;
+            localtime_r(&t, &lt);
+            strftime(s_xlbl[i], sizeof(s_xlbl[i]), s_rng == R_WEEK ? "%a" : "%H:%M", &lt);
+        }
     }
-    s_xtxt[5] = NULL;
+    for (int i = 0; i < X_TICKS; i++) {
+        s_xtxt[i] = i < nt ? s_xlbl[i] : NULL;
+        lv_obj_set_hidden(s_vgrid[i], i >= nt);
+        if (i < nt) {
+            lv_obj_set_x(s_vgrid[i], CH_X + x0 + (nt > 1 ? i * xw / (nt - 1) : 0));
+        }
+    }
+    s_xtxt[nt] = NULL;
+    if (nt < 2) {  // a scale needs two ticks
+        s_xtxt[1] = "", s_xtxt[2] = NULL, nt = 2, xw = 2;
+    }
+    lv_obj_set_x(s_xscale, CH_X + x0);
+    lv_obj_set_width(s_xscale, xw > 0 ? xw : 2);
+    lv_scale_set_range(s_xscale, 0, nt - 1);
+    lv_scale_set_total_tick_count(s_xscale, nt);
     lv_scale_set_text_src(s_xscale, s_xtxt);
 
     char rs[24] = "--", ts[24] = "--", fs[24] = "--";
@@ -545,8 +608,20 @@ static void update_chart(void)
     if (!isnan(cur_flow)) {
         snprintf(fs, sizeof(fs), "%.0f °C", cur_flow);
     }
-    ui_label_fmt(s_chart_info, "#4FC3F7 Room# %s   #FFB74D Target# %s   #E57373 Water# %s\nHeating on in %d %% of the time",
-                 rs, ts, fs, heat_n ? 100 * heat_on / heat_n : 0);
+    char water[48];
+    if (s_water_off) {
+        snprintf(water, sizeof(water), "#607D8B Water hidden#");
+    } else {
+        snprintf(water, sizeof(water), "#E57373 Water# %s", fs);
+    }
+    ui_label_fmt(s_chart_info, "#4FC3F7 Room# %s   #FFB74D Target# %s   %s\n#FF7043 Heating# on %d %% of the time", rs,
+                 ts, water, heat_n ? 100 * heat_on / heat_n : 0);
+}
+
+static void water_cb(lv_event_t *e)
+{
+    s_water_off = !s_water_off;
+    update_chart();
 }
 
 static void range_cb(lv_event_t *e)
@@ -565,7 +640,7 @@ static lv_obj_t *axis(lv_obj_t *p, lv_scale_mode_t mode, int x, int y, int w, in
     lv_obj_set_pos(s, x, y);
     lv_obj_set_size(s, w, h);
     lv_scale_set_label_show(s, true);
-    lv_obj_set_style_text_font(s, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s, ui_c(UI_MUTED), 0);
     lv_obj_set_style_line_color(s, ui_c(UI_DOT_OFF), LV_PART_MAIN);
     lv_obj_set_style_line_color(s, ui_c(UI_DOT_OFF), LV_PART_ITEMS);
@@ -594,8 +669,16 @@ static void build_chart(lv_obj_t *p)
     lv_obj_set_style_pad_gap(s_range, 4, 0);
     lv_obj_add_event_cb(s_range, range_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    // Plot: room/target on the left scale, water on the right scale, heating share as bars below
-    const int cx = 62, cy = 160, cw = 356, ch = 400;
+    // Plot: room/target on the left scale, water on the right scale, heating as a band below
+    const int cx = CH_X, cy = CH_Y, cw = CH_W, ch = CH_H;
+    for (int i = 0; i < X_TICKS; i++) {  // vertical grid lines at the time labels, behind the (transparent) chart
+        s_vgrid[i] = lv_obj_create(p);
+        lv_obj_remove_style_all(s_vgrid[i]);
+        lv_obj_set_size(s_vgrid[i], 1, ch);
+        lv_obj_set_pos(s_vgrid[i], cx, cy);
+        lv_obj_set_style_bg_opa(s_vgrid[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(s_vgrid[i], ui_c(UI_SURFACE), 0);
+    }
     s_chart = lv_chart_create(p);
     lv_obj_set_pos(s_chart, cx, cy);
     lv_obj_set_size(s_chart, cw, ch);
@@ -606,26 +689,26 @@ static void build_chart(lv_obj_t *p)
     lv_obj_set_style_bg_opa(s_chart, LV_OPA_TRANSP, 0);
     lv_obj_set_style_line_color(s_chart, ui_c(UI_SURFACE), LV_PART_MAIN);  // grid
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
-    lv_chart_set_div_line_count(s_chart, 5, 5);
+    lv_chart_set_div_line_count(s_chart, 5, 0);
     lv_obj_set_style_size(s_chart, 0, 0, LV_PART_INDICATOR);  // no point markers
     lv_obj_set_style_line_width(s_chart, 3, LV_PART_ITEMS);
     lv_chart_set_axis_range(s_chart, LV_CHART_AXIS_SECONDARY_Y, 200, 700);  // water 20-70 °C
     s_ser_flow = lv_chart_add_series(s_chart, ui_c(0xE57373), LV_CHART_AXIS_SECONDARY_Y);
-    s_ser_target = lv_chart_add_series(s_chart, ui_c(0xFFB74D), LV_CHART_AXIS_PRIMARY_Y);
-    s_ser_room = lv_chart_add_series(s_chart, ui_c(0x4FC3F7), LV_CHART_AXIS_PRIMARY_Y);
+    s_ser_target = lv_chart_add_series(s_chart, ui_c(UI_WARN), LV_CHART_AXIS_PRIMARY_Y);
+    s_ser_room = lv_chart_add_series(s_chart, ui_c(UI_VALUE), LV_CHART_AXIS_PRIMARY_Y);
 
-    s_heat = lv_chart_create(p);
+    s_heat = lv_obj_create(p);
+    lv_obj_remove_style_all(s_heat);
     lv_obj_set_pos(s_heat, cx, cy + ch + 4);
     lv_obj_set_size(s_heat, cw, 22);
-    lv_obj_set_style_pad_all(s_heat, 0, 0);
-    lv_obj_set_style_pad_column(s_heat, 0, 0);
-    lv_obj_set_style_radius(s_heat, 0, 0);
-    lv_obj_set_style_border_width(s_heat, 0, 0);
+    lv_obj_set_style_bg_opa(s_heat, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s_heat, ui_c(UI_SURFACE_ALT), 0);
-    lv_chart_set_type(s_heat, LV_CHART_TYPE_BAR);
-    lv_chart_set_div_line_count(s_heat, 0, 0);
-    lv_chart_set_axis_range(s_heat, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
-    s_ser_heat = lv_chart_add_series(s_heat, ui_c(UI_HEAT), LV_CHART_AXIS_PRIMARY_Y);
+    lv_obj_remove_flag(s_heat, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *hl = lv_label_create(p);  // names the band
+    lv_obj_set_style_text_color(hl, ui_c(UI_HEAT), 0);
+    lv_label_set_text(hl, UI_ICON_FIRE);
+    lv_obj_set_style_text_font(hl, &font_icons_20, 0);
+    lv_obj_set_pos(hl, cx - 26, cy + ch + 4);
 
     s_yscale = axis(p, LV_SCALE_MODE_VERTICAL_LEFT, 8, cy, cx - 10, ch);
     s_wscale = axis(p, LV_SCALE_MODE_VERTICAL_RIGHT, cx + cw + 2, cy, 480 - cx - cw - 4, ch);
@@ -639,21 +722,25 @@ static void build_chart(lv_obj_t *p)
     lv_scale_set_major_tick_every(s_xscale, 1);
 
     lv_obj_t *u = lv_label_create(p);
-    lv_obj_set_style_text_font(u, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(u, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(u, ui_c(UI_MUTED), 0);
     lv_label_set_text(u, "°C");
-    lv_obj_set_pos(u, 30, cy - 22);
-    lv_obj_t *uw = lv_label_create(p);
-    lv_obj_set_style_text_font(uw, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(uw, ui_c(0xE57373), 0);
-    lv_label_set_text(uw, "water");
-    lv_obj_set_pos(uw, cx + cw - 8, cy - 22);
+    lv_obj_set_pos(u, 30, cy - 28);
+    s_wlbl = lv_label_create(p);
+    lv_obj_set_style_text_font(s_wlbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_wlbl, ui_c(0xE57373), 0);
+    lv_label_set_text(s_wlbl, "water");
+    lv_obj_set_pos(s_wlbl, cx + cw - 12, cy - 28);
 
+    // Legend with the current values; a tap hides or shows the water line
     s_chart_info = lv_label_create(p);
     lv_label_set_recolor(s_chart_info, true);
     lv_obj_set_width(s_chart_info, 440);
     lv_obj_set_style_text_align(s_chart_info, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s_chart_info, 20, cy + ch + 70);
+    lv_obj_add_flag(s_chart_info, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_chart_info, 8);
+    lv_obj_add_event_cb(s_chart_info, water_cb, LV_EVENT_CLICKED, NULL);
     s_cbuf = heap_caps_malloc(sizeof(thermo_fine_t) * THERMO_FINE_LEN, MALLOC_CAP_SPIRAM);
 }
 

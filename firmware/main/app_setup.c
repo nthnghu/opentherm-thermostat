@@ -1,5 +1,6 @@
-// Setup: QR code to the web setup page, then sections (Wi-Fi, Home Assistant,
-// Clock, Web access, Thermostat, Display, Diagnostics). Each section is an overlay panel.
+// Settings: the one list of everything that can be set. "Heating" rows open the thermostat's setting groups
+// (ui_pages.c); "Device" rows open a section here (Wi-Fi, Home Assistant, Clock, Web access, Sensor and boiler,
+// Display, Diagnostics). A section is an overlay panel; while one is open the header shows its name and Back.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -26,6 +27,8 @@
 #include "selftest.h"
 #include "c6update.h"
 #include "motion.h"
+#include "cfgtext.h"
+#include "ui_pages.h"
 
 static const char *TAG = "setup";
 
@@ -37,6 +40,10 @@ static QueueHandle_t s_cmds;
 static settings_t s_tmp;  // scratch copy for edits (LVGL task only)
 static lv_obj_t *s_content, *s_kb;
 static bool s_visible;
+#define N_PANELS 7
+#define PANEL_SHIFT 56  // sections are laid out below a title row that the header now replaces
+static lv_obj_t *s_panels[N_PANELS], *s_open, *s_hdr_back, *s_hdr_title, *s_picker;
+static void show_panel(lv_obj_t *p);
 
 /* --------------------------------------------------------------- helpers */
 
@@ -109,31 +116,46 @@ static lv_obj_t *textarea(lv_obj_t *parent, const char *placeholder, int x, int 
 
 /* ------------------------------------------------------------------ panels */
 
-static void panel_back_cb(lv_event_t *e)
+// Shows one section (the header gets its name and a Back button), or the Settings list for NULL.
+static void show_panel(lv_obj_t *p)
 {
     kb_hide();
-    lv_obj_add_flag(lv_event_get_user_data(e), LV_OBJ_FLAG_HIDDEN);
+    for (int k = 0; k < N_PANELS; k++) {
+        lv_obj_add_flag(s_panels[k], LV_OBJ_FLAG_HIDDEN);
+    }
+    s_open = p;
+    if (p) {
+        lv_obj_remove_flag(p, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(p);
+        lv_obj_send_event(p, LV_EVENT_REFRESH, NULL);
+    }
+    lv_label_set_text(s_hdr_title, p ? (const char *)lv_obj_get_user_data(p) : "Settings");
+    lv_label_set_text(lv_obj_get_child(s_hdr_back, 0), p ? LV_SYMBOL_LEFT " Back" : LV_SYMBOL_LEFT " Apps");
 }
 
 static void panel_open_cb(lv_event_t *e)
 {
-    lv_obj_t *p = lv_event_get_user_data(e);
-    lv_obj_remove_flag(p, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(p);
-    lv_obj_send_event(p, LV_EVENT_REFRESH, NULL);
+    show_panel(lv_event_get_user_data(e));
 }
 
-// Panel with a "‹ Back" button and a title.
+// The header button: closes the network list, then the open section, then goes to the app menu.
+static void hdr_back_cb(lv_event_t *e)
+{
+    if (!lv_obj_has_flag(s_picker, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+        ui_set_busy(false);
+    } else if (s_open) {
+        show_panel(NULL);
+    } else {
+        ui_go_launcher();
+    }
+}
+
+// A section panel; its title is shown in the header while it is open.
 static lv_obj_t *panel(const char *title)
 {
     lv_obj_t *p = ui_overlay(s_content);
-    lv_obj_t *back = ui_button(p, LV_SYMBOL_LEFT " Back", ui_c(0x37474F), panel_back_cb, p);
-    lv_obj_set_size(back, 110, 48);
-    lv_obj_set_pos(back, 10, 8);
-    lv_obj_t *t = lv_label_create(p);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
-    ui_label_text(t, title);
-    lv_obj_set_pos(t, 136, 16);
+    lv_obj_set_user_data(p, (void *)title);
     return p;
 }
 
@@ -141,7 +163,7 @@ static lv_obj_t *panel(const char *title)
 
 static wifi_ap_record_t s_aps[MAX_APS];
 static char s_chosen_ssid[33];
-static lv_obj_t *s_wifi_status, *s_picker, *s_list, *s_scan_lbl, *s_pw_panel, *s_pw_title, *s_pw_ta, *s_pw_kb;
+static lv_obj_t *s_wifi_status, *s_list, *s_scan_lbl, *s_pw_panel, *s_pw_title, *s_pw_ta, *s_pw_kb;
 
 static void wifi_item_cb(lv_event_t *e);
 
@@ -248,7 +270,7 @@ static void show_pw_cb(lv_event_t *e)
 
 static lv_obj_t *build_wifi(void)
 {
-    lv_obj_t *p = panel(LV_SYMBOL_WIFI " Wi-Fi");
+    lv_obj_t *p = panel("Wi-Fi");
     s_wifi_status = label(p, "", 16, 76, 448, 0x90A4AE);
     button(p, "Choose network", 0x1565C0, choose_cb, 16, 140, 448, 64);
     label(p, "Pick your network and type its password on the screen keyboard. "
@@ -347,14 +369,14 @@ static void ha_test_cb(lv_event_t *e)
 
 static lv_obj_t *build_ha(void)
 {
-    lv_obj_t *p = panel(LV_SYMBOL_HOME " Home Assistant");
+    lv_obj_t *p = panel("Home Assistant");
     lv_obj_add_event_cb(p, ha_panel_cb, LV_EVENT_REFRESH, NULL);
     label(p, "Home Assistant URL", 16, 70, 0, 0);
     s_ha_url = textarea(p, "http://homeassistant.local:8123", 16, 98, 330);
     lv_textarea_set_max_length(s_ha_url, 120);
     button(p, "Save", 0x2E7D32, ha_save_url_cb, 356, 98, 108, 52);
 
-    label(p, "The access token is entered on the web setup page (QR code on the Setup screen): in HA, your profile > "
+    label(p, "The access token is entered on the web page (Settings > Web access shows its address): in HA, your profile > "
              "Security > Long-lived access tokens > Create token, then paste it there.",
           16, 176, 448, 0x90A4AE);
     s_ha_status = label(p, "", 16, 290, 448, 0);
@@ -365,16 +387,7 @@ static lv_obj_t *build_ha(void)
 
 /* ================================================================== Clock */
 
-static const struct {
-    const char *name, *tz;
-} TZS[] = {
-    {"Europe/Budapest (CET/CEST)", "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/London (GMT/BST)", "GMT0BST,M3.5.0/1,M10.5.0"},
-    {"Europe/Helsinki (EET/EEST)", "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"UTC", "UTC0"},
-    {"US Eastern", "EST5EDT,M3.2.0,M11.1.0"},
-    {"US Pacific", "PST8PDT,M3.2.0,M11.1.0"},
-};
+#define TZS TIMEKEEP_ZONES  // shared with the web page
 
 static lv_obj_t *s_ntp_sw, *s_ntp_srv, *s_tz_dd, *s_now_lbl, *s_rl[5];
 
@@ -383,7 +396,7 @@ static void clock_panel_cb(lv_event_t *e)
     const settings_t *c = settings_get();
     lv_obj_set_state(s_ntp_sw, LV_STATE_CHECKED, c->ntp_on);
     lv_textarea_set_text(s_ntp_srv, c->ntp_server);
-    for (size_t i = 0; i < sizeof(TZS) / sizeof(TZS[0]); i++) {
+    for (size_t i = 0; i < (size_t)TIMEKEEP_ZONE_COUNT; i++) {
         if (strcmp(TZS[i].tz, c->tz) == 0) {
             lv_dropdown_set_selected(s_tz_dd, i);
         }
@@ -466,11 +479,11 @@ static char *num_list(int from, int to, int width)
 
 static lv_obj_t *build_clock(void)
 {
-    lv_obj_t *p = panel(LV_SYMBOL_BELL " Clock");
+    lv_obj_t *p = panel("Clock");
     lv_obj_add_event_cb(p, clock_panel_cb, LV_EVENT_REFRESH, NULL);
     s_now_lbl = label(p, "", 16, 70, 448, 0x4FC3F7);
 
-    label(p, "Set the time from the internet (NTP)", 16, 110, 340, 0);
+    label(p, "Internet time (NTP)", 16, 110, 0, 0);
     s_ntp_sw = lv_switch_create(p);
     lv_obj_set_pos(s_ntp_sw, 390, 104);
     lv_obj_add_event_cb(s_ntp_sw, clock_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -480,9 +493,9 @@ static lv_obj_t *build_clock(void)
     label(p, "Time zone", 16, 210, 0, 0x90A4AE);
     s_tz_dd = lv_dropdown_create(p);
     char opts[300] = "";
-    for (size_t i = 0; i < sizeof(TZS) / sizeof(TZS[0]); i++) {
+    for (size_t i = 0; i < (size_t)TIMEKEEP_ZONE_COUNT; i++) {
         strlcat(opts, TZS[i].name, sizeof(opts));
-        if (i + 1 < sizeof(TZS) / sizeof(TZS[0])) {
+        if (i + 1 < (size_t)TIMEKEEP_ZONE_COUNT) {
             strlcat(opts, "\n", sizeof(opts));
         }
     }
@@ -493,6 +506,7 @@ static lv_obj_t *build_clock(void)
 
     label(p, "Set by hand (turns NTP off)", 16, 270, 0, 0);
     static const int w[5] = {100, 72, 72, 72, 72};
+    static const char *const unit[5] = {"year", "month", "day", "hour", "min"};
     const char *opt[5] = {num_list(2025, 2040, 4), num_list(1, 12, 2), num_list(1, 31, 2), num_list(0, 23, 2),
                           num_list(0, 59, 2)};
     int x = 16;
@@ -502,9 +516,11 @@ static lv_obj_t *build_clock(void)
         lv_roller_set_visible_row_count(s_rl[i], 3);
         lv_obj_set_width(s_rl[i], w[i]);
         lv_obj_set_pos(s_rl[i], x, 302);
-        x += w[i] + 18;
+        lv_obj_t *u = label(p, unit[i], x, 438, 0, 0x607D8B);  // centred under its column
+        lv_obj_set_width(u, w[i]);
+        lv_obj_set_style_text_align(u, LV_TEXT_ALIGN_CENTER, 0);
+        x += w[i] + 12;
     }
-    label(p, "year          month     day       hour      min", 24, 438, 0, 0x607D8B);
     button(p, "Set clock", 0x1565C0, set_clock_cb, 16, 470, 448, 64);
     label(p, "This board has no battery clock: a hand-set time is lost when power is cut. "
              "With Wi-Fi, NTP keeps the time correct.",
@@ -544,9 +560,9 @@ static void web_save_cb(lv_event_t *e)
 
 static lv_obj_t *build_web(void)
 {
-    lv_obj_t *p = panel(LV_SYMBOL_UPLOAD " Web access");
+    lv_obj_t *p = panel("Web access");
     lv_obj_add_event_cb(p, web_panel_cb, LV_EVENT_REFRESH, NULL);
-    label(p, "The web setup page (address on the Setup screen) asks for this login.", 16, 70, 448, 0x90A4AE);
+    label(p, "The web page (address below) asks for this login.", 16, 76, 448, 0x90A4AE);
     label(p, "Username", 16, 136, 0, 0);
     s_web_user = textarea(p, "admin", 140, 124, 324);
     lv_textarea_set_max_length(s_web_user, 32);
@@ -557,22 +573,29 @@ static lv_obj_t *build_web(void)
     button(p, "Save login", 0x2E7D32, web_save_cb, 16, 256, 448, 60);
     s_web_msg = label(p, "", 16, 330, 448, 0);
     lv_label_set_recolor(s_web_msg, true);
-    label(p, "The page shows the thermostat (read-only) and lets you change Wi-Fi, Home Assistant, clock and "
-             "display settings, and install firmware updates.",
-          16, 400, 448, 0x607D8B);
+    // The page's address, also as a QR code
+    s_qr = lv_qrcode_create(p);
+    lv_qrcode_set_size(s_qr, 150);
+    lv_qrcode_set_dark_color(s_qr, lv_color_black());
+    lv_qrcode_set_light_color(s_qr, lv_color_white());
+    lv_obj_set_style_border_color(s_qr, lv_color_white(), 0);
+    lv_obj_set_style_border_width(s_qr, 6, 0);
+    lv_obj_set_pos(s_qr, 16, 410);
+    lv_obj_add_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
+    s_qr_lbl = label(p, "", 186, 414, 280, 0);
+    lv_label_set_recolor(s_qr_lbl, true);
     return p;
 }
 
 /* ============================================================= Thermostat */
 
-static lv_obj_t *s_ofs_lbl, *s_hys_lbl, *s_sim_sw, *s_ot_lbl;
+static lv_obj_t *s_ofs_lbl, *s_sim_sw, *s_ot_lbl;
 
 static void thermo_refresh(void)
 {
     thermo_state_t st;
     thermo_get(&st);
     ui_label_fmt(s_ofs_lbl, "%+.1f °C", st.offset);
-    ui_label_fmt(s_hys_lbl, "%.2f °C", st.hysteresis);
     lv_obj_set_state(s_sim_sw, LV_STATE_CHECKED, st.boiler_sim);
     ui_label_fmt(s_ot_lbl,
                           "Boiler: %s%s\nOpenTherm frames: %lu ok, %lu failed\nRoom reading: %s (%lu sensor errors)\n"
@@ -592,14 +615,6 @@ static void ofs_cb(lv_event_t *e)
     thermo_state_t st;
     thermo_get(&st);
     thermo_set_offset(st.offset + (int)(intptr_t)lv_event_get_user_data(e) / 10.0f);
-    thermo_refresh();
-}
-
-static void hys_cb(lv_event_t *e)
-{
-    thermo_state_t st;
-    thermo_get(&st);
-    thermo_set_hysteresis(st.hysteresis + (int)(intptr_t)lv_event_get_user_data(e) / 100.0f);
     thermo_refresh();
 }
 
@@ -634,16 +649,16 @@ static void stepper(lv_obj_t *p, const char *name, const char *hint, int y, lv_o
 
 static lv_obj_t *build_thermo(void)
 {
-    lv_obj_t *p = panel(LV_SYMBOL_HOME " Thermostat");
+    lv_obj_t *p = panel("Sensor and boiler");
     lv_obj_add_event_cb(p, thermo_panel_cb, LV_EVENT_REFRESH, NULL);
-    stepper(p, "Sensor offset", "added to the SHT40 reading", 76, &s_ofs_lbl, ofs_cb, 1);
-    stepper(p, "Hysteresis", "+/- around the setpoint", 176, &s_hys_lbl, hys_cb, 5);
-    label(p, "Simulated boiler", 16, 286, 0, 0);
-    label(p, "Off = talk OpenTherm to the real boiler on GPIO29/30", 16, 314, 340, 0x607D8B);
+    stepper(p, "Sensor correction", "added to the measured room temperature", 76, &s_ofs_lbl, ofs_cb, 1);
+    label(p, "Simulated boiler", 16, 186, 0, 0);
+    label(p, "On: a built-in model of a boiler and a room, for trying things out. Off: the real boiler, over "
+             "OpenTherm.", 16, 214, 350, 0x607D8B);
     s_sim_sw = lv_switch_create(p);
-    lv_obj_set_pos(s_sim_sw, 390, 284);
+    lv_obj_set_pos(s_sim_sw, 390, 184);
     lv_obj_add_event_cb(s_sim_sw, sim_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    s_ot_lbl = label(p, "", 16, 380, 448, 0x90A4AE);
+    s_ot_lbl = label(p, "", 16, 320, 448, 0x90A4AE);
     lv_timer_create(thermo_tick_cb, 1000, NULL);
     return p;
 }
@@ -786,7 +801,7 @@ static lv_obj_t *build_display(void)
         snprintf(t, sizeof(t), "%02d:%02d%s", i / 2, (i % 2) * 30, i < 47 ? "\n" : "");
         strlcat(halfhours, t, sizeof(halfhours));
     }
-    lv_obj_t *p = panel(LV_SYMBOL_IMAGE " Display");
+    lv_obj_t *p = panel("Display");
     lv_obj_add_flag(p, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(p, LV_DIR_VER);
     lv_obj_add_event_cb(p, display_panel_cb, LV_EVENT_REFRESH, NULL);
@@ -855,7 +870,15 @@ static void diag_panel_cb(lv_event_t *e)
     const selftest_item_t *it;
     int cnt = selftest_items(&it);
     static const char *col[] = {"90A4AE", "81C784", "FFB74D", "E57373"};
+    thermo_state_t st;
+    thermo_get(&st);
     for (int i = 0; i < cnt; i++) {
+        // No boiler on the OpenTherm input is expected while the simulated boiler is in use: a note, not a warning
+        if (it[i].result == ST_WARN && st.boiler_sim && strstr(it[i].name, "OpenTherm")) {
+            n += snprintf(buf + n, sizeof(buf) - n, "#%s " LV_SYMBOL_MINUS "# %s\n    no boiler connected; the simulated boiler is in use\n",
+                          col[0], it[i].name);
+            continue;
+        }
         n += snprintf(buf + n, sizeof(buf) - n, "#%s %s# %s\n    %s\n", col[it[i].result],
                       it[i].result == ST_PASS ? LV_SYMBOL_OK : it[i].result == ST_FAIL ? LV_SYMBOL_CLOSE : LV_SYMBOL_WARNING,
                       it[i].name, it[i].detail);
@@ -945,18 +968,18 @@ static void c6_cb(lv_event_t *e)
 
 static lv_obj_t *build_diag(void)
 {
-    lv_obj_t *p = panel(LV_SYMBOL_LIST " Diagnostics");
+    lv_obj_t *p = panel("Diagnostics");
     lv_obj_add_event_cb(p, diag_panel_cb, LV_EVENT_REFRESH, NULL);
     lv_obj_t *box = lv_obj_create(p);
-    lv_obj_set_size(box, 456, 468);
+    lv_obj_set_size(box, 456, 524);
     lv_obj_set_pos(box, 12, 68);
     lv_obj_set_style_bg_color(box, ui_c(0x0D141B), 0);
     s_diag_lbl = lv_label_create(box);
     lv_label_set_recolor(s_diag_lbl, true);
     lv_obj_set_width(s_diag_lbl, 420);
     lv_label_set_long_mode(s_diag_lbl, LV_LABEL_LONG_WRAP);
-    button(p, LV_SYMBOL_UPLOAD " Update Wi-Fi chip", 0x37474F, c6_cb, 16, 548, 448, 60);
-    button(p, LV_SYMBOL_REFRESH " Restart device", 0x6D4C41, restart_cb, 16, 620, 448, 60);
+    button(p, LV_SYMBOL_UPLOAD " Update Wi-Fi chip", 0x37474F, c6_cb, 16, 604, 448, 60);
+    button(p, LV_SYMBOL_REFRESH " Restart device", 0x6D4C41, restart_cb, 16, 676, 448, 60);
     return p;
 }
 
@@ -982,11 +1005,11 @@ static void update_cb(lv_timer_t *t)
         }
     }
     if (up) {
-        ui_label_fmt(s_qr_lbl, "Web setup\n#4FC3F7 https://%s/#\n%s", ip,
-                              settings_web_configured() ? "Log in with your web password."
-                                                        : "#FFB74D Set a login in Web access first.#");
+        ui_label_fmt(s_qr_lbl, "Web page\n#4FC3F7 https://%s/#\n%s", ip,
+                              settings_web_configured() ? "Log in with the login above."
+                                                        : "#FFB74D Set a login above first.#");
     } else {
-        ui_label_text(s_qr_lbl, "Web setup\nConnect to Wi-Fi first; the QR code for the setup page appears here.");
+        ui_label_text(s_qr_lbl, "Web page\nConnect to Wi-Fi first; the address and its QR code appear here.");
     }
 }
 
@@ -1012,18 +1035,9 @@ static void worker(void *arg)
     }
 }
 
-static lv_obj_t *s_panels[7];
-
 void app_setup_open_panel(int i)
 {
-    for (int k = 0; k < 7; k++) {
-        lv_obj_add_flag(s_panels[k], LV_OBJ_FLAG_HIDDEN);
-    }
-    if (i >= 0 && i < 7) {
-        lv_obj_remove_flag(s_panels[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_panels[i]);
-        lv_obj_send_event(s_panels[i], LV_EVENT_REFRESH, NULL);
-    }
+    show_panel(i >= 0 && i < N_PANELS ? s_panels[i] : NULL);
 }
 
 static void screen_cb(lv_event_t *e)
@@ -1040,46 +1054,106 @@ static void screen_cb(lv_event_t *e)
     }
 }
 
+static void group_cb(lv_event_t *e)
+{
+    ui_pages_open_group((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+static void heading(lv_obj_t *list, const char *text)
+{
+    lv_obj_t *l = lv_label_create(list);
+    lv_obj_set_style_text_color(l, ui_c(UI_VALUE), 0);
+    lv_label_set_text(l, text);
+}
+
+// A row of the Settings list: icon, title, one line of what is inside, arrow.
+static void row(lv_obj_t *list, const char *icon, const char *title, const char *brief, lv_event_cb_t cb, void *user)
+{
+    lv_obj_t *b = lv_button_create(list);
+    lv_obj_set_size(b, 440, 66);
+    lv_obj_set_style_bg_color(b, ui_c(UI_SURFACE), 0);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
+    lv_obj_t *ic = lv_label_create(b);
+    lv_obj_set_style_text_color(ic, ui_c(UI_MUTED), 0);
+    lv_obj_set_width(ic, 30);
+    lv_obj_set_style_text_align(ic, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(ic, icon);
+    lv_obj_align(ic, LV_ALIGN_LEFT_MID, 10, 0);
+    lv_obj_t *n = lv_label_create(b);
+    lv_obj_set_style_text_color(n, ui_c(UI_TEXT), 0);
+    lv_label_set_text(n, title);
+    lv_obj_set_pos(n, 52, 9);
+    lv_obj_t *d = lv_label_create(b);
+    lv_obj_set_style_text_font(d, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(d, ui_c(UI_MUTED), 0);
+    lv_obj_set_size(d, 350, 20);  // one line, cut with dots
+    lv_label_set_long_mode(d, LV_LABEL_LONG_DOT);
+    lv_label_set_text(d, brief);
+    lv_obj_set_pos(d, 52, 38);
+    lv_obj_t *a = lv_label_create(b);
+    lv_obj_set_style_text_color(a, ui_c(UI_MUTED), 0);
+    lv_label_set_text(a, LV_SYMBOL_RIGHT);
+    lv_obj_align(a, LV_ALIGN_RIGHT_MID, -12, 0);
+}
+
 lv_obj_t *app_setup_create(void)
 {
-    lv_obj_t *scr = ui_app_screen("Setup", &s_content);
+    lv_obj_t *scr = ui_app_screen("Settings", &s_content);
     lv_obj_add_event_cb(scr, screen_cb, LV_EVENT_SCREEN_LOADED, NULL);
     lv_obj_add_event_cb(scr, screen_cb, LV_EVENT_SCREEN_UNLOAD_START, NULL);
+    // The header's button and title follow the open section (show_panel)
+    lv_obj_t *header = lv_obj_get_child(scr, 0);
+    s_hdr_back = lv_obj_get_child(header, 0);
+    s_hdr_title = lv_obj_get_child(header, 1);
+    for (int i = (int)lv_obj_get_event_count(s_hdr_back) - 1; i >= 0; i--) {
+        lv_obj_remove_event(s_hdr_back, (uint32_t)i);
+    }
+    lv_obj_add_event_cb(s_hdr_back, hdr_back_cb, LV_EVENT_CLICKED, NULL);
 
-    // Web setup QR code
-    s_qr = lv_qrcode_create(s_content);
-    lv_qrcode_set_size(s_qr, 150);
-    lv_qrcode_set_dark_color(s_qr, lv_color_black());
-    lv_qrcode_set_light_color(s_qr, lv_color_white());
-    lv_obj_set_style_border_color(s_qr, lv_color_white(), 0);
-    lv_obj_set_style_border_width(s_qr, 6, 0);
-    lv_obj_set_pos(s_qr, 16, 12);
-    lv_obj_add_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
-    s_qr_lbl = label(s_content, "", 186, 16, 280, 0);
-    lv_label_set_recolor(s_qr_lbl, true);
+    lv_obj_t *list = lv_obj_create(s_content);
+    lv_obj_set_size(list, 480, UI_CONTENT_H);
+    lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(list, 0, 0);
+    lv_obj_set_style_pad_hor(list, 20, 0);
+    lv_obj_set_style_pad_ver(list, 12, 0);
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(list, 8, 0);
 
-    static const struct {
-        const char *text;
-        lv_obj_t *(*build)(void);
-    } sections[] = {
-        {LV_SYMBOL_WIFI "  Wi-Fi", build_wifi},
-        {LV_SYMBOL_HOME "  Home Assistant", build_ha},
-        {LV_SYMBOL_BELL "  Clock", build_clock},
-        {LV_SYMBOL_UPLOAD "  Web access", build_web},
-        {LV_SYMBOL_SETTINGS "  Thermostat", build_thermo},
-        {LV_SYMBOL_IMAGE "  Display", build_display},
-        {LV_SYMBOL_LIST "  Diagnostics", build_diag},
+    heading(list, "Heating");
+    static const char *const gicon[CG_COUNT] = {
+        [CG_PROGRAM] = LV_SYMBOL_LIST,   [CG_SUMMER] = UI_ICON_SUN,        [CG_DHW] = UI_ICON_DROP,
+        [CG_LEGIONELLA] = LV_SYMBOL_REFRESH, [CG_SAFETY] = LV_SYMBOL_WARNING, [CG_SYSTEM] = UI_ICON_FIRE,
+        [CG_TUNING] = LV_SYMBOL_SETTINGS, [CG_ALERTS] = LV_SYMBOL_BELL,     [CG_SERVICE] = LV_SYMBOL_PLAY,
     };
-    for (size_t i = 0; i < sizeof(sections) / sizeof(sections[0]); i++) {
+    for (int g = 0; g < CG_COUNT; g++) {
+        row(list, gicon[g], cfgtext_group_title(g), cfgtext_group_brief(g), group_cb, (void *)(intptr_t)g);
+    }
+
+    heading(list, "Device");
+    static const struct {
+        const char *icon, *title, *brief;
+        lv_obj_t *(*build)(void);
+    } sections[N_PANELS] = {
+        {LV_SYMBOL_WIFI, "Wi-Fi", "Network and password", build_wifi},
+        {LV_SYMBOL_HOME, "Home Assistant", "Address, connection test", build_ha},
+        {UI_ICON_CLOCK, "Clock", "Internet time, time zone, set by hand", build_clock},
+        {UI_ICON_GLOBE, "Web access", "Address and login of the web page", build_web},
+        {UI_ICON_THERMO, "Sensor and boiler", "Sensor correction, real or simulated boiler", build_thermo},
+        {UI_ICON_DISPLAY, "Display", "Brightness, dimming, theme, wake on motion", build_display},
+        {UI_ICON_DIAG, "Diagnostics", "Hardware check, versions, restart", build_diag},
+    };
+    for (int i = 0; i < N_PANELS; i++) {
         lv_obj_t *p = sections[i].build();
         s_panels[i] = p;
-        lv_obj_t *b = ui_button(s_content, sections[i].text, ui_c(0x263238), panel_open_cb, p);
-        lv_obj_set_size(b, 448, 62);
-        lv_obj_set_pos(b, 16, 186 + i * 72);
-        lv_obj_set_style_text_align(lv_obj_get_child(b, 0), LV_TEXT_ALIGN_LEFT, 0);
-        lv_obj_align(lv_obj_get_child(b, 0), LV_ALIGN_LEFT_MID, 8, 0);
+        for (uint32_t k = 0; k < lv_obj_get_child_count(p); k++) {  // up, into the space of the old title row
+            lv_obj_t *ch = lv_obj_get_child(p, k);
+            lv_obj_set_y(ch, lv_obj_get_y_aligned(ch) - PANEL_SHIFT);
+        }
+        row(list, sections[i].icon, sections[i].title, sections[i].brief, panel_open_cb, p);
     }
-    // Panels are brought to the front when opened (panel_open_cb), so creation order does not matter.
+    // Panels are brought to the front when opened (show_panel), so creation order does not matter.
 
     s_kb = lv_keyboard_create(s_content);
     lv_obj_set_size(s_kb, LV_PCT(100), 300);

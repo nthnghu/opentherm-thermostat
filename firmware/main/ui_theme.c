@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include "esp_log.h"
+#include "ui.h"
 
 static const char *TAG = "theme";
 
@@ -78,7 +79,7 @@ static void init_lvgl_theme(bool dark)
 {
     lv_display_t *disp = lv_display_get_default();
     lv_theme_t *th = lv_theme_default_init(disp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_DEEP_ORANGE),
-                                           dark, &lv_font_montserrat_20);
+                                           dark, &font_icons_20);  // Montserrat 20 plus the UI_ICON_* glyphs
     lv_display_set_theme(disp, th);
 }
 

@@ -25,14 +25,16 @@ OpenTherm side runs against a built-in simulated boiler until the real boiler is
   OpenTherm master (Manchester PHY on GPIO29/30) with a simulated boiler. Failsafe: no sensor reading
   for 30 s turns heating off; frost protection at 7 °C.
 - **Boot hardware check** of memory, touch, sensor, audio, Wi-Fi chip, camera and the OpenTherm line.
-- **UI**: status bar (clock, heating, warnings, HA and Wi-Fi state), app launcher, thermostat pages
-  (main, 24 h chart, placeholders for sensors/schedule/settings), Home Assistant dashboard with pages and
-  an editor, calculator, Blocks game.
-- **Setup on the device**: Wi-Fi, Home Assistant (token scanned from HA's QR code with the built-in
-  OV02C10 camera), clock (NTP or manual), web login, thermostat tuning, display power (dim, screen off,
-  keep-on schedule, night brightness, wake on camera motion), diagnostics, ESP32-C6 firmware update.
-- **Web page** (HTTP Basic auth): settings, a read-only thermostat view with history, firmware upload
-  (OTA with rollback if the boot check fails).
+- **UI**: status bar (clock, heating, warnings, HA state, Wi-Fi signal bars) with a pull-down quick panel, app
+  launcher, five thermostat pages (main, history chart, schedule, boiler, everyday settings), Home Assistant
+  dashboard with pages and an editor, calculator, Blocks game.
+- **Settings on the device**: one list. Heating: the setting groups (program, hot water, safety, tuning,
+  alerts, ...). Device: Wi-Fi, Home Assistant, clock (NTP or manual), web login and address (QR code), sensor
+  correction and real/simulated boiler, display power (dim, screen off, keep-on schedule, night brightness,
+  wake on camera motion), diagnostics, ESP32-C6 firmware update.
+- **Web page** (HTTPS, login): the thermostat with its controls (target, heating on/off, Boost, Away), alerts
+  and boiler values, 24 h history, all settings, a weekly program editor, firmware upload (OTA with rollback
+  if the boot check fails). Its script is `firmware/main/web/page.js`.
 
 ## Hardware
 

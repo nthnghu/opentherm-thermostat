@@ -455,7 +455,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGI(TAG, "Got IP %s", s_ip);
         s_wifi_up = true;
         s_trial_until_us = 0;  // new credentials (if any were on trial) work
-        set_wifi_status("%s  " LV_SYMBOL_WIFI "  %s", settings_get()->ssid, s_ip);
+        set_wifi_status("%s, %s", settings_get()->ssid, s_ip);
     }
 }
 
