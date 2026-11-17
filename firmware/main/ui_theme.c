@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include "esp_log.h"
 #include "ui.h"
+#include "themes/lv_theme_private.h"  // lv_theme_t, to layer the flat-button rule over the default theme
 
 static const char *TAG = "theme";
 
@@ -75,12 +76,33 @@ static lv_obj_tree_walk_res_t remap_cb(lv_obj_t *obj, void *user)
     return LV_OBJ_TREE_WALK_NEXT;
 }
 
+// On top of LVGL's default theme: buttons without the drop shadow that its light variant gives them. The
+// shadows cost 3 to 6 ms of every full-screen frame (PERF redraw), which made the light theme feel slower.
+static lv_theme_t s_theme;
+static lv_style_t s_flat;
+
+static void flat_cb(lv_theme_t *th, lv_obj_t *obj)
+{
+    if (lv_obj_check_type(obj, &lv_button_class)) {
+        lv_obj_add_style(obj, &s_flat, 0);
+    }
+}
+
 static void init_lvgl_theme(bool dark)
 {
     lv_display_t *disp = lv_display_get_default();
     lv_theme_t *th = lv_theme_default_init(disp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_DEEP_ORANGE),
                                            dark, &font_icons_20);  // Montserrat 20 plus the UI_ICON_* glyphs
-    lv_display_set_theme(disp, th);
+    static bool once;
+    if (!once) {
+        once = true;
+        lv_style_init(&s_flat);
+        lv_style_set_shadow_width(&s_flat, 0);
+    }
+    s_theme = *th;
+    lv_theme_set_parent(&s_theme, th);
+    lv_theme_set_apply_cb(&s_theme, flat_cb);
+    lv_display_set_theme(disp, &s_theme);
 }
 
 // The theme in use, kept over a software restart (OTA, watchdog): starting dark and switching to light a few

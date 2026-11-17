@@ -536,6 +536,31 @@ static void perf_cb(lv_event_t *e)
     }
 }
 
+// Redraws the whole screen n times and returns the time of one redraw in ms (LVGL lock held by the caller).
+// With blank = true only an empty screen is drawn: the cost of filling and showing a frame, without any content.
+uint32_t ui_perf_redraw(int n, bool blank)
+{
+    lv_obj_t *prev = lv_screen_active(), *empty = NULL;
+    if (blank) {  // an empty screen (the status bar is still drawn on top)
+        empty = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(empty, ui_c(UI_BG), 0);
+        lv_screen_load(empty);
+    }
+    lv_refr_now(NULL);
+    uint32_t t0 = lv_tick_get();
+    for (int i = 0; i < n; i++) {
+        lv_obj_invalidate(lv_screen_active());
+        lv_obj_invalidate(lv_layer_top());
+        lv_refr_now(NULL);
+    }
+    uint32_t ms = lv_tick_elaps(t0);
+    if (empty) {
+        lv_screen_load(prev);
+        lv_obj_delete(empty);
+    }
+    return n > 0 ? ms / n : 0;
+}
+
 void ui_perf(uint32_t *frames, uint32_t *total_ms, uint32_t *max_ms)
 {
     *frames = s_perf_frames, *total_ms = s_perf_ms, *max_ms = s_perf_max;

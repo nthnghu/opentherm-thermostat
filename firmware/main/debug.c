@@ -116,6 +116,14 @@ void debug_exec(const char *line, FILE *o)
         fprintf(o, "HEAP %s\n", b);
         return;
     }
+    if (strcmp(line, "PERF redraw") == 0 || strcmp(line, "PERF blank") == 0) {  // one full redraw of the screen shown
+        if (lvgl_port_lock(1000)) {
+            uint32_t ms = ui_perf_redraw(10, line[5] == 'b');
+            lvgl_port_unlock();
+            fprintf(o, "PERF %s: %lu ms per full-screen redraw\n", line + 5, (unsigned long)ms);
+        }
+        return;
+    }
     if (strcmp(line, "PERF") == 0) {  // drawing speed since the last PERF
         uint32_t n, ms, mx;
         ui_perf(&n, &ms, &mx);

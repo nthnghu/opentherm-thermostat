@@ -62,3 +62,4 @@ void app_setup_open_panel(int i);  // -1 = close all
 void ui_debug_go(const char *what);
 // Frames drawn, the time they took and the slowest one since the last call (console: PERF).
 void ui_perf(uint32_t *frames, uint32_t *total_ms, uint32_t *max_ms);
+uint32_t ui_perf_redraw(int n, bool blank);  // console: PERF redraw, PERF blank

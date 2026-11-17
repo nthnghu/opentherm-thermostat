@@ -744,6 +744,38 @@ static esp_err_t get_root(httpd_req_t *req)
 
 /* -------------------------------------------------------------- JSON API */
 
+// sendf for JSON. JSON has no NaN or infinity: a number that is not known yet (right after a start) is sent
+// as null, so the reply always parses.
+static void sendj(httpd_req_t *req, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void sendj(httpd_req_t *req, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    char *in = n >= 0 ? malloc((size_t)n + 1) : NULL, *out = n >= 0 ? malloc((size_t)n * 2 + 1) : NULL;
+    if (in && out) {
+        va_start(ap, fmt);
+        vsnprintf(in, (size_t)n + 1, fmt, ap);
+        va_end(ap);
+        char *o = out;
+        for (const char *p = in; *p; p++) {
+            const char *v = p + 1 + (p[1] == '-');
+            if (*p == ':' && (strncmp(v, "nan", 3) == 0 || strncmp(v, "inf", 3) == 0)) {
+                memcpy(o, ":null", 5);
+                o += 5;
+                p = v + 2;
+            } else {
+                *o++ = *p;
+            }
+        }
+        *o = 0;
+        SEND(req, out);
+    }
+    free(in);
+    free(out);
+}
+
 static esp_err_t get_status(httpd_req_t *req)
 {
     if (!check_auth(req)) {
@@ -752,17 +784,17 @@ static esp_err_t get_status(httpd_req_t *req)
     thermo_state_t st;
     thermo_get(&st);
     httpd_resp_set_type(req, "application/json");
-    sendf(req,
+    sendj(req,
           "{\"sensor_ok\":%s,\"room\":%.2f,\"humidity\":%.1f,\"setpoint\":%.1f,\"mode\":\"%s\",\"demand\":%s,"
           "\"flow_setpoint\":%.1f,",
           st.sensor_ok ? "true" : "false", st.room_shown, st.humidity_shown, st.setpoint,
           st.mode == THERMO_MODE_HEAT ? "heat" : "off", st.demand ? "true" : "false", st.flow_setpoint);
-    sendf(req,
+    sendj(req,
           "\"boiler_sim\":%s,\"boiler_online\":%s,\"flame\":%s,\"flow\":%.1f,\"mod\":%.1f,\"offset\":%.1f,"
           "\"hysteresis\":%.2f,\"time_source\":\"%s\",",
           st.boiler_sim ? "true" : "false", st.boiler_online ? "true" : "false", st.flame ? "true" : "false", st.flow_c,
           st.modulation, st.offset, st.hysteresis, timekeep_source_name());
-    sendf(req,
+    sendj(req,
           "\"control\":{\"state\":\"%s\",\"requested\":%.1f,\"p\":%.2f,\"i\":%.2f,\"duty\":%.2f,"
           "\"starts_last_hour\":%u,\"return\":%.1f,\"dhw_active\":%s},",
           ctrl_state_name(st.ctrl_state), st.req_c, st.pi_p, st.pi_i, st.duty, st.starts_last_h, st.return_c,
@@ -779,27 +811,27 @@ static esp_err_t get_status(httpd_req_t *req)
     if (st.press_valid) {
         snprintf(press, sizeof(press), "%.2f", st.pressure_bar);
     }
-    sendf(req, "\"pressure\":%s,\"schedule\":{\"boost_on\":%s,\"away_on\":%s,", press, sc.boost_on ? "true" : "false",
+    sendj(req, "\"pressure\":%s,\"schedule\":{\"boost_on\":%s,\"away_on\":%s,", press, sc.boost_on ? "true" : "false",
           sc.away_on ? "true" : "false");
-    sendf(req,
+    sendj(req,
           "\"source\":\"%s\",\"target\":%.1f,\"next_change_min\":%d,\"next_level\":\"%s\","
           "\"boost_left_s\":%d,\"away\":%s,\"away_until\":%lld,\"summer\":%s,\"outside_mean\":%s},",
           sched_src_name(st.sched_src), st.target_c, st.next_change_min, nlv,
           st.boost_left_s, st.away ? "true" : "false", (long long)st.away_until, st.summer ? "true" : "false",
           mean);
-    sendf(req,
+    sendj(req,
           "\"dhw\":{\"enable\":%s,\"reason\":\"%s\",\"boost_left_s\":%d,\"set_written\":%.1f,\"id56\":%u,"
           "\"tank\":%.1f,\"tank_valid\":%s,\"pasteur_running\":%s,\"pasteur_result\":\"%s\",\"pasteur_last\":%lld},",
           st.dhw_enable ? "true" : "false", sched_dhw_reason_name(st.dhw_reason), st.dhw_boost_left_s, st.dhw_set,
           st.id56, st.tank_c, st.tank_valid ? "true" : "false", st.pasteur_running ? "true" : "false",
           sched_pasteur_name(st.pasteur_result), (long long)st.pasteur_last);
-    sendf(req, "\"alerts\":{\"count\":%u,\"text\":\"", st.alert_count);
+    sendj(req, "\"alerts\":{\"count\":%u,\"text\":\"", st.alert_count);
     send_escaped(req, st.alert_text);
     SEND(req, "\",\"active\":[");
     bool firsta = true;
     for (int a = 0; a < ALERT_COUNT; a++) {
         if (st.alerts & (1u << a)) {
-            sendf(req, "%s\"%s\"", firsta ? "" : ",", alert_name(a));
+            sendj(req, "%s\"%s\"", firsta ? "" : ",", alert_name(a));
             firsta = false;
         }
     }
@@ -807,7 +839,7 @@ static esp_err_t get_status(httpd_req_t *req)
     firsta = true;
     for (int a = 0; a < ALERT_COUNT; a++) {
         if (st.alerts & (1u << a)) {
-            sendf(req, "%s\"%s\"", firsta ? "" : ",", alert_title(a));
+            sendj(req, "%s\"%s\"", firsta ? "" : ",", alert_title(a));
             firsta = false;
         }
     }
@@ -815,18 +847,22 @@ static esp_err_t get_status(httpd_req_t *req)
     // History, thinned to one point per 10 min: [room, setpoint, demand]
     thermo_sample_t *h = heap_caps_malloc(sizeof(thermo_sample_t) * THERMO_HISTORY_LEN, MALLOC_CAP_SPIRAM);
     int n = h ? thermo_history(h, THERMO_HISTORY_LEN) : 0;
-    char buf[48];
-    bool first = true;
-    for (int i = n % 10; i < n; i += 10) {
+    // One buffer, one send: a chunk per point meant about 110 small TLS records for every status request
+    size_t cap = (size_t)(n / 10 + 2) * 24, len = 0;
+    char *hb = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    for (int i = n % 10; hb && i < n && len + 24 < cap; i += 10) {
         if (h[i].room_c10 == INT16_MIN) {
-            snprintf(buf, sizeof(buf), "%s[null,%.1f,%d]", first ? "" : ",", h[i].setpoint_c10 / 10.0, h[i].demand);
+            len += (size_t)snprintf(hb + len, cap - len, "%s[null,%.1f,%d]", len ? "," : "", h[i].setpoint_c10 / 10.0,
+                                    h[i].demand);
         } else {
-            snprintf(buf, sizeof(buf), "%s[%.1f,%.1f,%d]", first ? "" : ",", h[i].room_c10 / 10.0,
-                     h[i].setpoint_c10 / 10.0, h[i].demand);
+            len += (size_t)snprintf(hb + len, cap - len, "%s[%.1f,%.1f,%d]", len ? "," : "", h[i].room_c10 / 10.0,
+                                    h[i].setpoint_c10 / 10.0, h[i].demand);
         }
-        first = false;
-        SEND(req, buf);
     }
+    if (hb && len) {
+        httpd_resp_send_chunk(req, hb, (ssize_t)len);
+    }
+    free(hb);
     free(h);
     SEND(req, "]}");
     return httpd_resp_send_chunk(req, NULL, 0);
