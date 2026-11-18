@@ -110,7 +110,7 @@ static void spawn(void)
     if (!fits(s_piece, s_rot, s_px, s_py)) {
         s_over = true;
         lv_timer_pause(s_timer);
-        lv_obj_remove_flag(s_over_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_over_box, false);
     }
 }
 
@@ -219,7 +219,7 @@ static void new_game(void)
     s_score = s_lines = s_level = 0;
     s_over = false;
     s_next = esp_random() % 7;
-    lv_obj_add_flag(s_over_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_over_box, true);
     set_speed();
     spawn();
     lv_timer_resume(s_timer);
@@ -251,7 +251,7 @@ static lv_obj_t *make_cell(lv_obj_t *parent, int x, int y, int size)
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(o, lv_color_hex(COLORS[0]), 0);
     lv_obj_set_style_radius(o, 3, 0);
-    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(o, false);
     return o;
 }
 
@@ -317,7 +317,7 @@ lv_obj_t *app_blocks_create(void)
     s_over_box = lv_obj_create(content);
     lv_obj_set_size(s_over_box, 300, 220);
     lv_obj_align(s_over_box, LV_ALIGN_TOP_MID, 0, 180);
-    lv_obj_remove_flag(s_over_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_over_box, false);
     lv_obj_t *gl = lv_label_create(s_over_box);
     lv_obj_set_style_text_font(gl, &lv_font_montserrat_28, 0);
     lv_label_set_text(gl, "Game over");

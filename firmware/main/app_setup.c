@@ -80,7 +80,7 @@ static lv_obj_t *button(lv_obj_t *parent, const char *text, uint32_t color, lv_e
 static void kb_hide(void)
 {
     lv_keyboard_set_textarea(s_kb, NULL);
-    lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_kb, true);
     ui_set_busy(false);
 }
 
@@ -89,7 +89,7 @@ static void ta_focus_cb(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
     if (lv_event_get_code(e) == LV_EVENT_FOCUSED) {
         lv_keyboard_set_textarea(s_kb, ta);
-        lv_obj_remove_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_kb, false);
         lv_obj_move_foreground(s_kb);
         ui_set_busy(true);
     } else if (lv_event_get_code(e) == LV_EVENT_DEFOCUSED) {
@@ -121,11 +121,11 @@ static void show_panel(lv_obj_t *p)
 {
     kb_hide();
     for (int k = 0; k < N_PANELS; k++) {
-        lv_obj_add_flag(s_panels[k], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_panels[k], true);
     }
     s_open = p;
     if (p) {
-        lv_obj_remove_flag(p, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(p, false);
         lv_obj_move_foreground(p);
         lv_obj_send_event(p, LV_EVENT_REFRESH, NULL);
     }
@@ -141,8 +141,8 @@ static void panel_open_cb(lv_event_t *e)
 // The header button: closes the network list, then the open section, then goes to the app menu.
 static void hdr_back_cb(lv_event_t *e)
 {
-    if (!lv_obj_has_flag(s_picker, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    if (!lv_obj_is_hidden(s_picker)) {
+        lv_obj_set_hidden(s_picker, true);
         ui_set_busy(false);
     } else if (s_open) {
         show_panel(NULL);
@@ -190,7 +190,7 @@ static void fill_list(int n)
         char text[64];
         snprintf(text, sizeof(text), "%s   %d dBm%s", ssid, s_aps[i].rssi,
                  s_aps[i].authmode == WIFI_AUTH_OPEN ? "  (open)" : "");
-        lv_obj_t *b = lv_list_add_button(s_list, LV_SYMBOL_WIFI, text);
+        lv_obj_t *b = ui_list_add(s_list, LV_SYMBOL_WIFI, text);
         lv_obj_set_height(b, 64);
         lv_obj_add_event_cb(b, wifi_item_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
@@ -198,9 +198,9 @@ static void fill_list(int n)
 
 static void open_picker(void)
 {
-    lv_obj_remove_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_picker, false);
     lv_obj_move_foreground(s_picker);
-    lv_obj_add_flag(s_pw_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_pw_panel, true);
     lv_obj_clean(s_list);
     ui_label_text(s_scan_lbl, "Scanning...");
     send_cmd(CMD_SCAN);
@@ -220,7 +220,7 @@ static void rescan_cb(lv_event_t *e)
 
 static void close_picker_cb(lv_event_t *e)
 {
-    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_picker, true);
     ui_set_busy(false);
 }
 
@@ -230,7 +230,7 @@ static void wifi_item_cb(lv_event_t *e)
     strlcpy(s_chosen_ssid, (const char *)s_aps[i].ssid, sizeof(s_chosen_ssid));
     ui_label_fmt(s_pw_title, "Password for \"%s\"", s_chosen_ssid);
     lv_textarea_set_text(s_pw_ta, "");
-    lv_obj_remove_flag(s_pw_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_pw_panel, false);
     lv_keyboard_set_textarea(s_pw_kb, s_pw_ta);
     ui_set_busy(true);
 }
@@ -238,8 +238,8 @@ static void wifi_item_cb(lv_event_t *e)
 static void do_connect(void)
 {
     board_wifi_connect(s_chosen_ssid, lv_textarea_get_text(s_pw_ta));
-    lv_obj_add_flag(s_pw_panel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_pw_panel, true);
+    lv_obj_set_hidden(s_picker, true);
     ui_set_busy(false);
 }
 
@@ -253,13 +253,13 @@ static void pw_kb_cb(lv_event_t *e)
     if (lv_event_get_code(e) == LV_EVENT_READY) {
         do_connect();
     } else {
-        lv_obj_add_flag(s_pw_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_pw_panel, true);
     }
 }
 
 static void cancel_pw_cb(lv_event_t *e)
 {
-    lv_obj_add_flag(s_pw_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_pw_panel, true);
 }
 
 static void show_pw_cb(lv_event_t *e)
@@ -283,7 +283,7 @@ static lv_obj_t *build_wifi(void)
     ui_label_text(pt, "Choose network");
     lv_obj_set_pos(pt, 16, 14);
     s_scan_lbl = label(s_picker, "", 16, 56, 0, 0x90A4AE);
-    s_list = lv_list_create(s_picker);
+    s_list = ui_list_create(s_picker);
     lv_obj_set_size(s_list, 448, 520);
     lv_obj_set_pos(s_list, 16, 88);
     lv_obj_t *rs = ui_button(s_picker, LV_SYMBOL_REFRESH " Rescan", ui_c(0x1565C0), rescan_cb, NULL);
@@ -581,7 +581,7 @@ static lv_obj_t *build_web(void)
     lv_obj_set_style_border_color(s_qr, lv_color_white(), 0);
     lv_obj_set_style_border_width(s_qr, 6, 0);
     lv_obj_set_pos(s_qr, 16, 410);
-    lv_obj_add_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_qr, true);
     s_qr_lbl = label(p, "", 186, 414, 280, 0);
     lv_label_set_recolor(s_qr_lbl, true);
     return p;
@@ -802,7 +802,7 @@ static lv_obj_t *build_display(void)
         strlcat(halfhours, t, sizeof(halfhours));
     }
     lv_obj_t *p = panel("Display");
-    lv_obj_add_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(p, true);
     lv_obj_set_scroll_dir(p, LV_DIR_VER);
     lv_obj_add_event_cb(p, display_panel_cb, LV_EVENT_REFRESH, NULL);
 
@@ -910,7 +910,7 @@ static void c6_go_cb(lv_event_t *e)
 {
     lv_obj_t *footer = lv_msgbox_get_footer(s_c6_box);
     if (footer) {
-        lv_obj_add_flag(footer, LV_OBJ_FLAG_HIDDEN);  // no way back once it runs
+        lv_obj_set_hidden(footer, true);  // no way back once it runs
     }
     ui_label_text(s_c6_msg, "Updating... keep the power on. The device restarts when done.");
     ui_set_busy(true);
@@ -934,7 +934,7 @@ static void c6_update_task_part(void)
         ui_label_fmt(s_c6_msg, "Update failed: %s.\nThe Wi-Fi chip keeps its old firmware.", esp_err_to_name(err));
         lv_obj_t *footer = lv_msgbox_get_footer(s_c6_box);
         if (footer) {
-            lv_obj_remove_flag(footer, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(footer, false);
         }
     }
     lvgl_port_unlock();
@@ -999,9 +999,9 @@ static void update_cb(lv_timer_t *t)
             char url[40];
             snprintf(url, sizeof(url), "https://%s/", ip);
             lv_qrcode_update(s_qr, url, strlen(url));
-            lv_obj_remove_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_qr, false);
         } else {
-            lv_obj_add_flag(s_qr, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_qr, true);
         }
     }
     if (up) {
@@ -1158,7 +1158,7 @@ lv_obj_t *app_setup_create(void)
     s_kb = lv_keyboard_create(s_content);
     lv_obj_set_size(s_kb, LV_PCT(100), 300);
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_kb, true);
     lv_obj_add_event_cb(s_kb, kb_event_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_kb, kb_event_cb, LV_EVENT_CANCEL, NULL);
 

@@ -59,8 +59,8 @@ static void anim_y(void *obj, int32_t v)
 
 static void hide_done(lv_anim_t *a)
 {
-    lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_backdrop, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_panel, true);
+    lv_obj_set_hidden(s_backdrop, true);
 }
 
 static void slide(bool down)
@@ -86,8 +86,8 @@ void quickpanel_open(void)
     s_open = true;
     ui_set_busy(true);
     refresh();
-    lv_obj_remove_flag(s_backdrop, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_backdrop, false);
+    lv_obj_set_hidden(s_panel, false);
     slide(true);
 }
 
@@ -194,7 +194,8 @@ void quickpanel_create(void)
     lv_obj_set_size(s_backdrop, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(s_backdrop, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_backdrop, LV_OPA_50, 0);
-    lv_obj_add_flag(s_backdrop, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_clickable(s_backdrop, true);
+    lv_obj_set_hidden(s_backdrop, true);
     lv_obj_add_event_cb(s_backdrop, backdrop_cb, LV_EVENT_CLICKED, NULL);
 
     s_panel = lv_obj_create(lv_layer_top());
@@ -205,9 +206,9 @@ void quickpanel_create(void)
     lv_obj_set_style_bg_color(s_panel, ui_c(UI_SURFACE), 0);
     lv_obj_set_style_pad_all(s_panel, 0, 0);
     lv_obj_set_style_text_font(s_panel, &font_icons_20, 0);  // the top layer has no theme font: UI_ICON_* need this
-    lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_GESTURE_BUBBLE);  // swipe up on the panel or its buttons: close
+    lv_obj_set_scrollable(s_panel, false);
+    lv_obj_set_hidden(s_panel, true);
+    lv_obj_set_gesture_bubble(s_panel, false);  // swipe up on the panel or its buttons: close
     lv_obj_add_event_cb(s_panel, gesture_cb, LV_EVENT_GESTURE, NULL);
 
     // Brightness + screen off

@@ -326,7 +326,8 @@ static lv_obj_t *card(lv_obj_t *p, int x, int y, int w, int h)
     lv_obj_set_style_border_width(c, 0, 0);
     lv_obj_set_style_radius(c, 12, 0);
     lv_obj_set_style_pad_all(c, 0, 0);
-    lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(c, false);
+    lv_obj_set_clickable(c, false);
     return c;
 }
 
@@ -531,7 +532,8 @@ static void draw_day(int d, const sched_config_t *c, float setpoint)
             continue;
         }
         lv_obj_t *r = lv_obj_create(bar);
-        lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_scrollable(r, false);
+        lv_obj_set_clickable(r, false);
         lv_obj_set_style_border_width(r, 0, 0);
         lv_obj_set_style_radius(r, 4, 0);
         lv_obj_set_style_pad_all(r, 0, 0);
@@ -614,7 +616,7 @@ void ui_pages_schedule(lv_obj_t *p)
         lv_obj_set_style_pad_all(bar, 0, 0);
         lv_obj_set_style_border_width(bar, 0, 0);
         lv_obj_set_style_radius(bar, 6, 0);
-        lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(bar, false);
         lv_obj_add_event_cb(bar, day_cb, LV_EVENT_CLICKED, (void *)(intptr_t)d);
         s_week[d] = bar;
     }
@@ -628,7 +630,7 @@ void ui_pages_schedule(lv_obj_t *p)
     lv_obj_set_style_bg_color(s_now, ui_c(UI_TEXT), 0);
     lv_obj_set_style_outline_width(s_now, 1, 0);
     lv_obj_set_style_outline_color(s_now, ui_c(UI_BG), 0);
-    lv_obj_add_flag(s_now, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_now, true);
     s_prog_btn = button(p, "", 0x37474F, prog_cb, NULL, 20, 414, 440, 52);
     s_boost_btn = button(p, "", 0xD84315, boost_cb, NULL, 20, 476, 212, 64);
     s_away_btn = button(p, "", 0x37474F, away_cb, NULL, 248, 476, 212, 64);
@@ -740,10 +742,10 @@ static void de_show(void)
     int n = de_count();
     for (int i = 0; i < SCHED_POINTS; i++) {
         if (i >= n) {
-            lv_obj_add_flag(s_de_row[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_de_row[i], true);
             continue;
         }
-        lv_obj_remove_flag(s_de_row[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_de_row[i], false);
         lv_label_set_text_fmt(s_de_time[i], "%02d:%02d", s_de_pts[i].min / 60, s_de_pts[i].min % 60);
         char t[16];
         level_label(s_de_pts[i].level, t, sizeof(t));
@@ -804,7 +806,7 @@ static void lp_temp_cb(lv_event_t *e)
 
 static void lp_done_cb(lv_event_t *e)
 {
-    lv_obj_add_flag(s_lp, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_lp, true);
     de_show();
 }
 
@@ -820,7 +822,7 @@ static void de_lvl_cb(lv_event_t *e)
         s_lp_fixed = sched_level_from_c(roundf(st.setpoint * 2) / 2);  // start from the dial
     }
     lp_show();
-    lv_obj_remove_flag(s_lp, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_lp, false);
 }
 
 static void de_del_cb(lv_event_t *e)
@@ -882,7 +884,7 @@ static void day_editor_open(int d)
             lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
             lv_obj_set_style_border_width(r, 0, 0);
             lv_obj_set_style_pad_all(r, 0, 0);
-            lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_scrollable(r, false);
             lv_obj_set_pos(r, 0, 56 + i * 68);
             lv_obj_set_size(r, 480, 64);
             s_de_row[i] = r;
@@ -897,7 +899,7 @@ static void day_editor_open(int d)
         label(c, "Also apply to:", 20, 532, 0, UI_MUTED, NULL);
         for (int k = 0; k < 7; k++) {
             lv_obj_t *b = button(c, DAYS[k], 0x37474F, NULL, NULL, 16 + k * 64, 556, 58, 48);
-            lv_obj_add_flag(b, LV_OBJ_FLAG_CHECKABLE);
+            lv_obj_set_checkable(b, true);
             lv_obj_set_style_bg_color(b, ui_c(0x2E7D32), LV_STATE_CHECKED);
             s_de_copy[k] = b;
         }
@@ -924,7 +926,7 @@ static void day_editor_open(int d)
               &lv_font_montserrat_16);
         button(s_lp, LV_SYMBOL_OK " Done", 0x2E7D32, lp_done_cb, NULL, 20, 600, 440, 72);
     }
-    lv_obj_add_flag(s_lp, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_lp, true);
     sched_config_t c;
     thermo_get_sched_config(&c);
     s_de_day = d;
@@ -1057,8 +1059,8 @@ static void pin_key_cb(lv_event_t *e)
         if (settings_check_svc_pin(s_pin)) {
             s_pin_fails = 0;
             s_unlocked_at = now;
-            lv_obj_add_flag(s_sv_pin, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(s_sv_main, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_sv_pin, true);
+            lv_obj_set_hidden(s_sv_main, false);
             sv_update();
         } else {
             lv_label_set_text(s_sv_pin_msg, "Wrong PIN");
@@ -1093,9 +1095,9 @@ static void sv_detail_show(void)
                           r->text);
     svc_apply_t a;
     if (svc_recommend(rec, s_sv_sel, &a)) {
-        lv_obj_remove_flag(s_sv_d_apply, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_sv_d_apply, false);
     } else {
-        lv_obj_add_flag(s_sv_d_apply, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_sv_d_apply, true);
     }
     free(rec);
 }
@@ -1105,19 +1107,19 @@ static void sv_row_cb(lv_event_t *e)
     s_sv_sel = (int)(intptr_t)lv_event_get_user_data(e);
     lv_label_set_text(s_sv_d_msg, "");
     sv_detail_show();
-    lv_obj_remove_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_sv_detail, false);
 }
 
 static void sv_close_cb(lv_event_t *e)
 {
-    lv_obj_add_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_sv_detail, true);
 }
 
 // Header "Back": from a routine's detail to the routine list, from the list to the Settings page.
 static void sv_back_cb(lv_event_t *e)
 {
-    if (s_sv_detail && !lv_obj_has_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_add_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN);
+    if (s_sv_detail && !lv_obj_is_hidden(s_sv_detail)) {
+        lv_obj_set_hidden(s_sv_detail, true);
         return;
     }
     lv_screen_load(s_thermo_scr);
@@ -1172,7 +1174,7 @@ static void sv_apply_cb(lv_event_t *e)
 
 static void sv_update(void)
 {
-    if (!s_sv_scr || lv_obj_has_flag(s_sv_main, LV_OBJ_FLAG_HIDDEN)) {
+    if (!s_sv_scr || lv_obj_is_hidden(s_sv_main)) {
         return;
     }
     thermo_state_t st;
@@ -1199,7 +1201,7 @@ static void sv_update(void)
         }
         free(rec);
     }
-    if (!lv_obj_has_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN)) {
+    if (!lv_obj_is_hidden(s_sv_detail)) {
         sv_detail_show();
         set_btn_text(s_sv_d_start, st.svc_running ? "Cancel routine" : "Start");
         if (!st.svc_active) {
@@ -1216,9 +1218,9 @@ static void sv_timer_cb(lv_timer_t *t)
         return;
     }
     // Lock again 10 minutes after unlocking
-    if (esp_timer_get_time() - s_unlocked_at > 600LL * 1000000 && lv_obj_has_flag(s_sv_pin, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_remove_flag(s_sv_pin, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_sv_main, LV_OBJ_FLAG_HIDDEN);
+    if (esp_timer_get_time() - s_unlocked_at > 600LL * 1000000 && lv_obj_is_hidden(s_sv_pin)) {
+        lv_obj_set_hidden(s_sv_pin, false);
+        lv_obj_set_hidden(s_sv_main, true);
     }
     sv_update();
 }
@@ -1234,7 +1236,7 @@ static void service_open(void)
         lv_obj_set_style_bg_opa(s_sv_pin, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s_sv_pin, 0, 0);
         lv_obj_set_style_pad_all(s_sv_pin, 0, 0);
-        lv_obj_remove_flag(s_sv_pin, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(s_sv_pin, false);
         s_sv_pin_lbl = label(s_sv_pin, "", 20, 10, 440, UI_TEXT, &lv_font_montserrat_28);
         s_sv_pin_msg = label(s_sv_pin, "", 20, 54, 440, UI_WARN, NULL);
         static const char *keys[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", LV_SYMBOL_BACKSPACE, "0", LV_SYMBOL_OK};
@@ -1250,7 +1252,7 @@ static void service_open(void)
         lv_obj_set_style_bg_opa(s_sv_main, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s_sv_main, 0, 0);
         lv_obj_set_style_pad_all(s_sv_main, 0, 0);
-        lv_obj_remove_flag(s_sv_main, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(s_sv_main, false);
         s_sv_status = label(s_sv_main, "", 20, 8, 440, UI_TEXT, NULL);
         s_sv_mode_btn = button(s_sv_main, "", 0x6A1B9A, sv_mode_cb, NULL, 20, 86, 440, 56);
         for (int i = 0; i < SVC_COUNT; i++) {
@@ -1280,19 +1282,19 @@ static void service_open(void)
         s_sv_timer = lv_timer_create(sv_timer_cb, 1000, NULL);
     }
     s_pin[0] = 0;
-    lv_obj_add_flag(s_sv_detail, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_sv_detail, true);
     bool unlocked = esp_timer_get_time() - s_unlocked_at < 600LL * 1000000 && s_unlocked_at;
     if (!settings_svc_pin_configured()) {
-        lv_obj_remove_flag(s_sv_pin, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_sv_main, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_sv_pin, false);
+        lv_obj_set_hidden(s_sv_main, true);
         lv_label_set_text(s_sv_pin_lbl, "Locked");
         lv_label_set_text(s_sv_pin_msg, "Set a service PIN on the web page (Service section) first.");
     } else if (unlocked) {
-        lv_obj_add_flag(s_sv_pin, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_sv_main, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_sv_pin, true);
+        lv_obj_set_hidden(s_sv_main, false);
     } else {
-        lv_obj_remove_flag(s_sv_pin, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_sv_main, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_sv_pin, false);
+        lv_obj_set_hidden(s_sv_main, true);
         lv_label_set_text(s_sv_pin_msg, "");
         pin_show();
     }

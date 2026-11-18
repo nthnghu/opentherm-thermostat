@@ -54,8 +54,8 @@ lv_obj_t *ui_overlay(lv_obj_t *parent)
     lv_obj_set_style_bg_color(o, ui_c(0x121212), 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(o, 0, 0);
-    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_scrollable(o, false);
+    lv_obj_set_hidden(o, true);
     return o;
 }
 
@@ -68,14 +68,14 @@ static lv_obj_t *plain_container(lv_obj_t *scr, int y, int h)
     lv_obj_set_style_border_width(c, 0, 0);
     lv_obj_set_style_radius(c, 0, 0);
     lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(c, false);
     return c;
 }
 
 lv_obj_t *ui_plain_screen(lv_obj_t **content)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
-    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(scr, false);
     lv_obj_set_style_pad_all(scr, 0, 0);
     lv_obj_set_style_bg_color(scr, ui_c(UI_BG), 0);
     *content = plain_container(scr, UI_STATUS_H, BOARD_LCD_V_RES - UI_STATUS_H);
@@ -107,7 +107,7 @@ lv_obj_t *ui_sub_screen(const char *title, lv_obj_t **content, lv_obj_t *parent_
 lv_obj_t *ui_app_screen(const char *title, lv_obj_t **content)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
-    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(scr, false);
     lv_obj_set_style_pad_all(scr, 0, 0);
     lv_obj_set_style_bg_color(scr, ui_c(UI_BG), 0);
 
@@ -117,7 +117,7 @@ lv_obj_t *ui_app_screen(const char *title, lv_obj_t **content)
     lv_obj_set_style_radius(header, 0, 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_bg_color(header, ui_c(0x1E2A38), 0);
-    lv_obj_remove_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(header, false);
 
     lv_obj_t *back = ui_button(header, LV_SYMBOL_LEFT " Apps", ui_c(0x37474F), back_cb, NULL);
     lv_obj_set_size(back, 120, 48);
@@ -190,14 +190,14 @@ static void status_cb(lv_timer_t *t)
     thermo_state_t st;
     thermo_get(&st);
     if (st.demand) {
-        lv_obj_remove_flag(s_heat, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_heat, false);
     } else {
-        lv_obj_add_flag(s_heat, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_heat, true);
     }
     if (!st.sensor_ok || st.sensor_age_s >= 6 || !selftest_required_ok()) {
-        lv_obj_remove_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_warn, false);
     } else {
-        lv_obj_add_flag(s_warn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_warn, true);
     }
 
     ha_state_t hs = ha_state();
@@ -232,11 +232,11 @@ static void create_status_bar(void)
     lv_obj_set_style_bg_color(bar, ui_c(UI_STATUSBAR), 0);
     lv_obj_set_style_pad_hor(bar, 12, 0);
     lv_obj_set_style_pad_ver(bar, 0, 0);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);  // tap or swipe down: quick panel
+    lv_obj_set_scrollable(bar, false);
+    lv_obj_set_clickable(bar, true);  // tap or swipe down: quick panel
     lv_obj_add_event_cb(bar, bar_cb, LV_EVENT_CLICKED, NULL);
     // Gestures stop here (LVGL passes them up to the top layer otherwise); a swipe is no click (swipe guard).
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_set_gesture_bubble(bar, false);
     lv_obj_add_event_cb(bar, bar_cb, LV_EVENT_GESTURE, NULL);
 
     s_clock = lv_label_create(bar);
@@ -340,7 +340,7 @@ static void idle_cb(lv_timer_t *t)
         s_wake = lv_obj_create(lv_layer_top());
         lv_obj_remove_style_all(s_wake);
         lv_obj_set_size(s_wake, LV_PCT(100), LV_PCT(100));
-        lv_obj_add_flag(s_wake, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(s_wake, true);
         lv_obj_add_event_cb(s_wake, wake_cb, LV_EVENT_PRESSED, NULL);
     } else if (!asleep && s_wake) {
         lv_obj_delete(s_wake);

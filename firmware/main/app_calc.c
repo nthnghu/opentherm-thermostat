@@ -219,7 +219,7 @@ lv_obj_t *app_calc_create(void)
     lv_obj_set_size(disp, 448, 150);
     lv_obj_set_pos(disp, 16, 12);
     lv_obj_set_style_bg_color(disp, ui_c(0x0D141B), 0);
-    lv_obj_remove_flag(disp, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(disp, false);
     s_expr_lbl = lv_label_create(disp);
     lv_obj_set_style_text_font(s_expr_lbl, &lv_font_montserrat_40, 0);
     lv_obj_set_width(s_expr_lbl, 420);

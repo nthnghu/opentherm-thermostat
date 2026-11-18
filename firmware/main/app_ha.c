@@ -187,7 +187,8 @@ static void build_dashboard(void)
             lv_obj_set_style_pad_all(card, 12, 0);
             lv_obj_set_style_bg_color(card, ui_c(0x1E2A38), 0);
             lv_obj_set_style_border_width(card, 0, 0);
-            lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_scrollable(card, false);
+            lv_obj_set_clickable(card, false);
 
             lv_obj_t *name = lv_label_create(card);
             lv_obj_set_size(name, CARD_W - 24, 48);  // fixed height: at most 2 lines, then "..."
@@ -214,9 +215,9 @@ static void build_dashboard(void)
     lv_obj_update_layout(s_tv);
     lv_tileview_set_tile_by_index(s_tv, s_cur_page, 0, LV_ANIM_OFF);
     if (s_dash.page_count < 2) {
-        lv_obj_add_flag(s_dots_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_dots_box, true);
     } else {
-        lv_obj_remove_flag(s_dots_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_dots_box, false);
     }
     update_title();
     s_dash_dirty = false;
@@ -398,7 +399,7 @@ static void editor_refresh(void)
         lv_obj_set_style_border_width(row, k == s_ed_sel ? 3 : 0, 0);
         lv_obj_set_style_border_color(row, ui_c(0x4FC3F7), 0);
         lv_obj_set_style_bg_color(row, ui_c(k == s_ed_sel ? 0x263C52 : 0x1E2A38), 0);
-        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(row, false);
         lv_obj_add_event_cb(row, row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)k);
         char name[64];
         display_name(pg->ids[k], name, sizeof(name));
@@ -535,7 +536,7 @@ static void del_page_cb(lv_event_t *e)
 static void rename_open_cb(lv_event_t *e)
 {
     lv_textarea_set_text(s_rename_ta, s_dash.pages[s_ed_page].name);
-    lv_obj_remove_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_rename, false);
     lv_obj_move_foreground(s_rename);
     ui_set_busy(true);
 }
@@ -548,7 +549,7 @@ static void rename_kb_cb(lv_event_t *e)
         xSemaphoreGive(s_lock);
         dash_changed();
     }
-    lv_obj_add_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_rename, true);
     ui_set_busy(false);
     editor_refresh();
 }
@@ -594,7 +595,7 @@ static void search_cb(lv_event_t *e)
         char text[140];
         snprintf(text, sizeof(text), "%s\n%s", s_choices[i].name[0] ? s_choices[i].name : s_choices[i].id,
                  s_choices[i].id);
-        lv_obj_t *b = lv_list_add_button(s_plist, LV_SYMBOL_PLUS, text);
+        lv_obj_t *b = ui_list_add(s_plist, LV_SYMBOL_PLUS, text);
         lv_obj_add_event_cb(b, choice_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         shown++;
     }
@@ -605,7 +606,7 @@ static void search_cb(lv_event_t *e)
 
 static void picker_open_cb(lv_event_t *e)
 {
-    lv_obj_remove_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_picker, false);
     lv_obj_move_foreground(s_picker);
     lv_textarea_set_text(s_search, "");
     ui_set_busy(true);
@@ -614,7 +615,7 @@ static void picker_open_cb(lv_event_t *e)
 
 static void picker_done_cb(lv_event_t *e)
 {
-    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_picker, true);
     ui_set_busy(false);
     editor_refresh();
 }
@@ -648,8 +649,8 @@ static void screen_cb(lv_event_t *e)
 
 static void ed_screen_cb(lv_event_t *e)
 {
-    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_picker, true);
+    lv_obj_set_hidden(s_rename, true);
     ui_set_busy(false);
 }
 
@@ -711,7 +712,7 @@ static void build_editor(void)
     s_pstatus = lv_label_create(s_picker);
     lv_obj_set_style_text_color(s_pstatus, ui_c(0x90A4AE), 0);
     lv_obj_set_pos(s_pstatus, 14, 68);
-    s_plist = lv_list_create(s_picker);
+    s_plist = ui_list_create(s_picker);
     lv_obj_set_size(s_plist, 456, UI_CONTENT_H - 96 - 260);
     lv_obj_set_pos(s_plist, 12, 96);
     lv_obj_t *kb = lv_keyboard_create(s_picker);

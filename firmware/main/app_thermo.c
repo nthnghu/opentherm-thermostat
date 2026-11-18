@@ -289,9 +289,9 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_style_arc_width(s_arc, 22, LV_PART_INDICATOR);
     lv_obj_set_style_pad_all(s_arc, 8, LV_PART_KNOB);
     lv_obj_add_event_cb(s_arc, arc_cb, LV_EVENT_RELEASED, NULL);
-    lv_obj_add_flag(s_arc, LV_OBJ_FLAG_ADV_HITTEST);
+    lv_obj_set_adv_hittest(s_arc, true);
     lv_obj_add_event_cb(s_arc, arc_hit_cb, LV_EVENT_HIT_TEST, NULL);
-    lv_obj_remove_flag(s_arc, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_scroll_chain(s_arc, false);
 
     lv_obj_t *rl = lv_label_create(s_arc);
     lv_obj_set_style_text_color(rl, ui_c(0x90A4AE), 0);
@@ -320,7 +320,7 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_style_bg_color(s_room_dot, ui_c(UI_TEXT), 0);
     lv_obj_set_style_border_width(s_room_dot, 2, 0);
     lv_obj_set_style_border_color(s_room_dot, ui_c(UI_BG), 0);
-    lv_obj_remove_flag(s_room_dot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(s_room_dot, false);
 
     lv_obj_t *minus = ui_button(p, LV_SYMBOL_MINUS, ui_c(0x1565C0), minus_cb, NULL);
     lv_obj_set_size(minus, 104, 76);
@@ -344,7 +344,7 @@ static void build_main(lv_obj_t *p)
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, 12, 0);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(row, false);
     s_boost_btn = ui_button(row, LV_SYMBOL_UP " Boost", ui_c(0x455A64), boost_cb, NULL);
     lv_obj_set_height(s_boost_btn, 62);
     lv_obj_set_flex_grow(s_boost_btn, 1);
@@ -371,7 +371,7 @@ static void build_main(lv_obj_t *p)
     lv_label_set_long_mode(s_info, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_info, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s_info, 20, 640);
-    lv_obj_add_flag(s_info, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(s_info, true);
     lv_obj_add_event_cb(s_info, info_cb, LV_EVENT_CLICKED, NULL);
 }
 
@@ -722,7 +722,7 @@ static void build_chart(lv_obj_t *p)
     lv_obj_set_size(s_heat, cw, 22);
     lv_obj_set_style_bg_opa(s_heat, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s_heat, ui_c(UI_SURFACE_ALT), 0);
-    lv_obj_remove_flag(s_heat, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_heat, false);
     lv_obj_t *hl = lv_label_create(p);  // names the band
     lv_obj_set_style_text_color(hl, ui_c(UI_HEAT), 0);
     lv_label_set_text(hl, UI_ICON_FIRE);
@@ -757,7 +757,7 @@ static void build_chart(lv_obj_t *p)
     lv_obj_set_width(s_chart_info, 440);
     lv_obj_set_style_text_align(s_chart_info, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s_chart_info, 20, cy + ch + 70);
-    lv_obj_add_flag(s_chart_info, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(s_chart_info, true);
     lv_obj_set_ext_click_area(s_chart_info, 8);
     lv_obj_add_event_cb(s_chart_info, water_cb, LV_EVENT_CLICKED, NULL);
     s_cbuf = heap_caps_malloc(sizeof(thermo_fine_t) * THERMO_FINE_LEN, MALLOC_CAP_SPIRAM);
@@ -876,16 +876,17 @@ lv_obj_t *app_thermo_create(void)
     lv_obj_remove_style_all(strip);
     lv_obj_set_size(strip, BOARD_LCD_H_RES, 56);
     lv_obj_set_pos(strip, 0, BOARD_LCD_V_RES - UI_STATUS_H - 56);
-    lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(strip, LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_clickable(strip, true);
+    lv_obj_set_gesture_bubble(strip, false);
+    lv_obj_set_scrollable(strip, false);
     lv_obj_add_event_cb(strip, strip_cb, LV_EVENT_GESTURE, NULL);
     for (int i = 0; i < 5; i++) {
         lv_obj_t *hit = lv_obj_create(strip);
         lv_obj_remove_style_all(hit);
         lv_obj_set_size(hit, 44, 56);
         lv_obj_set_pos(hit, 240 - 110 + i * 44, 0);
-        lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(hit, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        lv_obj_set_clickable(hit, true);
+        lv_obj_set_gesture_bubble(hit, true);
         lv_obj_add_event_cb(hit, dot_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         s_dots[i] = lv_obj_create(hit);
         lv_obj_remove_style_all(s_dots[i]);
@@ -893,7 +894,7 @@ lv_obj_t *app_thermo_create(void)
         lv_obj_set_style_radius(s_dots[i], 6, 0);
         lv_obj_set_style_bg_opa(s_dots[i], LV_OPA_COVER, 0);
         lv_obj_align(s_dots[i], LV_ALIGN_CENTER, 0, 4);
-        lv_obj_remove_flag(s_dots[i], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(s_dots[i], false);
     }
     update_dots();
     update_main();

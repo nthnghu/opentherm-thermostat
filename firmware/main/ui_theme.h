@@ -34,3 +34,8 @@ uint32_t ui_hex(uint32_t dark_hex); // same, for "#RRGGBB text#" recolour string
 // Call with the LVGL lock held (uses a shared buffer).
 void ui_label_text(lv_obj_t *label, const char *text);
 void ui_label_fmt(lv_obj_t *label, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
+// A scrolling list of tappable rows (replaces lv_list, deprecated in LVGL 9.6): a flex column box,
+// and a full-width row with an optional icon and a wrapping text. Size and place the list as any object.
+lv_obj_t *ui_list_create(lv_obj_t *parent);
+lv_obj_t *ui_list_add(lv_obj_t *list, const char *icon, const char *text);
