@@ -426,6 +426,175 @@ static const char *reason_text(int reason)
     }
 }
 
+/* Wi-Fi drop log (NVS "board"/"drop_log", newest first): every loss of the network after it had an IP, with the
+ * reason codes and how long it took to get an IP again, so a gap in the data can be explained afterwards.
+ * The event handler only fills s_drop; wifi_mon_task writes NVS once the IP is back (one write per drop). */
+#define DROP_LOG_N 10
+enum { DROP_LINK = 0, DROP_CHIP = 1, DROP_SETTINGS = 2 };
+typedef struct {
+    int64_t epoch;        // when the link went down (0 = clock not set)
+    uint32_t uptime_s;    // uptime then
+    uint32_t dur_s;       // until the next IP
+    uint16_t tries;       // disconnect events while down (each failed attempt gives one)
+    uint8_t reason;       // first reason code (0 = IP lost, link still up)
+    uint8_t last_reason;  // reason of the last failed attempt
+    int8_t rssi;          // signal before the drop
+    uint8_t cause;        // DROP_LINK, DROP_CHIP (our chip reset), DROP_SETTINGS (Wi-Fi settings changed)
+} drop_t;
+static portMUX_TYPE s_drop_mux = portMUX_INITIALIZER_UNLOCKED;
+static drop_t s_drop;               // the drop in progress or just ended
+static int64_t s_drop_start_us;
+static bool s_drop_active, s_drop_done, s_had_ip;
+static volatile uint8_t s_drop_cause;  // what the next drop is caused by (set before our own disconnects)
+static volatile int s_rssi_seen;       // last non-zero signal
+static uint32_t s_drops_total;         // NVS "drop_n"
+
+static void drop_begin(uint8_t reason)
+{
+    int64_t now = esp_timer_get_time();
+    time_t t = time(NULL);
+    portENTER_CRITICAL(&s_drop_mux);
+    if (!s_had_ip) {
+        // still the first connection after start: not a drop
+    } else if (!s_drop_active) {
+        s_drop = (drop_t){.epoch = t > 1700000000 ? (int64_t)t : 0, .uptime_s = (uint32_t)(now / 1000000), .tries = 1,
+                          .reason = reason, .last_reason = reason, .rssi = (int8_t)s_rssi_seen, .cause = s_drop_cause};
+        s_drop_start_us = now;
+        s_drop_active = true;
+        s_drop_done = false;
+    } else {
+        if (s_drop.tries < UINT16_MAX) {
+            s_drop.tries++;
+        }
+        s_drop.last_reason = reason;
+    }
+    portEXIT_CRITICAL(&s_drop_mux);
+}
+
+static void drop_end(void)
+{
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&s_drop_mux);
+    if (s_drop_active) {
+        s_drop.dur_s = (uint32_t)((now - s_drop_start_us) / 1000000);
+        s_drop_active = false;
+        s_drop_done = true;
+    }
+    s_had_ip = true;
+    s_drop_cause = DROP_LINK;
+    portEXIT_CRITICAL(&s_drop_mux);
+}
+
+static const char *drop_reason_name(int r)
+{
+    switch (r) {
+    case 0: return "IP lost";
+    case WIFI_REASON_AUTH_EXPIRE: return "auth expired";
+    case WIFI_REASON_AUTH_LEAVE: return "AP ended auth";
+    case WIFI_REASON_ASSOC_EXPIRE: return "AP: inactivity";
+    case WIFI_REASON_ASSOC_TOOMANY: return "AP full";
+    case WIFI_REASON_ASSOC_LEAVE: return "left";
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: return "handshake timeout";
+    case WIFI_REASON_BEACON_TIMEOUT: return "beacons lost";
+    case WIFI_REASON_NO_AP_FOUND: return "AP not found";
+    case WIFI_REASON_AUTH_FAIL: return "auth failed";
+    case WIFI_REASON_ASSOC_FAIL: return "assoc failed";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT: return "handshake timeout";
+    case WIFI_REASON_CONNECTION_FAIL: return "connection failed";
+    case WIFI_REASON_AP_TSF_RESET: return "AP restarted";
+    case WIFI_REASON_ROAMING: return "roaming";
+    default: return "other";
+    }
+}
+
+static void drop_log_save(const drop_t *d)
+{
+    drop_t ev[DROP_LOG_N] = {0};
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    size_t len = sizeof(ev);
+    nvs_get_blob(h, "drop_log", ev, &len);
+    memmove(&ev[1], &ev[0], sizeof(ev[0]) * (DROP_LOG_N - 1));
+    ev[0] = *d;
+    nvs_set_blob(h, "drop_log", ev, sizeof(ev));
+    nvs_set_u32(h, "drop_n", s_drops_total + 1);
+    nvs_commit(h);
+    nvs_close(h);
+    s_drops_total++;
+}
+
+static int drop_format(char *out, size_t size, const drop_t *d)
+{
+    static const char *const CAUSE[] = {"", ", during a Wi-Fi chip reset", ", after new Wi-Fi settings"};
+    char when[24] = "clock not set";
+    if (d->epoch) {
+        time_t t = (time_t)d->epoch;
+        struct tm lt;
+        localtime_r(&t, &lt);
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &lt);
+    }
+    char dur[16];
+    if (d->dur_s >= 120) {
+        snprintf(dur, sizeof(dur), "%lu min", (unsigned long)(d->dur_s / 60));
+    } else {
+        snprintf(dur, sizeof(dur), "%lu s", (unsigned long)d->dur_s);
+    }
+    char last[40] = "";
+    if (d->tries > 1 && d->last_reason != d->reason) {
+        snprintf(last, sizeof(last), ", last %d %s", d->last_reason, drop_reason_name(d->last_reason));
+    }
+    return snprintf(out, size, "%s, %s, reason %d %s%s, %u tries, signal %d%s", when, dur, d->reason,
+                    drop_reason_name(d->reason), last, d->tries, d->rssi, d->cause < 3 ? CAUSE[d->cause] : "");
+}
+
+void board_wifi_drop_log(char *out, size_t size)
+{
+    drop_t ev[DROP_LOG_N] = {0};
+    size_t len = sizeof(ev), n = 0;
+    out[0] = 0;
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_blob(h, "drop_log", ev, &len);
+        nvs_close(h);
+    }
+    drop_t cur;
+    bool active;
+    int64_t start;
+    portENTER_CRITICAL(&s_drop_mux);
+    cur = s_drop;
+    active = s_drop_active;
+    start = s_drop_start_us;
+    portEXIT_CRITICAL(&s_drop_mux);
+    if (active) {
+        cur.dur_s = (uint32_t)((esp_timer_get_time() - start) / 1000000);
+        n += (size_t)snprintf(out, size, "NOW DOWN: ");
+        if (n < size) {
+            n += (size_t)drop_format(out + n, size - n, &cur);
+        }
+    }
+    for (int i = 0; i < DROP_LOG_N && n < size; i++) {
+        if (!ev[i].uptime_s) {
+            continue;
+        }
+        if (n) {
+            n += (size_t)snprintf(out + n, size - n, "; ");
+        }
+        if (n < size) {
+            n += (size_t)drop_format(out + n, size - n, &ev[i]);
+        }
+    }
+    if (!out[0]) {
+        snprintf(out, size, "none");
+    }
+}
+
+uint32_t board_wifi_drops(void)
+{
+    return s_drops_total;
+}
+
 // New Wi-Fi credentials are on trial: when they give no connection within WIFI_TRIAL_S, the previous ones (which
 // worked) are put back, so a typo on the web page cannot take the device off the network for good.
 #define WIFI_TRIAL_S 60
@@ -444,16 +613,21 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *d = data;
         ESP_LOGW(TAG, "Wi-Fi disconnected, reason %d", d->reason);
+        drop_begin(d->reason);
         s_wifi_up = false;
         s_ip[0] = 0;
         if (settings_wifi_configured()) {
             set_wifi_status("%s: %s (%d)", settings_get()->ssid, reason_text(d->reason), d->reason);
             reconnect_in(3000);
         }
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
+        ESP_LOGW(TAG, "IP address lost");
+        drop_begin(0);  // the DHCP client keeps trying on its own; GOT_IP ends the drop
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         ESP_LOGI(TAG, "Got IP %s", s_ip);
+        drop_end();
         s_wifi_up = true;
         s_trial_until_us = 0;  // new credentials (if any were on trial) work
         set_wifi_status("%s, %s", settings_get()->ssid, s_ip);
@@ -476,6 +650,7 @@ esp_err_t board_wifi_start(void)
     esp_wifi_set_storage(WIFI_STORAGE_RAM);  // credentials live in our own NVS namespace
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_event, NULL);
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
 
     if (settings_wifi_configured()) {
@@ -489,6 +664,7 @@ esp_err_t board_wifi_start(void)
     nvs_handle_t h;
     if (nvs_open("board", NVS_READONLY, &h) == ESP_OK) {
         nvs_get_u32(h, "wd_rst", &s_wd_restarts);
+        nvs_get_u32(h, "drop_n", &s_drops_total);
         nvs_close(h);
     }
     s_cp_ok_us = esp_timer_get_time();
@@ -553,6 +729,8 @@ esp_err_t board_wifi_connect(const char *ssid, const char *pass)
     strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
     strlcpy((char *)wc.sta.password, pass, sizeof(wc.sta.password));
     s_reconnect_at_us = 0;
+    s_drop_cause = DROP_SETTINGS;
+    drop_begin(WIFI_REASON_ASSOC_LEAVE);
     esp_wifi_disconnect();
     s_wifi_up = false;
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wc), TAG, "config");
@@ -654,6 +832,8 @@ static uint32_t s_chip_resets;
 static void wifi_chip_recover(void)
 {
     int64_t t0 = esp_timer_get_time();
+    s_drop_cause = DROP_CHIP;
+    drop_begin(WIFI_REASON_ASSOC_LEAVE);
     s_wifi_up = false;
     s_ip[0] = 0;
     s_reconnect_at_us = 0;
@@ -731,6 +911,21 @@ static void wifi_mon_task(void *arg)
             continue;
         }
         next_check_us = now + 5000000;
+        {
+            drop_t d;
+            bool done;
+            portENTER_CRITICAL(&s_drop_mux);
+            done = s_drop_done;
+            s_drop_done = false;
+            d = s_drop;
+            portEXIT_CRITICAL(&s_drop_mux);
+            if (done) {
+                char line[160];
+                drop_format(line, sizeof(line), &d);
+                ESP_LOGW(TAG, "Wi-Fi drop: %s", line);
+                drop_log_save(&d);
+            }
+        }
         if (s_wifi_up && !lease_logged) {  // look for timing patterns (hangs seen ~42 min after start)
             esp_netif_t *nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
             struct netif *ln = nif ? esp_netif_get_netif_impl(nif) : NULL;
@@ -757,6 +952,7 @@ static void wifi_mon_task(void *arg)
                 answered = true;
                 if (ap.rssi != 0) {
                     s_rssi = ap.rssi;
+                    s_rssi_seen = ap.rssi;
                     last_rssi_us = now;
                 }
             }

@@ -52,6 +52,8 @@ void board_wifi_chip_reset(void);       // test: reset the Wi-Fi chip alone, as 
 uint32_t board_wifi_chip_resets(void);  // chip resets since start
 uint32_t board_wifi_wd_restarts(void);  // restarts by the Wi-Fi watchdog so far
 void board_wifi_hang_log(char *out, size_t size);  // the last hangs, newest first ("none")
+void board_wifi_drop_log(char *out, size_t size);  // network losses, a current one first, then newest first
+uint32_t board_wifi_drops(void);                   // network losses so far (NVS)
 
 #include "driver/i2c_master.h"
 // Shared I2C bus (GPIO7/8): GT911, ES8311, SHT40, camera SCCB.

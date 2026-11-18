@@ -403,6 +403,15 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
         SEND(req, "<p class=hint>Last hangs (when the chip last answered): ");
         send_escaped(req, hl);
         SEND(req, "</p>");
+        char *dl = malloc(1600);
+        if (dl) {
+            board_wifi_drop_log(dl, 1600);
+        }
+        sendf(req, "<p class=hint>Network losses so far: %lu. Last ones (start, time until an IP again, Wi-Fi reason "
+                   "code, attempts, signal before): ", (unsigned long)board_wifi_drops());
+        send_escaped(req, dl ? dl : "?");
+        free(dl);
+        SEND(req, "</p>");
     }
 
     // Home Assistant

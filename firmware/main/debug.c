@@ -180,6 +180,12 @@ void debug_exec(const char *line, FILE *o)
         char hl[600];
         board_wifi_hang_log(hl, sizeof(hl));
         fprintf(o, "WIFI hangs: %s\n", hl);
+        char *dl = malloc(1600);
+        if (dl) {
+            board_wifi_drop_log(dl, 1600);
+            fprintf(o, "WIFI drops (%lu): %s\n", (unsigned long)board_wifi_drops(), dl);
+            free(dl);
+        }
         histstore_status(hl, sizeof(hl));
         fprintf(o, "HIST %s | RAM %d minutes, %d hours\n", hl, thermo_log_count(), thermo_hour_count());
         fprintf(o, "WIFI up=%d rssi=%d chip_silent_s=%d wd_min=%u wd_restarts=%lu chip_resets=%lu\n", board_wifi_connected(),
