@@ -56,6 +56,20 @@ esp_err_t camera_init(void)
 
 static bool camera_grab_locked(camera_frame_cb_t cb, void *user);
 
+// Unmap the frame buffers and close the device. Closing frees the driver's buffers (esp_video_close), so the
+// pointers are cleared too: nothing may use them until the next start maps them again.
+static void close_device(int fd)
+{
+    for (int i = 0; i < NUM_BUFS; i++) {
+        if (s_buf[i]) {
+            munmap(s_buf[i], s_buf_len[i]);  // a no-op in esp_video today
+        }
+        s_buf[i] = NULL;
+        s_buf_len[i] = 0;
+    }
+    close(fd);
+}
+
 static esp_err_t camera_start_locked(void)
 {
     if (s_fd >= 0) {
@@ -104,7 +118,7 @@ static esp_err_t camera_start_locked(void)
     return ESP_OK;
 fail:
     ESP_LOGE(TAG, "camera start failed");
-    close(fd);
+    close_device(fd);
     return ESP_FAIL;
 }
 
@@ -115,7 +129,7 @@ static void camera_stop_locked(void)
     }
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     ioctl(s_fd, VIDIOC_STREAMOFF, &type);
-    close(s_fd);
+    close_device(s_fd);
     s_fd = -1;
 }
 
