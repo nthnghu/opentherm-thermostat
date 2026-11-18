@@ -35,6 +35,7 @@ static int s_rssi;   // cached: the Wi-Fi call goes over SDIO to the C6
 
 /* ------------------------------------------------------------- helpers */
 
+static void set_status(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void set_status(const char *fmt, ...)
 {
     va_list ap;

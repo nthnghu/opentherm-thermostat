@@ -34,6 +34,7 @@ static lv_obj_t *s_rows[T_COUNT];
 static lv_obj_t *s_title;
 static SemaphoreHandle_t s_continue;
 
+static void set(int i, selftest_result_t r, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 static void set(int i, selftest_result_t r, const char *fmt, ...)
 {
     s_items[i].result = r;

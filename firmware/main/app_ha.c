@@ -110,6 +110,7 @@ static void dash_changed(void)
 
 /* ------------------------------------------------------------ dashboard */
 
+static void set_status(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void set_status(const char *fmt, ...)
 {
     char buf[128];

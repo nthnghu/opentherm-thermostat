@@ -638,13 +638,29 @@ void ui_pages_schedule(lv_obj_t *p)
     s_sched_info = label(p, "", 20, 642, 440, UI_MUTED, &lv_font_montserrat_16);
 }
 
+// What the week bars are drawn from, compared field by field: memcmp would also compare padding bytes
+static bool week_same(const sched_config_t *a, const sched_config_t *b)
+{
+    if (a->prog_on != b->prog_on || a->eco_setback_k != b->eco_setback_k) {
+        return false;
+    }
+    for (int d = 0; d < 7; d++) {
+        for (int i = 0; i < SCHED_POINTS; i++) {
+            if (a->prog[d][i].min != b->prog[d][i].min || a->prog[d][i].level != b->prog[d][i].level) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 void ui_pages_schedule_update(void)
 {
     sched_config_t c;
     thermo_get_sched_config(&c);
     thermo_state_t st;
     thermo_get(&st);
-    if (!s_week_valid || st.setpoint != s_week_sp || memcmp(&c, &s_week_cache, sizeof(c)) != 0) {
+    if (!s_week_valid || st.setpoint != s_week_sp || !week_same(&c, &s_week_cache)) {
         lv_obj_update_layout(s_week[0]);
         for (int d = 0; d < 7; d++) {
             draw_day(d, &c, st.setpoint);

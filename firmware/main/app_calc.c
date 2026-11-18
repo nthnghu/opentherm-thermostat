@@ -169,7 +169,7 @@ static void key_cb(lv_event_t *e)
         char *num = last_number();
         if (*num == '-') {
             memmove(num, num + 1, strlen(num));
-        } else if (*num) {
+        } else if (*num && strlen(s_expr) + 1 < sizeof(s_expr) - 1) {  // same limit as append()
             memmove(num + 1, num, strlen(num) + 1);
             *num = '-';
         }

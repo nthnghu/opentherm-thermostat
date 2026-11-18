@@ -402,6 +402,7 @@ static void reconnect_in(int ms)
     s_reconnect_at_us = esp_timer_get_time() + (int64_t)ms * 1000 + 1;
 }
 
+static void set_wifi_status(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void set_wifi_status(const char *fmt, ...)
 {
     va_list ap;
@@ -478,7 +479,8 @@ esp_err_t board_wifi_start(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
 
     if (settings_wifi_configured()) {
-        wifi_config_t wc = {0};
+        wifi_config_t wc;
+        memset(&wc, 0, sizeof(wc));  // {0} zeroes only the first union member (ap), smaller than sta
         strlcpy((char *)wc.sta.ssid, settings_get()->ssid, sizeof(wc.sta.ssid));
         strlcpy((char *)wc.sta.password, settings_get()->pass, sizeof(wc.sta.password));
         esp_wifi_set_config(WIFI_IF_STA, &wc);
@@ -546,7 +548,8 @@ esp_err_t board_wifi_connect(const char *ssid, const char *pass)
     free(s);
     ESP_RETURN_ON_ERROR(serr, TAG, "save");
 
-    wifi_config_t wc = {0};
+    wifi_config_t wc;
+    memset(&wc, 0, sizeof(wc));
     strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
     strlcpy((char *)wc.sta.password, pass, sizeof(wc.sta.password));
     s_reconnect_at_us = 0;
@@ -666,7 +669,8 @@ static void wifi_chip_recover(void)
     esp_wifi_set_storage(WIFI_STORAGE_RAM);
     esp_wifi_set_mode(WIFI_MODE_STA);
     if (settings_wifi_configured()) {
-        wifi_config_t wc = {0};
+        wifi_config_t wc;
+        memset(&wc, 0, sizeof(wc));
         settings_t *c = malloc(sizeof(settings_t));
         if (c) {
             settings_copy(c);

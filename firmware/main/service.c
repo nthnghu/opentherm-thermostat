@@ -695,7 +695,7 @@ static void r_id14(svc_t *s, const svc_in_t *in)
         next(s, in);
         return;
     }
-    if (k == 3) {
+    if (k >= 3) {  // the last step (k == 3); >= keeps LIM[k] below in range
         bool honoured = s->f[1] - s->f[0] >= 15 && s->f[2] <= s->f[0] + 5;
         res->v[0] = s->f[0];
         res->v[1] = s->f[1];
