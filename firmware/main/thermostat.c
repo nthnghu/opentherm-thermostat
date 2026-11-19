@@ -497,6 +497,10 @@ static void thermo_task(void *arg)
             s_st.sensor_ok = s_sf.ok;
             s_st.sensor_age_s = s_sf.age_s;
             UNLOCK();
+            if (s_sf.back_bad >= 5) {  // shorter glitches are only counted in the errors
+                ESP_LOGI(TAG, "SHT40 back after %d s (%d failed reads), %.2f C", s_sf.back_s, s_sf.back_bad,
+                         s_sf.room_c);
+            }
         }
 
         // 2. Control (control.c), on the boiler state the bus task last saw

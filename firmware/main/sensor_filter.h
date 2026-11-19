@@ -20,10 +20,13 @@ typedef struct {
     int age_s;              // seconds since the last good reading (-1 = none yet)
     float raw, room_c, humidity, room_shown, humidity_shown;
     uint32_t errors;
+    int back_bad;           // set on the good reading that ends a run of bad ones: how many there were (else 0)
+    int back_s;             //   and how long since the previous good reading
     // state
     int64_t last_ok_us;     // 0 = none yet
     int fails_in_row;
     int same;
+    int bad_run;            // bad reads since the last good one
     float last_t, last_h;
 } sensor_filter_t;
 

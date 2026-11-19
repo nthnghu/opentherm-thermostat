@@ -60,6 +60,7 @@ static void test_t1_bad_values(void)
     CHECK(f.errors == e0 + 4, "4 rejected readings counted (%u)", f.errors - e0);
     CHECK(f.room_c == before && isfinite(f.humidity), "average untouched (%.2f, humidity %.1f)", f.room_c, f.humidity);
     CHECK(f.ok, "still ok 8 s after the last good reading");
+    CHECK(f.back_bad == 0, "no recovery reported while still failing");
 
     // Keep failing past the stale time
     feed(&f, &now, 12, true, 130.0f, 50, NULL);
@@ -154,6 +155,9 @@ static void test_recovery_steps(void)
     CHECK(!f.ok && f.errors == 45, "lost, 45 errors (%u)", f.errors);
     feed_noisy(&f, &now, 1, 22.0f, 50);
     CHECK(f.ok && f.fails_in_row == 0 && NEAR(f.room_c, 22.0, 0.02), "back: counter cleared, average restarted");
+    CHECK(f.back_bad == 45 && f.back_s == 92, "recovery reported: %d failed reads, %d s", f.back_bad, f.back_s);
+    feed_noisy(&f, &now, 1, 22.0f, 50);
+    CHECK(f.back_bad == 0, "reported only on the first good reading");
     feed(&f, &now, 4, false, 0, 0, &c);
     CHECK(c.soft == 1, "a new run of failures starts counting from 0");
 }
