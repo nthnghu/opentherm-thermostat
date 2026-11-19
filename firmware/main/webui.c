@@ -657,6 +657,10 @@ static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
           "<label>Night brightness %%</label><input name=n_lvl type=number min=1 max=100 value=%u>",
           c->night_start / 60, c->night_start % 60, c->night_end / 60, c->night_end % 60, c->night_level);
     secs_select(req, "Screen off after", "off_s", off_s, 7, c->off_after_s);
+    if (c->off_after_s && c->keep_on) {
+        sendf(req, "<div class=hint>Not between %02u:%02u and %02u:%02u: kept on by the schedule below.</div>",
+              c->keep_on_start / 60, c->keep_on_start % 60, c->keep_on_end / 60, c->keep_on_end % 60);
+    }
     sendf(req, "<label><input type=checkbox name=keep value=1 %s> Keep the screen on between</label>",
           c->keep_on ? "checked" : "");
     sendf(req,

@@ -667,7 +667,7 @@ static lv_obj_t *build_thermo(void)
 
 static lv_obj_t *s_br, *s_dim, *s_dim_dd, *s_off_dd, *s_home_dd, *s_keep_sw, *s_k_st, *s_k_en;
 static lv_obj_t *s_night_sw, *s_n_st, *s_n_en, *s_n_lvl, *s_mot_sw, *s_mot_dd, *s_mot_lbl, *s_theme_dd, *s_d_st, *s_d_en;
-static lv_obj_t *s_swipe_dd;
+static lv_obj_t *s_swipe_dd, *s_off_note;
 static const uint16_t DIM_S[] = {0, 15, 30, 60, 120, 300, 600};
 static const char DIM_OPTS[] = "Never\n15 s\n30 s\n1 min\n2 min\n5 min\n10 min";
 static const uint16_t OFF_S[] = {0, 60, 120, 300, 600, 1800, 3600};
@@ -683,6 +683,17 @@ static int index_of(const uint16_t *a, int n, uint16_t v)
         }
     }
     return 0;
+}
+
+// Under "Screen off after": the keep-on schedule overrides it, which otherwise looks like the timer not working.
+static void off_note_update(const settings_t *c)
+{
+    bool show = c->off_after_s && c->keep_on;
+    lv_obj_set_hidden(s_off_note, !show);
+    if (show) {
+        ui_label_fmt(s_off_note, "Not between %02u:%02u and %02u:%02u: kept on by the schedule below.",
+                     c->keep_on_start / 60, c->keep_on_start % 60, c->keep_on_end / 60, c->keep_on_end % 60);
+    }
 }
 
 static void display_panel_cb(lv_event_t *e)
@@ -706,6 +717,7 @@ static void display_panel_cb(lv_event_t *e)
     lv_dropdown_set_selected(s_d_st, c->day_start / 30);
     lv_dropdown_set_selected(s_d_en, c->day_end / 30);
     lv_dropdown_set_selected(s_swipe_dd, c->swipe_guard);
+    off_note_update(c);
 }
 
 static void display_save_cb(lv_event_t *e)
@@ -730,6 +742,7 @@ static void display_save_cb(lv_event_t *e)
     s_tmp.day_end = lv_dropdown_get_selected(s_d_en) * 30;
     s_tmp.swipe_guard = lv_dropdown_get_selected(s_swipe_dd);
     settings_save(&s_tmp);
+    off_note_update(&s_tmp);
     ui_theme_update();
 }
 
@@ -811,7 +824,9 @@ static lv_obj_t *build_display(void)
     s_dim_dd = dropdown(p, "Dim after", DIM_OPTS, 230, 156, 220);
     s_dim = slider(p, "Dimmed level", 218, 1);
     s_off_dd = dropdown(p, "Screen off after", OFF_OPTS, 230, 256, 220);
-    s_home_dd = dropdown(p, "Back to thermostat", HOME_OPTS, 230, 316, 220);
+    s_off_note = label(p, "", 16, 304, 448, 0x607D8B);
+    lv_obj_set_style_text_font(s_off_note, &lv_font_montserrat_14, 0);
+    s_home_dd = dropdown(p, "Back to thermostat", HOME_OPTS, 230, 328, 220);
 
     section(p, "Keep the screen on (schedule)", 386);
     s_keep_sw = toggle(p, "Never turn off between", 416);
