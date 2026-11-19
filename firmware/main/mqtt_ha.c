@@ -206,14 +206,14 @@ static void send_discovery(void)
 {
     jb_t j = {.buf = s_json, .size = JSON_MAX};
 
-    // Climate entity: setpoint, mode, presets (boost, away)
+    // Climate entity: the temperature is the current target (what the screen shows and sets), mode, presets
     j.n = 0;
     jb_add(&j, "{");
     dev_block(&j);
     jb_add(&j, ",\"name\":null,\"uniq_id\":\"%s_climate\","
                "\"mode_cmd_t\":\"~/cmd/mode\",\"mode_stat_t\":\"~\",\"mode_stat_tpl\":\"{{ value_json.mode }}\","
                "\"modes\":[\"off\",\"heat\"],"
-               "\"temp_cmd_t\":\"~/cmd/setpoint\",\"temp_stat_t\":\"~\",\"temp_stat_tpl\":\"{{ value_json.setpoint }}\","
+               "\"temp_cmd_t\":\"~/cmd/setpoint\",\"temp_stat_t\":\"~\",\"temp_stat_tpl\":\"{{ value_json.target }}\","
                "\"curr_temp_t\":\"~\",\"curr_temp_tpl\":\"{{ value_json.room }}\","
                "\"curr_hum_t\":\"~\",\"curr_hum_tpl\":\"{{ value_json.humidity }}\","
                "\"act_t\":\"~\",\"act_tpl\":\"{{ value_json.action }}\","
@@ -458,7 +458,7 @@ static void on_command(const char *name, const char *v)
         char *end;
         float c = strtof(v, &end);
         if (end != v && c >= THERMO_SP_MIN && c <= THERMO_SP_MAX) {
-            thermo_set_setpoint(c);
+            thermo_set_target(c);  // like the screen: a hand override while the program runs, else the setpoint
         }
     } else if (strcmp(name, "mode") == 0) {
         if (strcmp(v, "heat") == 0) {
