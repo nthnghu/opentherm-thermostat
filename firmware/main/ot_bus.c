@@ -29,6 +29,7 @@ static int64_t s_cmd_at_us;        // when the controller last handed over a com
 static bool s_cmd_stale;           // bus task only
 static otb_flags_t s_flags;
 static otb_status_t s_pub;
+static bool s_pub_sim = true;      // s_pub comes from a cycle with the simulated boiler
 static uint8_t s_support[128];
 static volatile bool s_sim = true;
 static ot_sim_t s_bsim;
@@ -141,6 +142,8 @@ static void sim_init_locked(void)
     s_sim_inited = true;
 }
 
+static bool s_core_sim = true;  // which boiler s_core has been talking to (bus task only)
+
 static void bus_task(void *arg)
 {
     esp_task_wdt_add(NULL);
@@ -168,7 +171,13 @@ static void bus_task(void *arg)
             }
         }
         int64_t now_ms = s_cycle_start_us / 1000;
-        if (s_sim) {
+        bool sim = s_sim;
+        if (sim != s_core_sim) {
+            // Simulated <-> real: nothing the other boiler said (link up, values, IDs) may count for this one
+            otb_new_boiler(&s_core);
+            s_core_sim = sim;
+        }
+        if (sim) {
             xSemaphoreTake(s_sim_lock, portMAX_DELAY);
             if (!s_sim_inited) {
                 sim_init_locked();
@@ -181,6 +190,7 @@ static void bus_task(void *arg)
         }
         LOCK();
         s_pub = s_core.st;
+        s_pub_sim = sim;
         s_manual_pub = s_core.manual;
         s_manual_pub.pending |= s_manual_req.pending;
         memcpy(s_support, s_core.support, sizeof(s_support));
@@ -230,6 +240,14 @@ void otbus_get(otb_status_t *st)
 {
     LOCK();
     *st = s_pub;
+    UNLOCK();
+}
+
+void otbus_get_mode(otb_status_t *st, bool *sim)
+{
+    LOCK();
+    *st = s_pub;
+    *sim = s_pub_sim;
     UNLOCK();
 }
 

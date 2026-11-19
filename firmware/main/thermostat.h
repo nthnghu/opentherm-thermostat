@@ -125,6 +125,7 @@ void thermo_set_mode(thermo_mode_t m);
 void thermo_set_offset(float c);
 void thermo_set_hysteresis(float c);
 void thermo_set_boiler_sim(bool sim);
+int thermo_forget_boiler_choice(void);  // esp_err_t; test: erase the saved real/simulated choice (applies at the next start)
 void thermo_set_sim_room(bool on);
 
 // Control settings (control.h); saved to NVS a few seconds after a change.

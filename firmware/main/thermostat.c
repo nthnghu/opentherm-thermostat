@@ -562,7 +562,11 @@ static void thermo_task(void *arg)
             }
         }
         if (s_boiler_auto) {
-            if (b.link == OTB_LINK_UP) {
+            // Only an answer on the real bus counts: the bus task starts with the simulator, whose link is up
+            otb_status_t rb;
+            bool rb_sim;
+            otbus_get_mode(&rb, &rb_sim);
+            if (!rb_sim && rb.link == OTB_LINK_UP) {
                 s_boiler_auto = false;
                 s_boiler_chosen = true;
                 s_dirty_ms = dirty_now();  // save the choice
@@ -909,6 +913,23 @@ void thermo_set_sim_room(bool on)
     s_st.sim_room = on;
     UNLOCK();
     mark_dirty();
+}
+
+int thermo_forget_boiler_choice(void)
+{
+    nvs_handle_t h;
+    esp_err_t e = nvs_open("thermo", NVS_READWRITE, &h);
+    if (e == ESP_OK) {
+        e = nvs_erase_key(h, "sim");
+        if (e == ESP_ERR_NVS_NOT_FOUND) {
+            e = ESP_OK;
+        }
+        if (e == ESP_OK) {
+            e = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    return e;
 }
 
 void thermo_set_boiler_sim(bool sim)

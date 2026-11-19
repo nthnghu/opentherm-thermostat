@@ -239,6 +239,35 @@ static void test_plant(void)
            b.plant.flow_c, b.plant.return_c, b.plant.ch_starts, b.plant.dhw_starts, b.plant.gas_kwh);
 }
 
+// Switching from the simulated to the real boiler (#29): the bus task starts with the simulator, so nothing it
+// learnt may make an absent real boiler look present.
+static void test_new_boiler(void)
+{
+    ot_sim_t sim;
+    ot_sim_init(&sim, 20, 8);
+    otb_core_t c;
+    otb_init(&c);
+    c.flags.mirror_57 = false;
+    c.cmd = (otb_cmd_t){.ch_enable = true, .dhw_enable = true, .tset = 50};
+    int64_t now = 0;
+    run(&c, &sim, &now, 30);
+    CHECK(c.st.link == OTB_LINK_UP && c.st.valid && c.st.ok > 0, "simulator: link up, values read");
+
+    otb_new_boiler(&c);
+    CHECK(c.st.link == OTB_LINK_UNKNOWN && c.st.valid == 0 && c.st.ok == 0 && c.st.frames == 0,
+          "new boiler: link %d valid %x ok %u", c.st.link, c.st.valid, c.st.ok);
+    CHECK(c.support[OT_ID_TRET] == OTB_ID_UNKNOWN, "supported IDs forgotten");
+    CHECK(!c.flags.mirror_57 && c.cmd.ch_enable && c.cmd.tset == 50, "flags and command kept");
+
+    ot_sim_t none;  // the real bus with nothing connected
+    ot_sim_init(&none, 20, 8);
+    none.q.miss_pct = 100;
+    run(&c, &none, &now, 4);
+    CHECK(c.st.link != OTB_LINK_UP, "no answer on the new bus: never up (%d)", c.st.link);
+    run(&c, &none, &now, 2);
+    CHECK(c.st.link == OTB_LINK_LOST, "then lost");
+}
+
 int main(void)
 {
     test_frames();
@@ -249,5 +278,6 @@ int main(void)
     test_cmd_guard();
     test_never_answered();
     test_plant();
+    test_new_boiler();
     TEST_DONE();
 }

@@ -92,6 +92,8 @@ static void test_touch(void)
     bool probe = i2c_master_probe(board_i2c_bus(), 0x5D, 50) == ESP_OK || i2c_master_probe(board_i2c_bus(), 0x14, 50) == ESP_OK;
     if (board_touch_ok() && probe) {
         set(T_TOUCH, ST_PASS, "answering on I2C");
+    } else if (!board_display_ok()) {
+        set(T_TOUCH, ST_FAIL, "not started: the display failed");
     } else {
         set(T_TOUCH, ST_FAIL, probe ? "found, but the driver failed" : "not found on I2C (0x5D/0x14)");
     }
@@ -190,6 +192,9 @@ bool selftest_run(void)
         lvgl_port_unlock();
         vTaskDelay(pdMS_TO_TICKS(1200));
         return true;
+    }
+    if (!board_display_ok()) {
+        return false;  // no screen: nobody can press "Continue anyway", so the web page and MQTT start at once
     }
     // A required part failed: wait for "Continue anyway" (or 60 s, so the thermostat UI still comes up).
     s_continue = xSemaphoreCreateBinary();

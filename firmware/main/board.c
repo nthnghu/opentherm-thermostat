@@ -233,6 +233,36 @@ static void headless_flush(lv_display_t *d, const lv_area_t *area, uint8_t *px)
     lv_display_flush_ready(d);
 }
 
+// One-shot test flags (NVS "board"): read and erased at once, so the next start is normal again.
+static bool test_flag_take(const char *key)
+{
+    nvs_handle_t h;
+    uint8_t v = 0;
+    if (nvs_open("board", NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+    if (nvs_get_u8(h, key, &v) == ESP_OK) {
+        nvs_erase_key(h, key);
+        nvs_commit(h);
+    }
+    nvs_close(h);
+    return v != 0;
+}
+
+esp_err_t board_test_nodisplay_next(void)
+{
+    nvs_handle_t h;
+    esp_err_t e = nvs_open("board", NVS_READWRITE, &h);
+    if (e == ESP_OK) {
+        e = nvs_set_u8(h, "t_nodisp", 1);
+        if (e == ESP_OK) {
+            e = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    return e;
+}
+
 esp_err_t board_display_init(void)
 {
     esp_err_t ierr = board_i2c_init();
@@ -241,7 +271,13 @@ esp_err_t board_display_init(void)
     }
     esp_lcd_panel_io_handle_t io = NULL;
     esp_lcd_panel_handle_t panel = NULL;
-    esp_err_t perr = panel_init(&io, &panel);
+    esp_err_t perr;
+    if (test_flag_take("t_nodisp")) {  // console "TEST nodisplay": this one start runs as if the panel failed
+        ESP_LOGW(TAG, "test: display left off for this start (TEST nodisplay)");
+        perr = ESP_ERR_NOT_FOUND;
+    } else {
+        perr = panel_init(&io, &panel);
+    }
 
     // LVGL
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -300,6 +336,9 @@ bool board_display_ok(void)
 
 void board_backlight(int pct)
 {
+    if (!s_panel) {
+        return;  // no working display (and the backlight PWM may not be set up)
+    }
     pct = pct < 0 ? 0 : (pct > 100 ? 100 : pct);  // 0 = screen off
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, pct * 1023 / 100);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);

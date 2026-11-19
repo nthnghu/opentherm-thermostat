@@ -81,6 +81,19 @@ void otb_init(otb_core_t *c)
     c->dhw_write_ms = NEVER;
 }
 
+void otb_new_boiler(otb_core_t *c)
+{
+    otb_flags_t flags = c->flags;
+    otb_cmd_t cmd = c->cmd;
+    otb_manual_t manual = c->manual;
+    bool silent = c->silent;
+    otb_init(c);
+    c->flags = flags;
+    c->cmd = cmd;
+    c->manual = manual;
+    c->silent = silent;
+}
+
 float otb_tset_for(const otb_core_t *c)
 {
     float t = c->cmd.tset;

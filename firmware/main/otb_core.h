@@ -112,6 +112,9 @@ typedef struct {
 } otb_core_t;
 
 void otb_init(otb_core_t *c);
+// Another boiler on the bus (simulated <-> real): forget everything learnt from the old one (link, values,
+// supported IDs, statistics). The flags, the controller's command and the service settings stay.
+void otb_new_boiler(otb_core_t *c);
 
 // The controller hands over a command every second. When it stops (hung or crashed task), the last command must
 // not be repeated forever: after OTB_CMD_MAX_AGE_MS heating is switched off. Returns true when it stepped in.

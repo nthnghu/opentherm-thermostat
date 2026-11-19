@@ -15,6 +15,7 @@ void otbus_quiet_end(void);
 
 void otbus_set_cmd(const otb_cmd_t *cmd);
 void otbus_get(otb_status_t *st);
+void otbus_get_mode(otb_status_t *st, bool *sim);  // the status and whether it came from the simulated boiler
 void otbus_get_support(uint8_t out[128]);  // otb_support_t per ID
 void otbus_get_flags(otb_flags_t *f);
 // save = also keep them in NVS (otherwise RAM only, as the service routines use them).

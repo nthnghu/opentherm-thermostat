@@ -100,6 +100,16 @@ void debug_task_stats(char *out, size_t size)
 #endif
 }
 
+static void restart_soon(void)  // 1 s later, after the answer went out
+{
+    static esp_timer_handle_t t;
+    if (!t) {
+        const esp_timer_create_args_t a = {.callback = (esp_timer_cb_t)esp_restart, .name = "restart"};
+        esp_timer_create(&a, &t);
+    }
+    esp_timer_start_once(t, 1000 * 1000);
+}
+
 void debug_exec(const char *line, FILE *o)
 {
     if (strncmp(line, "HANG ", 5) == 0) {  // "HANG <s>": watchdog restart; "HANG <s> feed": command timeout only
@@ -217,13 +227,30 @@ void debug_exec(const char *line, FILE *o)
         return;
     }
     if (strcmp(line, "RESTART") == 0) {  // restarts 1 s later, after the answer went out
-        static esp_timer_handle_t t;
-        if (!t) {
-            const esp_timer_create_args_t a = {.callback = (esp_timer_cb_t)esp_restart, .name = "restart"};
-            esp_timer_create(&a, &t);
-        }
-        esp_timer_start_once(t, 1000 * 1000);
+        restart_soon();
         fprintf(o, "RESTART in 1 s\n");
+        return;
+    }
+    // Bench tests of start-up paths that a healthy device never takes. Both restart; the one after is normal.
+    if (strcmp(line, "TEST nodisplay") == 0) {  // one start as if the panel had failed (#30)
+        esp_err_t e = board_test_nodisplay_next();
+        if (e == ESP_OK) {
+            restart_soon();
+        }
+        fprintf(o, "TEST nodisplay: %s\n", e == ESP_OK ? "restarting without the display; RESTART brings it back" : esp_err_to_name(e));
+        return;
+    }
+    if (strcmp(line, "TEST boilerauto") == 0) {  // forget the real/simulated choice: detection at start (#29)
+        esp_err_t e = thermo_forget_boiler_choice();
+        if (e == ESP_OK) {
+            restart_soon();
+        }
+        fprintf(o, "TEST boilerauto: %s\n", e == ESP_OK ? "choice erased, restarting; BOILER sim|real sets it again" : esp_err_to_name(e));
+        return;
+    }
+    if (strcmp(line, "BOILER sim") == 0 || strcmp(line, "BOILER real") == 0) {  // as the Settings switch (saved)
+        thermo_set_boiler_sim(line[7] == 's');
+        fprintf(o, "BOILER %s (saved)\n", line + 7);
         return;
     }
     if (strncmp(line, "TARGET ", 7) == 0 || strcmp(line, "RESUME") == 0) {  // as the main-page dial / Program button
