@@ -1,4 +1,5 @@
 #include "histstore.h"
+#include "histring.h"
 #include <stdio.h>
 #include <string.h>
 #include "esp_heap_caps.h"
@@ -8,14 +9,7 @@
 
 static const char *TAG = "hist";
 
-#define SECTOR 4096
-#define MAGIC 0x4853  // "HS"
-
-typedef struct {
-    uint16_t magic;
-    uint16_t crc;    // CRC-16/CCITT over seq and the payload
-    uint32_t seq;    // 1, 2, 3 ... per ring
-} slot_hdr_t;
+#define SECTOR HR_SECTOR
 
 typedef struct {
     const char *name;
@@ -29,9 +23,9 @@ typedef struct {
     uint32_t restored;
 } ring_t;
 
-_Static_assert(sizeof(slot_hdr_t) + sizeof(dl_rec_t) <= 64, "minute record must fit a 64-byte slot");
-_Static_assert(sizeof(slot_hdr_t) + sizeof(dl_burn_t) <= 32, "burn must fit a 32-byte slot");
-_Static_assert(sizeof(slot_hdr_t) + sizeof(dl_hour_t) <= 32, "hour must fit a 32-byte slot");
+_Static_assert(sizeof(hr_hdr_t) + sizeof(dl_rec_t) <= 64, "minute record must fit a 64-byte slot");
+_Static_assert(sizeof(hr_hdr_t) + sizeof(dl_burn_t) <= 32, "burn must fit a 32-byte slot");
+_Static_assert(sizeof(hr_hdr_t) + sizeof(dl_hour_t) <= 32, "hour must fit a 32-byte slot");
 
 // 26 sectors x 64 = 1664 minutes (24 h + spare), 5 x 128 = 640 burns, 8 x 128 = 1024 hours (35 days + spare)
 static ring_t s_rings[3] = {
@@ -45,17 +39,6 @@ static const esp_partition_t *s_part;
 static bool s_have_last;
 static dl_rec_t s_last;
 
-static uint16_t crc16(const uint8_t *p, size_t n, uint16_t c)
-{
-    while (n--) {
-        c ^= (uint16_t)(*p++ << 8);
-        for (int i = 0; i < 8; i++) {
-            c = (c & 0x8000) ? (uint16_t)((c << 1) ^ 0x1021) : (uint16_t)(c << 1);
-        }
-    }
-    return c;
-}
-
 static uint32_t nslots(const ring_t *r)
 {
     return r->sectors * SECTOR / r->slot;
@@ -66,15 +49,27 @@ static uint32_t addr(const ring_t *r, uint32_t i)
     return r->first_sector * SECTOR + i * r->slot;
 }
 
-static uint16_t slot_crc(uint32_t seq, const void *payload, size_t n)
+typedef struct {
+    ring_t *r;
+    void (*put)(dl_t *, const void *);
+    dl_t *d;
+} scan_ctx_t;
+
+static void scan_put(void *ctx, const void *payload)
 {
-    return crc16((const uint8_t *)payload, n, crc16((const uint8_t *)&seq, sizeof(seq), 0xFFFF));
+    scan_ctx_t *c = ctx;
+    if (c->put) {
+        c->put(c->d, payload);
+    }
+    if (c->r == &s_rings[R_MIN]) {
+        memcpy(&s_last, payload, sizeof(s_last));
+        s_have_last = true;
+    }
 }
 
-// Reads a whole ring; calls put(payload) for every valid slot, oldest first. Sets next and seq.
+// Reads a whole ring; calls put(payload) for every valid slot, oldest first (histring.c). Sets next and seq.
 static void scan(ring_t *r, void (*put)(dl_t *, const void *), dl_t *d)
 {
-    uint32_t n = nslots(r), max_seq = 0, max_i = 0;
     size_t bytes = r->sectors * SECTOR;
     uint8_t *buf = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
     if (!buf || esp_partition_read(s_part, r->first_sector * SECTOR, buf, bytes) != ESP_OK) {
@@ -82,47 +77,18 @@ static void scan(ring_t *r, void (*put)(dl_t *, const void *), dl_t *d)
         ESP_LOGE(TAG, "%s: read failed", r->name);
         return;
     }
-    for (uint32_t i = 0; i < n; i++) {
-        const slot_hdr_t *h = (const slot_hdr_t *)(buf + i * r->slot);
-        if (h->magic == MAGIC && h->seq != 0xFFFFFFFF &&
-            h->crc == slot_crc(h->seq, h + 1, r->payload) && h->seq > max_seq) {
-            max_seq = h->seq;
-            max_i = i;
-        }
-    }
-    r->seq = max_seq;
-    r->next = max_seq ? (max_i + 1) % n : 0;
-    // Oldest first: start after the newest and go round; keep only slots older than the newest, in order.
-    uint32_t prev = 0, count = 0;
-    for (uint32_t k = 1; max_seq && k <= n; k++) {
-        uint32_t i = (max_i + k) % n;
-        const slot_hdr_t *h = (const slot_hdr_t *)(buf + i * r->slot);
-        if (h->magic != MAGIC || h->seq == 0xFFFFFFFF || h->seq <= prev || h->seq > max_seq ||
-            h->crc != slot_crc(h->seq, h + 1, r->payload)) {
-            continue;
-        }
-        prev = h->seq;
-        if (put) {
-            put(d, h + 1);
-        }
-        if (r == &s_rings[R_MIN]) {
-            memcpy(&s_last, h + 1, sizeof(s_last));
-            s_have_last = true;
-        }
-        count++;
-    }
-    r->restored = count;
+    scan_ctx_t c = {r, put, d};
+    hr_scan_t res = hr_scan(buf, nslots(r), r->slot, r->payload, scan_put, &c);
+    r->seq = res.seq;
+    r->next = res.next;
+    r->restored = res.count;
     free(buf);
 }
 
 static bool write_slot(ring_t *r, const void *payload)
 {
-    uint8_t slot[64] = {0};
-    slot_hdr_t *h = (slot_hdr_t *)slot;
-    h->magic = MAGIC;
-    h->seq = r->seq + 1;
-    memcpy(h + 1, payload, r->payload);
-    h->crc = slot_crc(h->seq, h + 1, r->payload);
+    uint8_t slot[64];
+    hr_make_slot(slot, r->slot, r->seq + 1, payload, r->payload);
     uint32_t a = addr(r, r->next);
     bool quiet = otbus_quiet_begin(2000);  // between OpenTherm frames
     esp_err_t err = ESP_OK;

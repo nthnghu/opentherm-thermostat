@@ -1,4 +1,5 @@
 #include "opentherm.h"
+#include "ot_manchester.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "driver/gpio.h"
@@ -12,17 +13,16 @@ static const char *TAG = "ot";
 #define OUT_ACTIVE 0
 #define OUT_IDLE   1
 
-typedef enum { ST_IDLE, ST_SENDING, ST_WAITING, ST_START_BIT, ST_RECEIVING, ST_READY, ST_INVALID } ot_state_t;
+// Who owns the line: the TX timer (SENDING), the RX edge ISR (RECEIVING, decoding into s_rx) or nobody (IDLE)
+typedef enum { ST_IDLE, ST_SENDING, ST_RECEIVING } ot_state_t;
 
 static gptimer_handle_t s_timer;
 static SemaphoreHandle_t s_done;
 static volatile ot_state_t s_state;
-static uint8_t s_tx_levels[68];  // 34 bits x 2 half-bits
+static uint8_t s_tx_levels[OTM_HALF_BITS];
 static volatile int s_tx_pos;
-static volatile int64_t s_rx_ts;
-static volatile int s_rx_bits;
-static volatile uint32_t s_rx_frame;
-static volatile int64_t s_tx_end, s_rx_start;
+static otm_rx_t s_rx;
+static volatile int64_t s_tx_end;
 static bool s_inited;
 
 static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_data_t *e, void *arg)
@@ -35,55 +35,22 @@ static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_dat
     }
     gpio_set_level(OT_PIN_OUT, OUT_IDLE);
     gptimer_stop(t);
-    s_rx_ts = esp_timer_get_time();
-    s_tx_end = s_rx_ts;
-    s_state = ST_WAITING;
+    s_tx_end = esp_timer_get_time();
+    otm_rx_begin(&s_rx);
+    s_state = ST_RECEIVING;
     return false;
 }
 
-// Response decoding, after the reference Arduino OpenTherm library (ihormelnyk): bit value is the
-// inverted line level sampled at the first edge more than 750 us after the previous mid-bit edge.
+// Response decoding: ot_manchester.h (inlined here, so it stays in IRAM)
 static void IRAM_ATTR rx_edge(void *arg)
 {
-    int64_t now = esp_timer_get_time();
-    int level = gpio_get_level(OT_PIN_IN);
+    if (s_state != ST_RECEIVING) {
+        return;
+    }
     BaseType_t woke = pdFALSE;
-    switch (s_state) {
-    case ST_WAITING:
-        if (level == 1) {
-            s_state = ST_START_BIT;
-            s_rx_ts = now;
-            s_rx_start = now;
-        } else {
-            s_state = ST_INVALID;
-            xSemaphoreGiveFromISR(s_done, &woke);
-        }
-        break;
-    case ST_START_BIT:
-        if (now - s_rx_ts < 750 && level == 0) {
-            s_state = ST_RECEIVING;
-            s_rx_ts = now;
-            s_rx_bits = 0;
-            s_rx_frame = 0;
-        } else {
-            s_state = ST_INVALID;
-            xSemaphoreGiveFromISR(s_done, &woke);
-        }
-        break;
-    case ST_RECEIVING:
-        if (now - s_rx_ts > 750) {
-            if (s_rx_bits < 32) {
-                s_rx_frame = (s_rx_frame << 1) | (level ? 0 : 1);
-                s_rx_ts = now;
-                s_rx_bits++;
-            } else {
-                s_state = ST_READY;  // stop bit
-                xSemaphoreGiveFromISR(s_done, &woke);
-            }
-        }
-        break;
-    default:
-        break;
+    if (otm_rx_edge(&s_rx, esp_timer_get_time(), gpio_get_level(OT_PIN_IN))) {
+        s_state = ST_IDLE;
+        xSemaphoreGiveFromISR(s_done, &woke);
     }
     if (woke) {
         portYIELD_FROM_ISR();
@@ -134,13 +101,7 @@ esp_err_t ot_transfer(uint32_t request, uint32_t *response, uint16_t *latency_ms
     if (!s_inited) {
         return ESP_ERR_INVALID_STATE;
     }
-    // Manchester: '1' = active then idle, '0' = idle then active. Start and stop bits are '1'.
-    int p = 0;
-    for (int i = -1; i <= 32; i++) {
-        bool bit = (i < 0 || i == 32) ? true : (request >> (31 - i)) & 1;
-        s_tx_levels[p++] = bit ? OUT_ACTIVE : OUT_IDLE;
-        s_tx_levels[p++] = bit ? OUT_IDLE : OUT_ACTIVE;
-    }
+    otm_encode(request, s_tx_levels, OUT_ACTIVE, OUT_IDLE);
     xSemaphoreTake(s_done, 0);
     s_tx_pos = 0;
     s_state = ST_SENDING;
@@ -150,6 +111,7 @@ esp_err_t ot_transfer(uint32_t request, uint32_t *response, uint16_t *latency_ms
     bool got = xSemaphoreTake(s_done, pdMS_TO_TICKS(34 + 800 + 40)) == pdTRUE;
     ot_state_t st = s_state;
     s_state = ST_IDLE;
+    otm_state_t rx = s_rx.st;
     if (!got) {
         if (st == ST_SENDING) {
             gptimer_stop(s_timer);
@@ -157,12 +119,12 @@ esp_err_t ot_transfer(uint32_t request, uint32_t *response, uint16_t *latency_ms
         }
         return ESP_ERR_TIMEOUT;
     }
-    if (st != ST_READY) {
+    if (rx != OTM_READY) {
         return ESP_ERR_INVALID_RESPONSE;
     }
-    *response = s_rx_frame;
+    *response = s_rx.frame;
     if (latency_ms) {
-        int64_t l = (s_rx_start - s_tx_end) / 1000;
+        int64_t l = (s_rx.start - s_tx_end) / 1000;
         *latency_ms = l < 0 ? 0 : (l > 65535 ? 65535 : (uint16_t)l);
     }
     return ot_parity_ok(*response) ? ESP_OK : ESP_ERR_INVALID_CRC;

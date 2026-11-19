@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "main.c" "board.c" "settings.c" "sht4x.c" "sensor_filter.c" "opentherm.c" "ot_frame.c" "ot_sim.c" "plant_sim.c" "otb_core.c" "ot_bus.c" "control.c" "cfgtable.c" "schedule.c" "datalog.c" "alerts.c" "service.c" "mqtt_ha.c" "thermostat.c" "timekeep.c"
          "camera.c" "ha.c" "selftest.c" "webui.c" "ui.c" "debug.c" "c6update.c" "hadash.c" "motion.c" "ui_theme.c" "quickpanel.c"
-         "app_thermo.c" "font_room_75.c" "font_icons_20.c" "font_icons_48.c" "logring.c" "ota_check.c" "histstore.c" "ui_pages.c" "cfgall.c" "cfgtext.c" "app_ha.c" "app_calc.c" "app_blocks.c" "app_setup.c" "tlscert.c"
+         "app_thermo.c" "font_room_75.c" "font_icons_20.c" "font_icons_48.c" "logring.c" "ota_check.c" "histstore.c" "histring.c" "ui_pages.c" "cfgall.c" "cfgtext.c" "app_ha.c" "app_calc.c" "app_blocks.c" "app_setup.c" "tlscert.c"
     INCLUDE_DIRS "."
     EMBED_TXTFILES "web/page.js"
     REQUIRES esp_lcd esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_ledc esp_driver_gptimer
