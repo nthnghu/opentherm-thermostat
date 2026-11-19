@@ -1,6 +1,7 @@
 // Wake-on-motion with the camera: ~5 frames/s are reduced to a 32 x 18 grid of brightness cells and
 // compared with a slowly adapting background. Each frame is normalised by its mean brightness, so
-// the camera's auto-exposure doesn't look like motion. Too dark (unlit room) = no detection.
+// the camera's auto-exposure doesn't look like motion. Too dark (unlit room) = no detection;
+// a dim, featureless picture is reported as too dark but still watched.
 // Frames are processed in RAM only and never stored or sent anywhere.
 #include "motion.h"
 #include <math.h>
@@ -22,6 +23,7 @@ static const char *TAG = "motion";
 #define GY 18
 #define N  (GX * GY)
 #define DARK_LUMA 14
+#define FLAT_CONTRAST 2  // spatial std-dev of the cells; a lit room shows 10-35
 
 static volatile bool s_paused;
 static volatile bool s_off;  // switched off for now (not saved), e.g. for tests
@@ -129,7 +131,10 @@ static void motion_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
-        s_state = MOTION_WATCHING;
+        // A dim room: auto-exposure lifts the mean above DARK_LUMA, but the picture is almost flat and a
+        // person barely registers. Detection keeps running (a light switched on still counts); only the
+        // status says it can't really see.
+        s_state = s_dbg_contrast < FLAT_CONTRAST ? MOTION_TOO_DARK : MOTION_WATCHING;
         if (warmup < 10) {  // let auto-exposure settle, then learn the background
             bg = cur;
             warmup++;
