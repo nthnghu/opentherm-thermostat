@@ -218,7 +218,7 @@ static void send_discovery(void)
                "\"curr_hum_t\":\"~\",\"curr_hum_tpl\":\"{{ value_json.humidity }}\","
                "\"act_t\":\"~\",\"act_tpl\":\"{{ value_json.action }}\","
                "\"pr_mode_cmd_t\":\"~/cmd/preset\",\"pr_mode_stat_t\":\"~\","
-               "\"pr_mode_val_tpl\":\"{{ value_json.preset }}\",\"pr_modes\":[\"boost\",\"away\"],"
+               "\"pr_mode_val_tpl\":\"{{ value_json.preset }}\",\"pr_modes\":[\"program\",\"manual\",\"boost\",\"away\"],"
                "\"min_temp\":%.0f,\"max_temp\":%.0f,\"temp_step\":0.5,\"precision\":0.1,\"temp_unit\":\"C\"}",
            s_node, THERMO_SP_MIN, THERMO_SP_MAX);
     disc_publish("climate", "climate", &j);
@@ -343,7 +343,15 @@ static bool build_state(void)
     jb_str(&j, "mode", heat ? "heat" : "off");
     jb_num(&j, "mode_heat", true, "%.0f", heat);
     jb_str(&j, "action", !heat && !st.demand ? "off" : (st.flame && !st.dhw_active && st.demand ? "heating" : "idle"));
-    jb_str(&j, "preset", st.sched_src == SCHED_SRC_BOOST ? "boost" : (st.away ? "away" : "none"));
+    // program = following the weekly program, manual = hand override until the next switch point
+    const char *preset = st.sched_src == SCHED_SRC_BOOST ? "boost"
+                         : st.away                       ? "away"
+                         : st.sched_src == SCHED_SRC_MANUAL ? "manual"
+                         : (st.sched_src == SCHED_SRC_COMFORT || st.sched_src == SCHED_SRC_ECO ||
+                            st.sched_src == SCHED_SRC_FIXED)
+                             ? "program"
+                             : "none";
+    jb_str(&j, "preset", preset);
     jb_num(&j, "demand", true, "%.0f", st.demand);
     jb_num(&j, "flow_setpoint", true, "%.1f", st.flow_setpoint);
     jb_num(&j, "requested", true, "%.1f", st.req_c);
@@ -473,9 +481,14 @@ static void on_command(const char *name, const char *v)
         } else if (strcmp(v, "away") == 0) {
             thermo_boost(false);
             thermo_away(true, 0);
-        } else if (strcmp(v, "none") == 0) {
+        } else if (strcmp(v, "none") == 0 || strcmp(v, "program") == 0) {
             thermo_boost(false);
             thermo_away(false, 0);
+            thermo_resume_program();  // drops a hand override: back to the program's temperature
+        } else if (strcmp(v, "manual") == 0) {
+            thermo_state_t st;
+            thermo_get(&st);
+            thermo_set_target(st.target_c);  // hold the current temperature until the next switch point
         }
     } else if (strcmp(name, "prog_on") == 0 || strcmp(name, "summer_on") == 0) {
         cfgall_set(name, strcmp(v, "1") == 0 || strcasecmp(v, "on") == 0 ? "1" : "0");
