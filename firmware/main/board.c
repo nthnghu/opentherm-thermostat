@@ -430,7 +430,7 @@ static const char *reason_text(int reason)
  * reason codes and how long it took to get an IP again, so a gap in the data can be explained afterwards.
  * The event handler only fills s_drop; wifi_mon_task writes NVS once the IP is back (one write per drop). */
 #define DROP_LOG_N 10
-enum { DROP_LINK = 0, DROP_CHIP = 1, DROP_SETTINGS = 2 };
+enum { DROP_LINK = 0, DROP_CHIP = 1, DROP_SETTINGS = 2, DROP_TEST = 3 };
 typedef struct {
     int64_t epoch;        // when the link went down (0 = clock not set)
     uint32_t uptime_s;    // uptime then
@@ -439,7 +439,8 @@ typedef struct {
     uint8_t reason;       // first reason code (0 = IP lost, link still up)
     uint8_t last_reason;  // reason of the last failed attempt
     int8_t rssi;          // signal before the drop
-    uint8_t cause;        // DROP_LINK, DROP_CHIP (our chip reset), DROP_SETTINGS (Wi-Fi settings changed)
+    uint8_t cause;        // DROP_LINK, DROP_CHIP (watchdog chip reset), DROP_SETTINGS (new Wi-Fi settings),
+                          // DROP_TEST (chip reset asked for by hand, C6RESET)
 } drop_t;
 static portMUX_TYPE s_drop_mux = portMUX_INITIALIZER_UNLOCKED;
 static drop_t s_drop;               // the drop in progress or just ended
@@ -527,7 +528,8 @@ static void drop_log_save(const drop_t *d)
 
 static int drop_format(char *out, size_t size, const drop_t *d)
 {
-    static const char *const CAUSE[] = {"", ", during a Wi-Fi chip reset", ", after new Wi-Fi settings"};
+    static const char *const CAUSE[] = {"", ", during a Wi-Fi chip reset", ", after new Wi-Fi settings",
+                                        ", test chip reset (C6RESET)"};
     char when[24] = "clock not set";
     if (d->epoch) {
         time_t t = (time_t)d->epoch;
@@ -546,7 +548,7 @@ static int drop_format(char *out, size_t size, const drop_t *d)
         snprintf(last, sizeof(last), ", last %d %s", d->last_reason, drop_reason_name(d->last_reason));
     }
     return snprintf(out, size, "%s, %s, reason %d %s%s, %u tries, signal %d%s", when, dur, d->reason,
-                    drop_reason_name(d->reason), last, d->tries, d->rssi, d->cause < 3 ? CAUSE[d->cause] : "");
+                    drop_reason_name(d->reason), last, d->tries, d->rssi, d->cause < 4 ? CAUSE[d->cause] : "");
 }
 
 void board_wifi_drop_log(char *out, size_t size)
@@ -593,6 +595,18 @@ void board_wifi_drop_log(char *out, size_t size)
 uint32_t board_wifi_drops(void)
 {
     return s_drops_total;
+}
+
+void board_wifi_drop_log_clear(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("board", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, "drop_log");
+        nvs_set_u32(h, "drop_n", 0);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    s_drops_total = 0;
 }
 
 // New Wi-Fi credentials are on trial: when they give no connection within WIFI_TRIAL_S, the previous ones (which
@@ -829,10 +843,10 @@ void board_wifi_hang_log(char *out, size_t size)
 static volatile bool s_chip_reset_req;
 static uint32_t s_chip_resets;
 
-static void wifi_chip_recover(void)
+static void wifi_chip_recover(bool test)
 {
     int64_t t0 = esp_timer_get_time();
-    s_drop_cause = DROP_CHIP;
+    s_drop_cause = test ? DROP_TEST : DROP_CHIP;
     drop_begin(WIFI_REASON_ASSOC_LEAVE);
     s_wifi_up = false;
     s_ip[0] = 0;
@@ -996,7 +1010,7 @@ static void wifi_mon_task(void *arg)
             if (!test) {
                 wd_log_add(ok_epoch, (uint32_t)(s_cp_ok_us / 1000000), ok_rssi);
             }
-            wifi_chip_recover();
+            wifi_chip_recover(test);
             recover_at_us = esp_timer_get_time();
             next_check_us = recover_at_us + 5000000;
             continue;

@@ -349,6 +349,11 @@ void debug_exec(const char *line, FILE *o)
         fprintf(o, "MOT off=%d (until restart)\n", line[8] == 'f');
         return;
     }
+    if (strcmp(line, "DROPS clear") == 0) {  // erase the Wi-Fi drop log (e.g. after tests)
+        board_wifi_drop_log_clear();
+        fprintf(o, "WIFI drops cleared\n");
+        return;
+    }
     if (strncmp(line, "COREDUMP", 8) == 0) {  // "COREDUMP": what is stored; "COREDUMP clear": erase it
         if (esp_core_dump_image_check() != ESP_OK) {
             fprintf(o, "COREDUMP none stored\n");
