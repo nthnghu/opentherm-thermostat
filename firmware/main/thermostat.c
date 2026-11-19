@@ -3,6 +3,7 @@
 // state, and hand the request to the OpenTherm bus task (ot_bus.c).
 // Sensor lost (no reading for 30 s), frost floor and every other feature: see control.h and ctrl_config_t.
 #include "thermostat.h"
+#include "sensor_filter.h"
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -26,16 +27,11 @@
 static const char *TAG = "thermo";
 
 #define LOOP_MS          1000
-#define SENSOR_STALE_US  ((int64_t)THERMO_SENSOR_STALE_S * 1000000)
 #define SAVE_DELAY_MS    5000
-#define SENSOR_STUCK_N   150  // reads (2 s each): 5 minutes of bit-identical values
-#define SMOOTH_ALPHA     (2.0f / 30.0f)  // reading every 2 s -> ~30 s exponential average
-#define SHOW_BAND_C      0.08f           // shown temperature moves only past this from the smoothed value
-#define SHOW_BAND_RH     0.8f
 
 static SemaphoreHandle_t s_lock;
 static thermo_state_t s_st;
-static int64_t s_last_reading_us;
+static sensor_filter_t s_sf;  // room sensor filter, thermostat task (offset change under LOCK)
 // When something to save last changed, in ms since start (|1 so it is never 0 = nothing to save). 32 bits: written
 // by other tasks without the lock, which is only safe for a value this chip stores in one step.
 static volatile uint32_t s_dirty_ms;
@@ -452,33 +448,25 @@ static void thermo_task(void *arg)
             }
             // Recovery: after 5 failed reads in a row a soft reset of the sensor, after 15 (and then every 30 s)
             // a reset of the I2C bus as well (a device holding the data line low blocks everyone on it).
-            static int fails_in_row;
-            fails_in_row = err == ESP_OK ? 0 : fails_in_row + 1;
-            if (sensor_inited && fails_in_row == 5) {
+            // Bit-identical readings for 5 minutes count as failed (sensor_filter.c).
+            sf_action_t act;
+            bool stuck_now;
+            if (!sf_check(&s_sf, err == ESP_OK, t, h, &act, &stuck_now) && err == ESP_OK) {
+                err = ESP_ERR_INVALID_RESPONSE;
+            }
+            if (act == SF_ACT_SOFT_RESET && sensor_inited) {
                 ESP_LOGW(TAG, "SHT40: 5 failed reads, soft reset: %s", esp_err_to_name(sht4x_reset()));
-            } else if (fails_in_row >= 15 && fails_in_row % 15 == 0 && board_i2c_bus()) {
+            } else if (act == SF_ACT_BUS_RESET && board_i2c_bus()) {
                 esp_err_t br = i2c_master_bus_reset(board_i2c_bus());
-                ESP_LOGW(TAG, "SHT40: %d failed reads, I2C bus reset: %s", fails_in_row, esp_err_to_name(br));
+                ESP_LOGW(TAG, "SHT40: %d failed reads, I2C bus reset: %s", s_sf.fails_in_row, esp_err_to_name(br));
                 if (sensor_inited) {
                     sht4x_reset();
                 }
             }
-            // A real sensor never repeats the exact same pair of readings for long (its last digits are noise):
-            // identical values for SENSOR_STUCK_N reads mean it has stopped measuring, and count as failures.
-            static float last_t = -1000, last_h = -1000;
-            static int same;
-            if (err == ESP_OK) {
-                same = (t == last_t && h == last_h) ? same + 1 : 0;
-                last_t = t;
-                last_h = h;
-                if (same >= SENSOR_STUCK_N) {
-                    if (same == SENSOR_STUCK_N) {
-                        ESP_LOGE(TAG, "SHT40 repeats the same reading (%.2f C, %.1f %%) for %d s: treated as failed", t, h,
-                                 SENSOR_STUCK_N * 2);
-                        sht4x_reset();
-                    }
-                    err = ESP_ERR_INVALID_RESPONSE;
-                }
+            if (stuck_now) {
+                ESP_LOGE(TAG, "SHT40 repeats the same reading (%.2f C, %.1f %%) for %d s: treated as failed", t, h,
+                         SF_STUCK_N * 2);
+                sht4x_reset();
             }
             // Bench testing: the simulated house replaces the SHT40 temperature (humidity stays real).
             float sim_t;
@@ -493,36 +481,21 @@ static void thermo_task(void *arg)
                 }
             }
             LOCK();
-            if (err == ESP_OK && t > -20 && t < 60) {
-                float raw = t + s_st.offset;
-                s_st.room_raw = raw;
-                // Smooth the sensor noise; restart the average after a gap (sensor was missing).
-                bool restart = !s_last_reading_us || now - s_last_reading_us > SENSOR_STALE_US;
-                if (restart) {
-                    s_st.room_c = raw;
-                    s_st.humidity = h;
-                } else {
-                    s_st.room_c += SMOOTH_ALPHA * (raw - s_st.room_c);
-                    s_st.humidity += SMOOTH_ALPHA * (h - s_st.humidity);
-                }
-                // Dead band for the display: a value sitting on a 0.05 border no longer flips back and forth.
-                if (restart || fabsf(s_st.room_c - s_st.room_shown) >= SHOW_BAND_C) {
-                    s_st.room_shown = roundf(s_st.room_c * 10) / 10;
-                }
-                if (restart || fabsf(s_st.humidity - s_st.humidity_shown) >= SHOW_BAND_RH) {
-                    s_st.humidity_shown = roundf(s_st.humidity);
-                }
-                s_last_reading_us = now;
-            } else {
-                s_st.sensor_errors++;
-                if (s_st.sensor_errors < 5 || s_st.sensor_errors % 15 == 0) {
-                    ESP_LOGW(TAG, "SHT40 read failed (%s), %lu errors, last good %lld s ago", esp_err_to_name(err),
-                             (unsigned long)s_st.sensor_errors,
-                             s_last_reading_us ? (now - s_last_reading_us) / 1000000 : -1LL);
+            if (!sf_accept(&s_sf, now, err == ESP_OK, t + s_st.offset, h)) {
+                if (s_sf.errors < 5 || s_sf.errors % 15 == 0) {
+                    ESP_LOGW(TAG, "SHT40 read failed (%s), %lu errors, last good %d s ago",
+                             err == ESP_OK ? "implausible value" : esp_err_to_name(err), (unsigned long)s_sf.errors,
+                             s_sf.age_s);
                 }
             }
-            s_st.sensor_ok = s_last_reading_us && now - s_last_reading_us < SENSOR_STALE_US;
-            s_st.sensor_age_s = s_last_reading_us ? (int)((now - s_last_reading_us) / 1000000) : -1;
+            s_st.room_raw = s_sf.raw;
+            s_st.room_c = s_sf.room_c;
+            s_st.humidity = s_sf.humidity;
+            s_st.room_shown = s_sf.room_shown;
+            s_st.humidity_shown = s_sf.humidity_shown;
+            s_st.sensor_errors = s_sf.errors;
+            s_st.sensor_ok = s_sf.ok;
+            s_st.sensor_age_s = s_sf.age_s;
             UNLOCK();
         }
 
@@ -806,6 +779,7 @@ static void thermo_task(void *arg)
 void thermo_start(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    sf_init(&s_sf, THERMO_SENSOR_STALE_S);
     s_fine = heap_caps_calloc(THERMO_FINE_LEN, sizeof(thermo_fine_t), MALLOC_CAP_SPIRAM);
     load();
     load_ctrl_config();
@@ -871,9 +845,10 @@ void thermo_set_offset(float c)
     c = fminf(fmaxf(roundf(c * 10) / 10, -5.0f), 5.0f);
     LOCK();
     float d = c - s_st.offset;
-    s_st.room_c += d;
-    s_st.room_raw += d;
-    s_st.room_shown = roundf((s_st.room_shown + d) * 10) / 10;
+    sf_shift(&s_sf, d);
+    s_st.room_c = s_sf.room_c;
+    s_st.room_raw = s_sf.raw;
+    s_st.room_shown = s_sf.room_shown;
     s_st.offset = c;
     UNLOCK();
     mark_dirty();
