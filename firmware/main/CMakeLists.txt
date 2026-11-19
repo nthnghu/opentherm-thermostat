@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c" "board.c" "settings.c" "sht4x.c" "sensor_filter.c" "opentherm.c" "ot_frame.c" "ot_sim.c" "plant_sim.c" "otb_core.c" "ot_bus.c" "control.c" "cfgtable.c" "schedule.c" "datalog.c" "alerts.c" "service.c" "mqtt_ha.c" "thermostat.c" "timekeep.c"
+    SRCS "main.c" "board.c" "settings.c" "sht4x.c" "sensor_filter.c" "textparse.c" "opentherm.c" "ot_frame.c" "ot_sim.c" "plant_sim.c" "otb_core.c" "ot_bus.c" "control.c" "cfgtable.c" "schedule.c" "datalog.c" "alerts.c" "service.c" "mqtt_ha.c" "thermostat.c" "timekeep.c"
          "camera.c" "ha.c" "selftest.c" "webui.c" "ui.c" "debug.c" "c6update.c" "hadash.c" "motion.c" "ui_theme.c" "quickpanel.c"
          "app_thermo.c" "font_room_75.c" "font_icons_20.c" "font_icons_48.c" "logring.c" "ota_check.c" "histstore.c" "histring.c" "ui_pages.c" "cfgall.c" "cfgtext.c" "app_ha.c" "app_calc.c" "app_blocks.c" "app_setup.c" "tlscert.c"
     INCLUDE_DIRS "."

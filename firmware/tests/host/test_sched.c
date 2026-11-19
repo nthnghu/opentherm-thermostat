@@ -574,8 +574,110 @@ static void test_override(void)
     CHECK(strcmp(sched_src_name(SCHED_SRC_MANUAL), "manual") == 0, "name");
 }
 
+// T9: DST nights. Local time comes from the clock with the offset; the epoch runs on evenly.
+// Sat = day DAY0+5, Sun = DAY0+6. utc_off_min: 60 (CET) or 120 (CEST); the change happens at change_epoch.
+static sched_in_t local_at(int64_t epoch, int64_t change_epoch, int off_before, int off_after)
+{
+    int off = epoch < change_epoch ? off_before : off_after;
+    int64_t local = epoch + off * 60;
+    int32_t day = (int32_t)(local / 86400);
+    int m = (int)((local % 86400) / 60);
+    return (sched_in_t){.now_s = (double)epoch, .clock_ok = true, .wday = (day + 3) % 7, .min_of_day = m,
+                        .day = day, .epoch = epoch, .comfort_c = 21};
+}
+
+static void test_dst(void)
+{
+    sched_config_t c;
+    sched_default_config(&c);
+    c.prog_on = true;
+    sched_prog_parse(&c, 5, "06:00=c 22:00=e");           // Saturday
+    sched_prog_parse(&c, 6, "02:30=c 03:30=e 06:00=c");   // Sunday: a switch point inside the changed hour
+    sched_t s;
+    sched_init(&s, &c);
+    int64_t sun = (int64_t)(DAY0 + 6) * 86400;            // Sunday 00:00 UTC
+
+    // Spring: 02:00 CET -> 03:00 CEST at 01:00 UTC. The 02:30 point never exists; at 03:00 its level applies.
+    int64_t change = sun + 3600;
+    int64_t t = sun - 2 * 3600;                           // Sat 23:00 CET
+    sched_in_t in = local_at(t, change, 60, 120);
+    sched_step(&s, &in);
+    sched_override(&s, true, 19.5f);                      // hand override until the next switch (Sun 02:30)
+    int comfort_starts = 0, end_min = -1;
+    sched_src_t prev = SCHED_SRC_MANUAL;
+    for (; t < sun + 6 * 3600; t += 60) {
+        in = local_at(t, change, 60, 120);
+        const sched_out_t *o = sched_step(&s, &in);
+        if (prev == SCHED_SRC_MANUAL && o->src != SCHED_SRC_MANUAL && end_min < 0) {
+            end_min = in.min_of_day;
+        }
+        comfort_starts += o->src == SCHED_SRC_COMFORT && prev != SCHED_SRC_COMFORT;
+        prev = o->src;
+    }
+    CHECK(end_min == 180, "spring: the override ends at 03:00 local, the first minute past 02:30 (%02d:%02d)",
+          end_min / 60, end_min % 60);
+    CHECK(comfort_starts == 2, "spring: Comfort starts at 03:00 (in place of 02:30) and at 06:00 (%d)", comfort_starts);
+
+    // Override across the spring night, ending at 06:00 local: 7 real hours, not 8
+    sched_init(&s, &c);
+    sched_prog_parse(&c, 6, "06:00=c");
+    sched_set_config(&s, &c);
+    t = sun - 2 * 3600;
+    in = local_at(t, change, 60, 120);
+    sched_step(&s, &in);
+    sched_override(&s, true, 19.5f);
+    end_min = -1;
+    for (; t < sun + 8 * 3600 && end_min < 0; t += 60) {
+        in = local_at(t, change, 60, 120);
+        if (sched_step(&s, &in)->src != SCHED_SRC_MANUAL) {
+            end_min = in.min_of_day;
+        }
+    }
+    CHECK(end_min == 360, "spring: override until 06:00 ends at 06:00 on the wall (%02d:%02d)", end_min / 60,
+          end_min % 60);
+
+    // Autumn: 03:00 CEST -> 02:00 CET at 01:00 UTC. 02:00-02:59 runs twice; the 02:30 point must run once.
+    sched_prog_parse(&c, 6, "02:30=c 03:30=e 06:00=c");
+    sched_init(&s, &c);
+    t = sun - 2 * 3600;                                   // Sat 24:00 CEST = Sun 00:00 local
+    comfort_starts = 0;
+    int eco_after_comfort = 0;
+    prev = SCHED_SRC_ECO;
+    for (; t < sun + 5 * 3600; t += 60) {
+        in = local_at(t, change, 120, 60);
+        const sched_out_t *o = sched_step(&s, &in);
+        comfort_starts += o->src == SCHED_SRC_COMFORT && prev != SCHED_SRC_COMFORT;
+        eco_after_comfort += o->src == SCHED_SRC_ECO && prev == SCHED_SRC_COMFORT;
+        prev = o->src;
+    }
+    CHECK(comfort_starts == 1 && eco_after_comfort == 1,
+          "autumn: 02:30 Comfort once, 03:30 Eco once, no flip back in the repeated hour (%d, %d)", comfort_starts,
+          eco_after_comfort);
+
+    // Override across the autumn night, ending at 06:00 local: 8 real hours (7 on the wall + the repeated hour)
+    sched_prog_parse(&c, 6, "06:00=c");
+    sched_init(&s, &c);
+    t = sun - 3 * 3600;                                   // Sat 23:00 CEST
+    in = local_at(t, change, 120, 60);
+    sched_step(&s, &in);
+    sched_override(&s, true, 19.5f);
+    int64_t start = t;
+    end_min = -1;
+    int64_t end_t = 0;
+    for (; t < sun + 8 * 3600 && end_min < 0; t += 60) {
+        in = local_at(t, change, 120, 60);
+        if (sched_step(&s, &in)->src != SCHED_SRC_MANUAL) {
+            end_min = in.min_of_day;
+            end_t = t;
+        }
+    }
+    CHECK(end_min == 360 && end_t - start == 8 * 3600, "autumn: override until 06:00 ends at 06:00 on the wall, "
+          "after %lld min (7 h + the extra hour)", (long long)(end_t - start) / 60);
+}
+
 int main(void)
 {
+    test_dst();
     test_override();
     test_fixed_levels();
     test_step();

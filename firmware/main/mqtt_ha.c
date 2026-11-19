@@ -1,4 +1,5 @@
 #include "mqtt_ha.h"
+#include "textparse.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -463,9 +464,8 @@ static void on_command(const char *name, const char *v)
 {
     ESP_LOGI(TAG, "command %s = %.16s", name, v);  // the values are short words or numbers: never log more
     if (strcmp(name, "setpoint") == 0) {
-        char *end;
-        float c = strtof(v, &end);
-        if (end != v && c >= THERMO_SP_MIN && c <= THERMO_SP_MAX) {
+        float c;
+        if (tp_parse_float(v, THERMO_SP_MIN, THERMO_SP_MAX, &c)) {  // "21.5xyz", "nan", "1e9": ignored
             thermo_set_target(c);  // like the screen: a hand override while the program runs, else the setpoint
         }
     } else if (strcmp(name, "mode") == 0) {

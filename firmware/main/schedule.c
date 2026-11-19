@@ -343,6 +343,7 @@ void sched_init(sched_t *s, const sched_config_t *cfg)
     s->pasteur_hot_since_s = -1;
     s->pasteur_wait_s = -1;
     s->out.next_change_min = -1;
+    s->seen_day = -1;
 }
 
 void sched_set_config(sched_t *s, const sched_config_t *cfg)
@@ -367,7 +368,8 @@ bool sched_override(sched_t *s, bool on, float target_c)
     }
     s->ovr = on;
     s->ovr_c = clampf(target_c, 5, 30);
-    s->ovr_until = 0;  // the end is fixed at the next step, from the program's next switch
+    s->ovr_end_set = false;  // the end is fixed at the next step, from the program's next switch
+    s->ovr_until = 0;
     return true;
 }
 
@@ -549,20 +551,33 @@ const sched_out_t *sched_step(sched_t *s, const sched_in_t *in)
     o->src = SCHED_SRC_CONSTANT;
     o->next_change_min = -1;
     if (k->prog_on && in->clock_ok) {
-        sched_level_t l = sched_level_at(k, in->wday, in->min_of_day);
+        // The clock going back (the repeated hour when DST ends, or a small correction) holds the program at the
+        // latest minute it has run at, so a switch point in that hour runs once, not twice.
+        int mod = in->min_of_day;
+        if (in->day == s->seen_day && mod < s->seen_min && s->seen_min - mod <= 60) {
+            mod = s->seen_min;
+        } else {
+            s->seen_day = in->day;
+            s->seen_min = (int16_t)mod;
+        }
+        sched_level_t l = sched_level_at(k, in->wday, mod);
         o->src = sched_level_is_fixed(l) ? SCHED_SRC_FIXED : (l == SCHED_COMFORT ? SCHED_SRC_COMFORT : SCHED_SRC_ECO);
         o->target_c = sched_level_temp(l, comfort, k->eco_setback_k);
-        o->next_change_min = next_change(k, in->wday, in->min_of_day, l, &o->next_level);
-        if (s->ovr && !s->ovr_until) {
-            int64_t minute = in->epoch - in->epoch % 60;
-            s->ovr_until = minute + (o->next_change_min > 0 ? o->next_change_min : 24 * 60) * 60LL;
+        o->next_change_min = next_change(k, in->wday, mod, l, &o->next_level);
+        if (s->ovr && !s->ovr_end_set) {
+            int end = mod + (o->next_change_min > 0 ? o->next_change_min : 24 * 60);
+            s->ovr_end_day = in->day + end / 1440;
+            s->ovr_end_min = (int16_t)(end % 1440);
+            s->ovr_end_set = true;
         }
-        if (s->ovr && in->epoch >= s->ovr_until) {
+        int left = s->ovr ? (s->ovr_end_day - in->day) * 1440 + s->ovr_end_min - mod : 0;
+        if (s->ovr && left <= 0) {
             s->ovr = false;  // the program's next switch: back to the program
         }
         if (s->ovr) {
             o->target_c = s->ovr_c;
             o->src = SCHED_SRC_MANUAL;
+            s->ovr_until = in->epoch - in->epoch % 60 + left * 60LL;
         }
     } else {
         s->ovr = false;  // program off or no clock: the dial sets the setpoint itself

@@ -155,10 +155,17 @@ typedef struct {
     double boost_until_s, dhw_boost_until_s;
     bool away;
     int64_t away_until;
-    // Hand override of the program: ovr_c until ovr_until (epoch; 0 = set at the next step)
+    // Hand override of the program: ovr_c until the local day/minute of the program's next switch (set at the
+    // next step). Local time, not epoch: on a DST night "until 06:00" still means 06:00 on the wall.
     bool ovr;
+    bool ovr_end_set;
     float ovr_c;
-    int64_t ovr_until;
+    int32_t ovr_end_day;
+    int16_t ovr_end_min;
+    int64_t ovr_until;           // epoch of the end, for display (recomputed every step)
+    // Latest local minute the program has run at: in the repeated hour when DST ends, the program holds here
+    int32_t seen_day;
+    int16_t seen_min;
     // Summer: 24 hourly buckets of the outdoor temperature
     float out_sum[24];
     uint16_t out_n[24];

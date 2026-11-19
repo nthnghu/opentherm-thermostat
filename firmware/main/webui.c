@@ -1,4 +1,5 @@
 #include "webui.h"
+#include "textparse.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -43,36 +44,6 @@ static esp_timer_handle_t s_restart_timer, s_wifi_timer;
 #define SEND(req, str) httpd_resp_send_chunk(req, str, HTTPD_RESP_USE_STRLEN)
 
 /* ---------------------------------------------------------------- helpers */
-
-static void url_decode(char *s)
-{
-    char *o = s;
-    for (; *s; s++) {
-        if (*s == '+') {
-            *o++ = ' ';
-        } else if (*s == '%' && isxdigit((unsigned char)s[1]) && isxdigit((unsigned char)s[2])) {
-            char hex[3] = {s[1], s[2], 0};
-            *o++ = (char)strtol(hex, NULL, 16);
-            s += 2;
-        } else {
-            *o++ = *s;
-        }
-    }
-    *o = 0;
-}
-
-static void trim(char *s)
-{
-    char *start = s;
-    while (*start && isspace((unsigned char)*start)) {
-        start++;
-    }
-    memmove(s, start, strlen(start) + 1);
-    size_t n = strlen(s);
-    while (n && isspace((unsigned char)s[n - 1])) {
-        s[--n] = 0;
-    }
-}
 
 static void send_escaped(httpd_req_t *req, const char *s)
 {
@@ -148,15 +119,26 @@ static char *read_body(httpd_req_t *req, int max)
     return body;
 }
 
+// A form field, decoded and trimmed. A value longer than size is treated as missing (never cut).
 static bool form_get(const char *body, const char *key, char *out, size_t size)
 {
-    if (httpd_query_key_value(body, key, out, size) != ESP_OK) {
-        return false;
-    }
-    url_decode(out);
-    trim(out);
-    return true;
+    return tp_form_get(body, key, out, size) == TP_OK;
 }
+
+// A text setting from a form: refused whole when it does not fit the field (a cut Wi-Fi or MQTT password would
+// silently lock the device out). Sets *ok = false and the message on refusal.
+static bool put_text(char *dst, size_t size, const char *v, const char *label, char *msgbuf, size_t msgsize,
+                     const char **msg, bool *ok)
+{
+    if (tp_copy_fits(dst, size, v)) {
+        return true;
+    }
+    snprintf(msgbuf, msgsize, "%s is too long (at most %u characters): nothing saved", label, (unsigned)(size - 1));
+    *msg = msgbuf;
+    *ok = false;
+    return false;
+}
+#define PUT_TEXT(field, v, label) put_text(field, sizeof(field), v, label, tmsg, sizeof(tmsg), &msg, &ok)
 
 // An upload that sends nothing for this many receive timeouts (5 s each) is dropped: the server handles one
 // request at a time, so a stalled client would otherwise block the web page for good.
@@ -1245,14 +1227,16 @@ static esp_err_t post_save(httpd_req_t *req)
     char tmsg[128];
 
     if (strcmp(section, "wifi") == 0) {
+        char ssid[sizeof(s_new_ssid)], pass[sizeof(s_new_pass)];
+        strlcpy(pass, c->pass, sizeof(pass));
         if (form_get(body, "ssid", v, 512) && v[0]) {
-            strlcpy(s_new_ssid, v, sizeof(s_new_ssid));
-            strlcpy(s_new_pass, c->pass, sizeof(s_new_pass));
-            if (form_get(body, "pass", v, 512) && v[0]) {
-                strlcpy(s_new_pass, v, sizeof(s_new_pass));
+            if (PUT_TEXT(ssid, v, "The network name") &&
+                (!form_get(body, "pass", v, 512) || !v[0] || PUT_TEXT(pass, v, "The Wi-Fi password"))) {
+                strlcpy(s_new_ssid, ssid, sizeof(s_new_ssid));
+                strlcpy(s_new_pass, pass, sizeof(s_new_pass));
+                esp_timer_start_once(s_wifi_timer, 1500 * 1000);  // answer first, then reconnect
+                msg = "Wi-Fi saved, reconnecting";
             }
-            esp_timer_start_once(s_wifi_timer, 1500 * 1000);  // answer first, then reconnect
-            msg = "Wi-Fi saved, reconnecting";
         } else {
             msg = "SSID missing";
             ok = false;
@@ -1276,39 +1260,45 @@ static esp_err_t post_save(httpd_req_t *req)
                 v[n - 1] = 0;
             }
             if (v[0] && strncmp(v, "http://", 7) != 0 && strncmp(v, "https://", 8) != 0) {
-                snprintf(c->ha_url, sizeof(c->ha_url), "http://%s", v);
-            } else {
-                strlcpy(c->ha_url, v, sizeof(c->ha_url));
+                char full[sizeof(c->ha_url) + 8];
+                snprintf(full, sizeof(full), "http://%s", v);  // too long: caught by PUT_TEXT
+                strlcpy(v, full, 512);
             }
+            PUT_TEXT(c->ha_url, v, "The address");
         }
-        if (form_get(body, "token", v, 512) && v[0]) {
-            strlcpy(c->ha_token, v, sizeof(c->ha_token));
+        if (ok && form_get(body, "token", v, 512) && v[0]) {
+            PUT_TEXT(c->ha_token, v, "The token");
         }
-        settings_save(c);
-        ok = ha_test(tmsg, sizeof(tmsg));
-        msg = tmsg;
+        if (ok) {
+            settings_save(c);
+            ok = ha_test(tmsg, sizeof(tmsg));
+            msg = tmsg;
+        }
     } else if (strcmp(section, "mqtt") == 0) {
         c->mqtt_on = form_get(body, "on", v, 512) && v[0] == '1';
         if (form_get(body, "uri", v, 512)) {
             if (v[0] && !strstr(v, "://")) {
-                snprintf(c->mqtt_uri, sizeof(c->mqtt_uri), "mqtt://%s", v);
-            } else {
-                strlcpy(c->mqtt_uri, v, sizeof(c->mqtt_uri));
+                char full[sizeof(c->mqtt_uri) + 8];
+                snprintf(full, sizeof(full), "mqtt://%s", v);  // too long: caught by PUT_TEXT
+                strlcpy(v, full, 512);
             }
+            PUT_TEXT(c->mqtt_uri, v, "The broker address");
         }
-        if (form_get(body, "user", v, 512)) {
-            strlcpy(c->mqtt_user, v, sizeof(c->mqtt_user));
+        if (ok && form_get(body, "user", v, 512)) {
+            PUT_TEXT(c->mqtt_user, v, "The user");
         }
-        if (form_get(body, "pw", v, 512) && v[0]) {
-            strlcpy(c->mqtt_pass, v, sizeof(c->mqtt_pass));
+        if (ok && form_get(body, "pw", v, 512) && v[0]) {
+            PUT_TEXT(c->mqtt_pass, v, "The password");
         }
-        if (form_get(body, "loc", v, 512) && v[0]) {
-            strlcpy(c->mqtt_loc, v, sizeof(c->mqtt_loc));
+        if (ok && form_get(body, "loc", v, 512) && v[0]) {
+            PUT_TEXT(c->mqtt_loc, v, "The location");
         }
-        if (form_get(body, "dev", v, 512) && v[0]) {
-            strlcpy(c->mqtt_dev, v, sizeof(c->mqtt_dev));
+        if (ok && form_get(body, "dev", v, 512) && v[0]) {
+            PUT_TEXT(c->mqtt_dev, v, "The device name");
         }
-        if (c->mqtt_on && strncmp(c->mqtt_uri, "mqtt://", 7) != 0) {
+        if (!ok) {
+            // message set by PUT_TEXT, nothing saved
+        } else if (c->mqtt_on && strncmp(c->mqtt_uri, "mqtt://", 7) != 0) {
             msg = "Only mqtt:// (plain TCP) is supported";
             ok = false;
         } else if (settings_save(c) != ESP_OK) {
@@ -1412,7 +1402,7 @@ static esp_err_t post_save(httpd_req_t *req)
             if (end) {
                 *end = 0;
             }
-            url_decode(j);
+            tp_url_decode(j);
             char rep[96];
             int n = import_config(j, rep, sizeof(rep));
             if (n < 0) {
@@ -1439,15 +1429,17 @@ static esp_err_t post_save(httpd_req_t *req)
     } else if (strcmp(section, "clock") == 0) {
         c->ntp_on = form_get(body, "ntp", v, 512) && v[0] == '1';
         if (form_get(body, "server", v, 512)) {
-            strlcpy(c->ntp_server, v, sizeof(c->ntp_server));
+            PUT_TEXT(c->ntp_server, v, "The time server");
         }
-        if (form_get(body, "tz", v, 512) && v[0]) {
-            strlcpy(c->tz, v, sizeof(c->tz));
+        if (ok && form_get(body, "tz", v, 512) && v[0]) {
+            PUT_TEXT(c->tz, v, "The time zone");
         }
-        settings_save(c);
-        timekeep_apply_settings();
+        if (ok) {
+            settings_save(c);
+            timekeep_apply_settings();
+        }
         struct tm t = {0};
-        if (!c->ntp_on && form_get(body, "manual", v, 512) && v[0] &&
+        if (ok && !c->ntp_on && form_get(body, "manual", v, 512) && v[0] &&
             sscanf(v, "%d-%d-%dT%d:%d", &t.tm_year, &t.tm_mon, &t.tm_mday, &t.tm_hour, &t.tm_min) == 5) {
             t.tm_year -= 1900;
             t.tm_mon -= 1;
