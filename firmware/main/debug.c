@@ -240,6 +240,12 @@ void debug_exec(const char *line, FILE *o)
         fprintf(o, "TEST nodisplay: %s\n", e == ESP_OK ? "restarting without the display; RESTART brings it back" : esp_err_to_name(e));
         return;
     }
+    if (strcmp(line, "TEST nowifi") == 0) {  // one start without a reachable network: the OTA trial test (T16)
+        esp_err_t e = board_test_nowifi_next();
+        fprintf(o, "TEST nowifi: %s\n", e == ESP_OK ? "the next start looks for a network that does not exist"
+                                                      : esp_err_to_name(e));
+        return;
+    }
     if (strcmp(line, "TEST boilerauto") == 0) {  // forget the real/simulated choice: detection at start (#29)
         esp_err_t e = thermo_forget_boiler_choice();
         if (e == ESP_OK) {

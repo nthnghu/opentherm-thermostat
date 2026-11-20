@@ -249,18 +249,28 @@ static bool test_flag_take(const char *key)
     return v != 0;
 }
 
-esp_err_t board_test_nodisplay_next(void)
+static esp_err_t test_flag_set(const char *key)
 {
     nvs_handle_t h;
     esp_err_t e = nvs_open("board", NVS_READWRITE, &h);
     if (e == ESP_OK) {
-        e = nvs_set_u8(h, "t_nodisp", 1);
+        e = nvs_set_u8(h, key, 1);
         if (e == ESP_OK) {
             e = nvs_commit(h);
         }
         nvs_close(h);
     }
     return e;
+}
+
+esp_err_t board_test_nodisplay_next(void)
+{
+    return test_flag_set("t_nodisp");
+}
+
+esp_err_t board_test_nowifi_next(void)
+{
+    return test_flag_set("t_nowifi");
 }
 
 esp_err_t board_display_init(void)
@@ -711,6 +721,10 @@ esp_err_t board_wifi_start(void)
         memset(&wc, 0, sizeof(wc));  // {0} zeroes only the first union member (ap), smaller than sta
         strlcpy((char *)wc.sta.ssid, settings_get()->ssid, sizeof(wc.sta.ssid));
         strlcpy((char *)wc.sta.password, settings_get()->pass, sizeof(wc.sta.password));
+        if (test_flag_take("t_nowifi")) {  // console "TEST nowifi": this one start, as if the router were off
+            ESP_LOGW(TAG, "test: looking for a network that does not exist for this start (TEST nowifi)");
+            strlcpy((char *)wc.sta.ssid, "nowifi-test-absent", sizeof(wc.sta.ssid));
+        }
         esp_wifi_set_config(WIFI_IF_STA, &wc);
     }
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");

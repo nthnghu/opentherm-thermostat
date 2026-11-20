@@ -27,6 +27,7 @@
 esp_err_t board_i2c_init(void);      // shared bus (room sensor, touch, codec); safe to call twice
 esp_err_t board_display_init(void);  // a failed panel is not an error: the UI then runs on a display that draws nowhere
 bool board_display_ok(void);         // a real screen is attached and working
+esp_err_t board_test_nowifi_next(void);  // console "TEST nowifi": the next start can't reach Wi-Fi (T16)
 esp_err_t board_test_nodisplay_next(void);  // test: the next start runs as if the display had failed (once)
 // Backlight brightness 0 (off) .. 100 %.
 void board_backlight(int pct);

@@ -5,7 +5,7 @@
 #   tools/ota_faults.sh chip         a valid image built for another chip      -> refused, current firmware stays
 #   tools/ota_faults.sh garbage      not a firmware image at all               -> refused at the first block
 #   tools/ota_faults.sh stall        upload stops halfway, socket kept open    -> dropped after 30 s, page answers again
-#   tools/ota_faults.sh powercut     YOU pull the power during the upload      -> boots the current firmware
+#   tools/ota_faults.sh powercut     YOU pull the power any time (uploads loop) -> boots the current firmware
 #   tools/ota_faults.sh nowifi       YOU block the device's Wi-Fi after an update -> rolls back after 5 min (M3)
 #   tools/ota_faults.sh all          the four automatic ones (truncated, chip, garbage, stall)
 #
@@ -123,23 +123,26 @@ EOF
 }
 
 t_powercut() {
-    echo "== T15e: power cut during the write (needs you)"; snapshot
-    echo "  Get ready to pull the device's power. Press Enter to start the upload."; read -r
-    upload "$BIN" > "$TMP/pc.out" 2>&1 &
-    local cu=$!
-    sleep 4
-    echo; echo "  >>> PULL THE POWER NOW <<<"; echo
-    wait $cu
-    if grep -q Installed "$TMP/pc.out"; then
-        echo "  The upload finished before the cut: the test did not hit the write. Restore power and run it again"
-        echo "  (the device boots the same build on the other partition, on trial; that is harmless)."
-        return
-    fi
-    echo "  upload broken off as expected. Wait 5 s, restore power, then press Enter."; read -r
-    expect_unchanged 90
+    echo "== T15e: power cut during the flash write (needs you: pull the power any time, plug it back after ~5 s)"
+    snapshot
+    # The image minus its last 4 KB, uploaded again and again: the device keeps erasing and writing the other
+    # partition, but never installs it, so the cut lands in a write whenever it comes.
+    head -c $(($(stat -f%z "$BIN") - 4096)) "$BIN" > "$TMP/most.bin"
+    local n=0 t0=$SECONDS
+    while [ $((SECONDS - t0)) -lt 900 ]; do
+        a=$(upload "$TMP/most.bin" --max-time 60)
+        if ! echo "$a" | grep -q "Install failed"; then
+            break  # no answer: the power is gone (or the device restarted)
+        fi
+        n=$((n + 1)); echo "  upload $n refused at the end as expected; writing again (pull the power now)"
+    done
+    [ $((SECONDS - t0)) -ge 900 ] && { bad "no power cut within 15 min"; return; }
+    echo "  the device stopped answering during upload $((n + 1)): waiting for it to come back (10 min)"
+    expect_unchanged 600
     local up; up=$(api /api/version | field uptime_s)
-    [ "${up:-999}" -lt 120 ] && ok "fresh boot (up $up s): the cut really happened" ||
+    [ "${up:-999999}" -lt 700 ] && ok "fresh boot (up $up s): the cut really happened" ||
         bad "uptime $up s: the device did not lose power?"
+    api /api/log 10 | grep -iE "reset reason|rst:|boot|power" | head -3 | sed 's/^/  log: /'
 }
 
 t_nowifi() {
