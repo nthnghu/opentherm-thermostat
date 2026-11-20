@@ -4,6 +4,7 @@
 // Sensor lost (no reading for 30 s), frost floor and every other feature: see control.h and ctrl_config_t.
 #include "thermostat.h"
 #include "sensor_filter.h"
+#include "awaykeys.h"
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -248,12 +249,12 @@ static void load(void)
         if (nvs_get_u8(h, "simroom", &b) == ESP_OK) {
             s_st.sim_room = b;
         }
-        int64_t until;
-        // An end time must be 0 (open-ended) or a plausible date (2025..2100), not a damaged value
-        if (nvs_get_u8(h, "away", &b) == ESP_OK && b && nvs_get_i64(h, "awayuntil", &until) == ESP_OK &&
-            (until == 0 || (until > 1735689600LL && until < 4102444800LL))) {
+        int64_t until = 0, end;
+        bool have_flag = nvs_get_u8(h, "away", &b) == ESP_OK;
+        bool have_until = nvs_get_i64(h, "awayuntil", &until) == ESP_OK;
+        if (away_load(have_flag, b, have_until, until, &end)) {
             s_st.away = true;
-            s_st.away_until = until;
+            s_st.away_until = end;
         }
         nvs_close(h);
     }
@@ -279,9 +280,13 @@ static bool save(void)
         bad += nvs_set_u8(h, "sim", c.boiler_sim) != ESP_OK;
     }
     bad += nvs_set_u8(h, "simroom", c.sim_room) != ESP_OK;
-    // The end time first: "away" without its end would mean away for good after a power cut in between.
-    bad += nvs_set_i64(h, "awayuntil", c.away_until) != ESP_OK;
-    bad += nvs_set_u8(h, "away", c.away) != ESP_OK;
+    // Key order so a power cut in between loads the old or the new state, never "away for good" (awaykeys.h)
+    away_key_t order[2];
+    away_save_order(c.away, order);
+    for (int i = 0; i < 2; i++) {
+        bad += (order[i] == AWAY_KEY_FLAG ? nvs_set_u8(h, "away", c.away)
+                                          : nvs_set_i64(h, "awayuntil", c.away ? c.away_until : 0)) != ESP_OK;
+    }
     bad += nvs_commit(h) != ESP_OK;
     nvs_close(h);
     if (bad) {
