@@ -40,9 +40,9 @@ bool sf_accept(sensor_filter_t *f, int64_t now_us, bool ok, float t, float h)
     bool good = ok && t > SF_T_MIN && t < SF_T_MAX && isfinite(h);  // NaN fails the range test too
     f->back_bad = 0;
     if (good) {
-        if (f->bad_run && f->last_ok_us) {
+        if (f->bad_run) {  // also the first good reading after failing since the start (back_s -1)
             f->back_bad = f->bad_run;
-            f->back_s = (int)((now_us - f->last_ok_us) / 1000000);
+            f->back_s = f->last_ok_us ? (int)((now_us - f->last_ok_us) / 1000000) : -1;
         }
         f->bad_run = 0;
         f->raw = t;

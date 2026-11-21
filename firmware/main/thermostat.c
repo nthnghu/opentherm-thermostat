@@ -5,6 +5,7 @@
 #include "thermostat.h"
 #include "sensor_filter.h"
 #include "awaykeys.h"
+#include "selftest.h"
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -473,6 +474,8 @@ static void thermo_task(void *arg)
                          SF_STUCK_N * 2);
                 sht4x_reset();
             }
+            bool sht_read = err == ESP_OK && !stuck_now;  // the real sensor answered (before the simulator)
+            float sht_t = t, sht_h = h;
             // Bench testing: the simulated house replaces the SHT40 temperature (humidity stays real).
             float sim_t;
             LOCK();
@@ -502,9 +505,15 @@ static void thermo_task(void *arg)
             s_st.sensor_ok = s_sf.ok;
             s_st.sensor_age_s = s_sf.age_s;
             UNLOCK();
-            if (s_sf.back_bad >= 5) {  // shorter glitches are only counted in the errors
+            if (s_sf.back_s < 0 && s_sf.back_bad) {  // never read since the start, now it does
+                ESP_LOGI(TAG, "SHT40 answering after %d failed reads since the start, %.2f C", s_sf.back_bad,
+                         s_sf.room_c);
+            } else if (s_sf.back_bad >= 5) {  // shorter glitches are only counted in the errors
                 ESP_LOGI(TAG, "SHT40 back after %d s (%d failed reads), %.2f C", s_sf.back_s, s_sf.back_bad,
                          s_sf.room_c);
+            }
+            if (sht_read) {  // clears a failed boot test (status bar); returns at once when it passed
+                selftest_sensor_found(sht_t, sht_h);
             }
         }
 

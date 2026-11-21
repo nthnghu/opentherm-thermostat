@@ -162,6 +162,25 @@ static void test_recovery_steps(void)
     CHECK(c.soft == 1, "a new run of failures starts counting from 0");
 }
 
+// Plugged in (or a loose contact settling) after the start: the first good reading is reported too
+static void test_first_after_failures(void)
+{
+    sensor_filter_t f;
+    sf_init(&f, STALE_S);
+    int64_t now = 1;
+    counts_t c = {0};
+    feed(&f, &now, 20, false, 0, 0, &c);
+    CHECK(!f.ok && f.age_s == -1 && f.back_bad == 0, "failing since the start: no reading yet");
+    feed_noisy(&f, &now, 1, 19.0f, 55);
+    CHECK(f.ok && f.back_bad == 20 && f.back_s == -1, "first reading after 20 failures reported (%d, %d s)",
+          f.back_bad, f.back_s);
+    feed_noisy(&f, &now, 1, 19.0f, 55);
+    CHECK(f.back_bad == 0, "only once");
+    sf_init(&f, STALE_S);
+    feed_noisy(&f, &now, 1, 19.0f, 55);
+    CHECK(f.back_bad == 0, "a sensor that works from the start reports nothing");
+}
+
 static void test_offset_shift(void)
 {
     sensor_filter_t f;
@@ -181,6 +200,7 @@ int main(void)
     test_smoothing();
     test_t2_stuck();
     test_recovery_steps();
+    test_first_after_failures();
     test_offset_shift();
     TEST_DONE();
 }

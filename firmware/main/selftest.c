@@ -219,6 +219,17 @@ int selftest_items(const selftest_item_t **items)
     return T_COUNT;
 }
 
+void selftest_sensor_found(float t, float h)
+{
+    if (s_items[T_SENSOR].result != ST_FAIL) {  // passed, or the boot test has not reached it yet
+        return;
+    }
+    snprintf(s_items[T_SENSOR].detail, sizeof(s_items[T_SENSOR].detail), "found after the start: %.1f C, %.0f %%RH",
+             t, h);
+    s_items[T_SENSOR].result = ST_PASS;  // after the text: readers see the new result with its text
+    ESP_LOGI(TAG, "%-24s PASS %s", s_items[T_SENSOR].name, s_items[T_SENSOR].detail);
+}
+
 bool selftest_required_ok(void)
 {
     for (int i = 0; i < T_COUNT; i++) {

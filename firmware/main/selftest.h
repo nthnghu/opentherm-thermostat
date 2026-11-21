@@ -16,3 +16,6 @@ typedef struct {
 bool selftest_run(void);
 int selftest_items(const selftest_item_t **items);
 bool selftest_required_ok(void);
+// The room sensor failed the boot test but reads now (plugged in later, contact settled): the result becomes
+// PASS, so the status-bar warning clears without a restart. Called by the thermostat task.
+void selftest_sensor_found(float t, float h);

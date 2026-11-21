@@ -21,7 +21,7 @@ typedef struct {
     float raw, room_c, humidity, room_shown, humidity_shown;
     uint32_t errors;
     int back_bad;           // set on the good reading that ends a run of bad ones: how many there were (else 0)
-    int back_s;             //   and how long since the previous good reading
+    int back_s;             //   and how long since the previous good reading (-1: none since the start)
     // state
     int64_t last_ok_us;     // 0 = none yet
     int fails_in_row;
