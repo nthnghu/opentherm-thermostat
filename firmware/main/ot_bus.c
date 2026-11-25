@@ -19,7 +19,11 @@ static const char *TAG = "otbus";
 
 #define CYCLE_MS     1000
 #define GAP_MS       100   // at least this long between the end of a reply and the next request
-#define BUDGET_MS    650   // no new frame after this much of the cycle (a frame can take ~875 ms)
+#define SPACING_MS   330   // and this long between request starts: the three frames of a cycle fill the second
+#define BUDGET_MS    700   // no new frame after this much of the cycle (a frame can take ~875 ms)
+// Why the spacing (2026-11-25, Victrix Tera V3): the first frame after a quiet line fails far more often
+// (ID 0 after 200-500 ms quiet: 3-13 %, 600-800 ms: ~38 %, >= 1 s: 100 %). Spread evenly, the longest quiet
+// time is ~250 ms instead of ~600 ms.
 
 static SemaphoreHandle_t s_lock;   // s_cmd, s_flags, s_pub, s_support
 static SemaphoreHandle_t s_sim_lock;
@@ -34,7 +38,7 @@ static uint8_t s_support[128];
 static volatile bool s_sim = true;
 static ot_sim_t s_bsim;
 static bool s_sim_inited;
-static int64_t s_cycle_start_us, s_last_frame_end_us;
+static int64_t s_cycle_start_us, s_last_frame_end_us, s_last_frame_start_us;
 static otb_manual_t s_manual_req, s_manual_pub;  // request (pending) / last state of the core's manual frame
 static bool s_silent;
 
@@ -108,14 +112,22 @@ static otb_xfer_result_t xfer_real(void *ctx, uint32_t req, uint32_t *resp, uint
         return OTB_XFER_SKIP;
     }
     int64_t gap_left = s_last_frame_end_us + GAP_MS * 1000LL - now;
+    int64_t spacing_left = s_last_frame_start_us + SPACING_MS * 1000LL - now;
+    if (spacing_left > gap_left) {
+        gap_left = spacing_left;
+    }
     if (gap_left > 0) {
         vTaskDelay(pdMS_TO_TICKS((gap_left + 999) / 1000));
+    }
+    if (esp_timer_get_time() - s_cycle_start_us > BUDGET_MS * 1000LL) {
+        return OTB_XFER_SKIP;  // the wait ran past the budget: this frame goes in the next cycle
     }
     uint32_t r = 0;
     uint16_t l = 0;
     if (s_frame_lock) {
         xSemaphoreTake(s_frame_lock, portMAX_DELAY);
     }
+    s_last_frame_start_us = esp_timer_get_time();
     esp_err_t err = ot_transfer(req, &r, &l);
     if (s_frame_lock) {
         xSemaphoreGive(s_frame_lock);
