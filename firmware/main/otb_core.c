@@ -3,6 +3,15 @@
 #include <math.h>
 #include "ot_frame.h"
 
+// ID 17 relative modulation. The Victrix Tera sends a negative f8.8 (-113 %) while it burns at its minimum flame
+// (flow steady at the minimum-fire temperature, 2026-11-25): taken as 0 %. Above 100 % is capped (some boilers go
+// past 100 during DHW). The raw word stays in mod_raw / mod_odd_raw for checking.
+float otb_decode_mod(uint16_t d)
+{
+    float f = ot_f88(d);
+    return f < 0 ? 0 : (f > 100 ? 100 : f);
+}
+
 #define NEVER INT64_MIN
 #define NEG_FOR_UNSUPPORTED 3
 #define REPROBE_MS (3600LL * 1000)
@@ -182,7 +191,12 @@ static void parse(otb_core_t *c, uint8_t id, uint16_t d)
     switch (id) {
     case OT_ID_TBOILER: st->flow_c = ot_f88(d); st->valid |= OTB_V_FLOW; break;
     case OT_ID_TRET: st->return_c = ot_f88(d); st->valid |= OTB_V_RET; break;
-    case OT_ID_REL_MOD: st->modulation = ot_f88(d); st->valid |= OTB_V_MOD; break;
+    case OT_ID_REL_MOD: st->mod_raw = d; st->modulation = otb_decode_mod(d); st->valid |= OTB_V_MOD;
+        if (ot_f88(d) < 0 || ot_f88(d) > 100) {
+            st->mod_odd_raw = d;
+            st->mod_odd++;
+        }
+        break;
     case OT_ID_CH_PRESSURE: st->pressure_bar = ot_f88(d); st->valid |= OTB_V_PRESS; break;
     case OT_ID_TDHW: st->tank_c = ot_f88(d); st->valid |= OTB_V_TDHW; break;
     case OT_ID_TOUTSIDE: st->outside_c = ot_f88(d); st->valid |= OTB_V_TOUT; break;

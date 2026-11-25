@@ -592,12 +592,13 @@ void debug_exec(const char *line, FILE *o)
         otbus_get(&b);
         fprintf(o, "OT %s link=%s flags=%02X flow=%.1f ret=%.1f mod=%.0f press=%.2f tank=%.1f tset=%.1f acked=%d "
                "fault=%02X/%u member=%u caps=%ukW/%u%% frames=%lu ok=%lu to=%lu bad=%lu unk=%lu retries=%lu "
-               "losses=%lu lat=%u/%ums\n",
+               "losses=%lu lat=%u/%ums modraw=0x%04X odd=%lu/0x%04X\n",
                otbus_simulated() ? "sim" : "real", otb_link_name(b.link), b.slave_flags, b.flow_c, b.return_c,
                b.modulation, b.pressure_bar, b.tank_c, b.tset_sent, b.tset_acked, b.fault_flags, b.oem_fault,
                b.member_id, b.max_cap_kw, b.min_mod_pct, (unsigned long)b.frames, (unsigned long)b.ok,
                (unsigned long)b.timeouts, (unsigned long)b.bad, (unsigned long)b.unknown_id,
-               (unsigned long)b.retries, (unsigned long)b.link_losses, b.last_latency_ms, b.max_latency_ms);
+               (unsigned long)b.retries, (unsigned long)b.link_losses, b.last_latency_ms, b.max_latency_ms,
+               b.mod_raw, (unsigned long)b.mod_odd, b.mod_odd_raw);
         uint8_t sup[128];
         otbus_get_support(sup);
         fprintf(o, "OT supported:");

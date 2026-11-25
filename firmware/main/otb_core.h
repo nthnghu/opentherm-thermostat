@@ -68,12 +68,17 @@ typedef struct {
     bool tset_acked;              // the last ID 1 write was acknowledged with the same value
     float dhw_set_written;        // last ID 56 value written (0 = none)
     uint8_t dhw_set_verify;       // otb_dhwset_t
+    uint16_t mod_raw;             // ID 17 as received (data word)
+    uint16_t mod_odd_raw;         // last ID 17 outside 0..100 % (0 = none seen); counted in mod_odd
+    uint32_t mod_odd;
     // Statistics
     uint32_t cycles, frames, ok, timeouts, bad, unknown_id, data_invalid, link_losses, retries;
     uint16_t last_latency_ms, max_latency_ms;
     uint32_t latency_sum_ms, latency_n;
     int fails_in_row;
 } otb_status_t;
+
+float otb_decode_mod(uint16_t d);  // ID 17 data word -> 0..100 % (negative = minimum flame on the Tera)
 
 typedef struct {
     uint8_t id;

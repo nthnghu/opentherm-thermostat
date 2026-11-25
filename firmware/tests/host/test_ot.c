@@ -268,8 +268,18 @@ static void test_new_boiler(void)
     CHECK(c.st.link == OTB_LINK_LOST, "then lost");
 }
 
+// ID 17 from the Victrix Tera: -113 % at minimum flame (seen 2026-11-25) is read as 0 %, over 100 capped
+static void test_modulation_decode(void)
+{
+    CHECK(NEAR(otb_decode_mod(ot_to_f88(37.5f)), 37.5, 0.01), "normal value kept");
+    CHECK(otb_decode_mod(0x8F00) == 0, "negative (-113 %%) = minimum flame, 0 %%");
+    CHECK(otb_decode_mod(ot_to_f88(120)) == 100, "above 100 capped");
+    CHECK(otb_decode_mod(0) == 0 && otb_decode_mod(ot_to_f88(100)) == 100, "edges");
+}
+
 int main(void)
 {
+    test_modulation_decode();
     test_frames();
     test_link_and_support();
     test_immergas_quirks();

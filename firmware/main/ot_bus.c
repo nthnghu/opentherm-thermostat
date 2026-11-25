@@ -200,6 +200,13 @@ static void bus_task(void *arg)
         }
         LOCK();
         s_pub = s_core.st;
+        static uint16_t logged_odd;  // a new out-of-range ID 17 word: logged once (what the Tera sends at min flame)
+        if (s_core.st.mod_odd_raw && s_core.st.mod_odd_raw != logged_odd) {
+            logged_odd = s_core.st.mod_odd_raw;
+            ESP_LOGW(TAG, "ID 17 modulation out of range: raw 0x%04X (%.2f as f8.8, %u.%02u unsigned), taken as %.0f %%",
+                     logged_odd, ot_f88(logged_odd), logged_odd >> 8, (logged_odd & 0xFF) * 100 / 256,
+                     otb_decode_mod(logged_odd));
+        }
         s_pub_sim = sim;
         s_manual_pub = s_core.manual;
         s_manual_pub.pending |= s_manual_req.pending;
