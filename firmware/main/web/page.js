@@ -79,7 +79,9 @@ async function upd() {
   $('baway').textContent = sc.away ? "I'm back" : 'Away';
   $('baway').hidden = !heat || !sc.away_on;
   $('bprog').hidden = sc.source != 'manual';
-  $('alert').textContent = s.alerts.count ? s.alerts.titles.map(t => '⚠ ' + t).join('\n') : '';
+  const sv = s.svc && s.svc.active ? ['🔧 Service mode: ' + (s.svc.running ? s.svc.routine + ' running'
+    : 'on, ends in ' + Math.ceil(s.svc.idle_left_s / 60) + ' min') + ' (not counted in the statistics)'] : [];
+  $('alert').textContent = sv.concat(s.alerts.count ? s.alerts.titles.map(t => '⚠ ' + t) : []).join('\n');
   const up = s.boiler_online, who = s.boiler_sim ? 'simulated boiler' : 'boiler';
   $('info').textContent = (s.demand ? 'Heating to ' + s.flow_setpoint.toFixed(0) + ' °C' : 'Idle') + ' · ' +
     (up ? who + ' answering' : who + ' not answering');

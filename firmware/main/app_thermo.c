@@ -230,6 +230,8 @@ static void update_main(void)
     uint32_t chip_col = UI_WARN;
     if (st.svc_running) {
         snprintf(chip, sizeof(chip), LV_SYMBOL_SETTINGS " Service: %s - %s", svc_routine_title(st.svc_routine), st.svc_step);
+    } else if (st.svc_active) {
+        snprintf(chip, sizeof(chip), LV_SYMBOL_SETTINGS " Service mode on - ends in %d min", (st.svc_idle_left_s + 59) / 60);
     } else if (!st.sensor_ok) {
         snprintf(chip, sizeof(chip), LV_SYMBOL_WARNING " Room sensor not answering - %s", loss);
         chip_col = UI_ERR;

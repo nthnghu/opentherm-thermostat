@@ -337,6 +337,10 @@ static void secs_select(httpd_req_t *req, const char *label, const char *name, c
 
 extern const char page_js_start[] asm("_binary_page_js_start");
 
+// The message of the last form POST, shown once by the next GET / (Post/Redirect/Get)
+static char s_flash_msg[160];
+static bool s_flash_ok, s_flash_set;
+
 static esp_err_t send_page(httpd_req_t *req, const char *msg, bool ok)
 {
     settings_t *c = malloc(sizeof(settings_t));
@@ -734,6 +738,10 @@ static esp_err_t get_root(httpd_req_t *req)
     if (!check_auth(req)) {
         return ESP_OK;
     }
+    if (s_flash_set) {  // the result of the form just sent (one web server task: no race)
+        s_flash_set = false;
+        return send_page(req, s_flash_msg, s_flash_ok);
+    }
     return send_page(req, NULL, false);
 }
 
@@ -820,6 +828,9 @@ static esp_err_t get_status(httpd_req_t *req)
           st.dhw_enable ? "true" : "false", sched_dhw_reason_name(st.dhw_reason), st.dhw_boost_left_s, st.dhw_set,
           st.id56, st.tank_c, st.tank_valid ? "true" : "false", st.pasteur_running ? "true" : "false",
           sched_pasteur_name(st.pasteur_result), (long long)st.pasteur_last);
+    sendj(req, "\"svc\":{\"active\":%s,\"running\":%s,\"routine\":\"%s\",\"idle_left_s\":%d},",
+          st.svc_active ? "true" : "false", st.svc_running ? "true" : "false",
+          st.svc_running ? svc_routine_title(st.svc_routine) : "", st.svc_idle_left_s);
     sendj(req, "\"alerts\":{\"count\":%u,\"text\":\"", st.alert_count);
     send_escaped(req, st.alert_text);
     SEND(req, "\",\"active\":[");
@@ -1515,7 +1526,14 @@ static esp_err_t post_save(httpd_req_t *req)
     free(v);
     free(c);
     free(body);
-    return send_page(req, msg, ok);
+    // Post/Redirect/Get: the result is shown once on the page the browser loads next, so a refresh (or Back)
+    // does not send the form again (a second "start test" or "save" by accident).
+    strlcpy(s_flash_msg, msg, sizeof(s_flash_msg));
+    s_flash_ok = ok;
+    s_flash_set = true;
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    return httpd_resp_send(req, NULL, 0);
 }
 
 /* -------------------------------------------------------------------- OTA */

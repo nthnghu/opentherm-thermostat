@@ -655,6 +655,7 @@ static void thermo_task(void *arg)
             .ctrl_state = o->state, .sched_src = so->src, .dhw_reason = so->dhw_reason,
             .rssi = (int8_t)s_rssi, .ot_errors = b.timeouts + b.bad,
             .cap_kw = cap, .min_kw = cap * ((b.valid & OTB_V_CAPS) ? b.min_mod_pct : 0) / 100.0f,
+            .svc = s_svc.active,
         };
         bool kpi_due = datalog_tick(&s_dl, &ds) || loop == 0;  // computed after the lock is released, see below
         s_st.gas_kwh_total = s_dl.total_kwh;

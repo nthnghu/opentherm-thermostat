@@ -180,7 +180,9 @@ static void hour_add(dl_t *d, const dl_rec_t *r)
     d->h_wh += r->wh;
     d->h_heat_s += r->flame_s - r->dhw_s;
     d->h_dhw_s += r->dhw_s;
-    d->h_starts += r->ch_starts;
+    if (r->mark != DL_MARK_SVC) {  // service-test starts are not the house's cycling
+        d->h_starts += r->ch_starts;
+    }
 }
 
 static void reset_minute(dl_t *d)
@@ -190,6 +192,7 @@ static void reset_minute(dl_t *d)
     d->sum_press = d->mod_sum = 0;
     d->n_room = d->n_flow = d->n_ret = d->n_tank = d->n_out = d->n_press = 0;
     d->flame_s = d->dhw_s = d->cond_s = d->min_s = d->ch_starts = d->dhw_starts = 0;
+    d->svc = false;
     d->wh = 0;
 }
 
@@ -204,6 +207,7 @@ static void end_burn(dl_t *d)
             .dhw = d->burn_dhw,
             .ret_c = d->burn_n ? u8c(d->burn_ret / d->burn_n) : 0,
             .mod = d->burn_n ? u8c(d->burn_mod / d->burn_n) : 0,
+            .mark = d->burn_svc ? DL_MARK_SVC : 0,
         };
         put_burn(d, &b);
     }
@@ -224,6 +228,7 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
         d->burn_start = d->sec;
         d->burn_t = s->epoch > 0 ? (uint32_t)s->epoch : 0;
         d->burn_dhw = s->dhw_active;
+        d->burn_svc = s->svc;
         d->burn_ret = d->burn_mod = 0;
         d->burn_n = 0;
         if (s->dhw_active) {
@@ -236,8 +241,10 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
     } else if (!s->flame && d->flame) {
         end_burn(d);
     }
+    d->svc |= s->svc;
     if (d->flame) {
         d->burn_dhw |= s->dhw_active;
+        d->burn_svc |= s->svc;
         if (s->ret_valid) {
             d->burn_ret += s->return_c;
         }
@@ -328,6 +335,7 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
             .ot_err = (uint8_t)(err > 255 ? 255 : err),
             .min_s = (uint8_t)d->min_s,
             .wh = (uint16_t)lround(fmin(d->wh, 65535)),
+            .mark = d->svc ? DL_MARK_SVC : 0,
         };
         if (put_rec(d, &r)) {
             hour_add(d, &r);
@@ -420,19 +428,29 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k)
         if (!datalog_get(d, j, &r)) {
             continue;
         }
-        k->ch_starts += r.ch_starts;
-        k->dhw_starts += r.dhw_starts;
+        // Service mode (tests): gas, burner hours and the room still count; starts, burn quality and comfort not
+        bool svc = r.mark == DL_MARK_SVC;
         k->burner_h += r.flame_s / 3600.0f;
         k->dhw_burner_h += r.dhw_s / 3600.0f;
+        wh += r.wh;
+        k->ot_err += r.ot_err;
+        target += r.target_c10 / 10.0;
+        if (svc) {
+            k->svc_min++;
+            if (r.room_c100 != DL_NO_VALUE) {
+                room += r.room_c100 / 100.0;
+                nroom++;
+            }
+            continue;
+        }
+        k->ch_starts += r.ch_starts;
+        k->dhw_starts += r.dhw_starts;
         int chs = r.flame_s - r.dhw_s;
         ch_s += chs;
         cond += r.cond_s;
         minm += r.min_s;
         // Mean modulation of the minute applies to all its flame seconds; weight CH by its share
         mod_ch += (double)r.mod * chs;
-        wh += r.wh;
-        k->ot_err += r.ot_err;
-        target += r.target_c10 / 10.0;
         if (r.room_c100 != DL_NO_VALUE) {
             double rc = r.room_c100 / 100.0, tc = r.target_c10 / 10.0;
             room += rc;
@@ -475,7 +493,7 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k)
         if (!inside) {
             break;
         }
-        if (b->dhw) {
+        if (b->dhw || b->mark == DL_MARK_SVC) {  // tank burns and service-test burns are not CH cycling
             continue;
         }
         durs[nb++] = b->dur_s;

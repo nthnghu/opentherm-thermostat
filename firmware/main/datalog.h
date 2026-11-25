@@ -39,7 +39,11 @@ typedef struct {
     int8_t rssi;
     uint32_t ot_errors;          // running total
     float cap_kw, min_kw;        // boiler maximum and minimum input (ID 15), 0 = unknown
+    bool svc;                    // service mode on: burns are tests, kept out of the burn statistics
 } dl_sample_t;
+
+// Marker for minutes and burns in service mode. A value, not a bit: the byte was padding in older records.
+#define DL_MARK_SVC 0x5C
 
 // One minute (56 bytes; 7 days = 565 KB of PSRAM).
 typedef struct {
@@ -59,6 +63,7 @@ typedef struct {
     uint8_t ot_err;              // errors this minute (255 = 255 or more)
     uint8_t min_s;               // CH flame seconds at minimum modulation
     uint16_t wh;                 // estimated gas input this minute (Wh)
+    uint8_t mark;                // DL_MARK_SVC = service mode during this minute (was padding: size unchanged)
 } dl_rec_t;
 
 typedef struct {
@@ -67,6 +72,7 @@ typedef struct {
     uint16_t dur_s;
     bool dhw;                    // the burn heated the tank at any time
     uint8_t ret_c, mod;          // means over the burn
+    uint8_t mark;                // DL_MARK_SVC = a service-test burn (was padding: size unchanged)
 } dl_burn_t;
 
 // One clock hour (needs the clock; hours without it are not summarised).
@@ -98,6 +104,7 @@ typedef struct {
     float gas_kwh;               // estimate
     float mean_room, mean_target, mean_flow, mean_return;
     float ot_err;                // OpenTherm errors in the window
+    uint16_t svc_min;            // minutes in service mode (tests): left out of starts, burns and comfort
 } dl_kpi_t;
 
 #define DL_SHORT_BURN_S 600
@@ -126,13 +133,14 @@ typedef struct {
     double sum_room, sum_hum, sum_target, sum_flow, sum_ret, sum_tank, sum_out, sum_press, mod_sum;
     int n_room, n_flow, n_ret, n_tank, n_out, n_press;
     int flame_s, dhw_s, cond_s, min_s, ch_starts, dhw_starts;
+    bool svc;                    // service mode at any second of this minute
     double wh;
     uint32_t ot_err0;
     bool have_err0;
     // Burn in progress
     bool flame;
     uint32_t burn_start, burn_t;
-    bool burn_dhw;
+    bool burn_dhw, burn_svc;
     double burn_ret, burn_mod;
     int burn_n;
     // Totals since start

@@ -172,7 +172,10 @@ static void test_opentherm(void)
         set(T_OT, ST_WARN, "GPIO setup failed");
         return;
     }
-    set(T_OT, ST_WARN, "input line %s; boiler not connected (simulation available)", ot_in_level() ? "high" : "low");
+    // The input is low whenever the boiler is quiet, so it says nothing about a connection; the link (real or
+    // simulated) is known only once the bus runs: Boiler page, alert "Boiler not answering".
+    set(T_OT, ST_PASS, "pins ready (in GPIO%d, out GPIO%d); the boiler link is shown on the Boiler page", OT_PIN_IN,
+        OT_PIN_OUT);
 }
 
 bool selftest_run(void)

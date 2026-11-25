@@ -123,6 +123,36 @@ static void test_ring_wrap(void)
     CHECK(NEAR(k.comfort_kh, 0.5 * 10 / 60.0, 0.001), "comfort deficit %.3f", k.comfort_kh);
 }
 
+// Service mode (boiler tests): its burns are not the house's cycling. 30 min of tests with 2-min burns, then 30 min
+// of normal heating with 10-min burns: the burn KPIs see only the normal ones; gas and burner time count all.
+static void test_service_excluded(void)
+{
+    dl_rec_t recs[60];
+    dl_burn_t burns[16];
+    dl_t d;
+    datalog_init(&d, recs, 60, burns, 16, NULL, 0);
+    dl_sample_t s = {.sensor_ok = true, .room_c = 20, .target_c = 21, .heat_mode = true, .ch_allowed = true,
+                     .mod_valid = true, .modulation = 50, .cap_kw = 24, .min_kw = 4};
+    for (int t = 0; t < 60 * 60; t++) {
+        s.svc = t < 30 * 60;
+        s.flame = s.svc ? (t % 300) < 120 : (t % 900) < 600;
+        datalog_tick(&d, &s);
+    }
+    dl_kpi_t k;
+    datalog_kpi(&d, 1, &k);
+    CHECK(k.svc_min == 30, "30 service minutes (%u)", k.svc_min);
+    CHECK(k.ch_starts == 2, "only the normal starts count (%u)", k.ch_starts);
+    CHECK(k.ch_burns == 2 && NEAR(k.median_burn_min, 10, 0.01) && k.short_pct == 0,
+          "completed normal burns only: %u, median %.1f min, short %.0f %%", k.ch_burns, k.median_burn_min,
+          k.short_pct);
+    CHECK(NEAR(k.burner_h, (6 * 2 + 20) / 60.0, 0.02), "burner time counts the tests too (%.2f h)", k.burner_h);
+    CHECK(k.gas_kwh > 0, "gas counts the tests too");
+    CHECK(NEAR(k.comfort_kh, 0.5 * 30 / 60.0, 0.001), "comfort only outside service (%.3f)", k.comfort_kh);
+    dl_rec_t r;
+    CHECK(datalog_get(&d, 0, &r) && r.mark == DL_MARK_SVC && datalog_get(&d, 59, &r) && r.mark == 0,
+          "minutes marked");
+}
+
 // Hourly summaries, and a restart: everything saved is put back and the KPIs come out the same.
 static void test_hours_and_restore(void)
 {
@@ -354,6 +384,7 @@ int main(void)
 {
     test_closed_loop_kpis();
     test_ring_wrap();
+    test_service_excluded();
     test_hours_and_restore();
     test_clock_steps();
     test_alerts();

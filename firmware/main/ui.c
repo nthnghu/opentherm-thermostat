@@ -194,7 +194,14 @@ static void status_cb(lv_timer_t *t)
     } else {
         lv_obj_set_hidden(s_heat, true);
     }
+    // Warning triangle (red) for a problem; otherwise a wrench (amber) while service mode is on
     if (!st.sensor_ok || st.sensor_age_s >= 6 || !selftest_required_ok()) {
+        lv_label_set_text(s_warn, LV_SYMBOL_WARNING);
+        lv_obj_set_style_text_color(s_warn, ui_c(UI_ERR), 0);
+        lv_obj_set_hidden(s_warn, false);
+    } else if (st.svc_active) {
+        lv_label_set_text(s_warn, LV_SYMBOL_SETTINGS);
+        lv_obj_set_style_text_color(s_warn, ui_c(UI_WARN), 0);
         lv_obj_set_hidden(s_warn, false);
     } else {
         lv_obj_set_hidden(s_warn, true);

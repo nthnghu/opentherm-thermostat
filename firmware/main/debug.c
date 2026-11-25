@@ -247,11 +247,11 @@ void debug_exec(const char *line, FILE *o)
         thermo_get_kpi(&k1, &k24);
         fprintf(o, "KPI 1h starts=%u | 24h(%.1fh) starts/h=%.2f burns=%u median=%.1fmin short=%.0f%% cond=%.0f%% "
                "mod=%.1f%% atmin=%.0f%% comfort=%.2fKh gas=%.2fkWh burner=%.2fh | total gas=%.3fkWh starts=%lu/%lu "
-               "log=%d\n",
+               "log=%d service=%umin\n",
                k1.ch_starts, k24.hours, k24.ch_starts_h, k24.ch_burns, k24.median_burn_min, k24.short_pct,
                k24.cond_pct, k24.mean_mod, k24.min_mod_pct, k24.comfort_kh, k24.gas_kwh, k24.burner_h,
                st.gas_kwh_total, (unsigned long)st.ch_starts_total, (unsigned long)st.dhw_starts_total,
-               thermo_log_count());
+               thermo_log_count(), k24.svc_min);
         char mst[96];
         mqtt_ha_status(mst, sizeof(mst));
         fprintf(o, "ALERT count=%u bits=%04x text=%s | MQTT %s\n", st.alert_count, st.alerts,
