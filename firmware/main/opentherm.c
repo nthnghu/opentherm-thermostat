@@ -25,6 +25,8 @@ static otm_rx_t s_rx;
 static volatile int64_t s_tx_end;
 static bool s_inited;
 static volatile uint32_t s_edges;  // every input edge, also outside a frame (OT line test)
+static volatile uint16_t s_rx_edges;  // input edges while waiting for / receiving the answer
+static ot_rx_diag_t s_last_rx;
 
 static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_data_t *e, void *arg)
 {
@@ -38,6 +40,7 @@ static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_dat
     gptimer_stop(t);
     s_tx_end = esp_timer_get_time();
     otm_rx_begin(&s_rx);
+    s_rx_edges = 0;
     s_state = ST_RECEIVING;
     return false;
 }
@@ -48,6 +51,9 @@ static void IRAM_ATTR rx_edge(void *arg)
     s_edges++;
     if (s_state != ST_RECEIVING) {
         return;
+    }
+    if (s_rx_edges < 0xFFFF) {
+        s_rx_edges++;
     }
     BaseType_t woke = pdFALSE;
     if (otm_rx_edge(&s_rx, esp_timer_get_time(), gpio_get_level(OT_PIN_IN))) {
@@ -70,10 +76,11 @@ esp_err_t ot_init(void)
     gpio_set_level(OT_PIN_OUT, OUT_IDLE);
     gpio_config_t in = {.pin_bit_mask = 1ULL << OT_PIN_IN, .mode = GPIO_MODE_INPUT, .intr_type = GPIO_INTR_ANYEDGE};
     gpio_config(&in);
-    esp_err_t err = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        return err;
+    esp_err_t svc = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3);
+    if (svc != ESP_OK && svc != ESP_ERR_INVALID_STATE) {
+        return svc;
     }
+    esp_err_t err;
     gpio_isr_handler_add(OT_PIN_IN, rx_edge, NULL);
 
     gptimer_config_t tc = {.clk_src = GPTIMER_CLK_SRC_DEFAULT, .direction = GPTIMER_COUNT_UP, .resolution_hz = 1000000};
@@ -89,7 +96,8 @@ esp_err_t ot_init(void)
     gptimer_enable(s_timer);
     s_state = ST_IDLE;
     s_inited = true;
-    ESP_LOGI(TAG, "OpenTherm PHY ready (in GPIO%d, out GPIO%d)", OT_PIN_IN, OT_PIN_OUT);
+    ESP_LOGI(TAG, "OpenTherm PHY ready (in GPIO%d, out GPIO%d, interrupts on core %d%s)", OT_PIN_IN, OT_PIN_OUT,
+             xPortGetCoreID(), svc == ESP_ERR_INVALID_STATE ? ", GPIO service set up by another driver" : "");
     return ESP_OK;
 }
 
@@ -117,6 +125,11 @@ uint32_t ot_in_edges(void)
     return s_edges;
 }
 
+ot_rx_diag_t ot_last_rx(void)
+{
+    return s_last_rx;
+}
+
 int ot_in_level(void)
 {
     return gpio_get_level(OT_PIN_IN);
@@ -129,6 +142,9 @@ esp_err_t ot_transfer(uint32_t request, uint32_t *response, uint16_t *latency_ms
     }
     otm_encode(request, s_tx_levels, OUT_ACTIVE, OUT_IDLE);
     xSemaphoreTake(s_done, 0);
+    s_rx_edges = 0;
+    s_rx.st = OTM_WAITING;
+    s_rx.bits = 0;
     s_tx_pos = 0;
     s_state = ST_SENDING;
     gptimer_set_raw_count(s_timer, 0);
@@ -138,6 +154,8 @@ esp_err_t ot_transfer(uint32_t request, uint32_t *response, uint16_t *latency_ms
     ot_state_t st = s_state;
     s_state = ST_IDLE;
     otm_state_t rx = s_rx.st;
+    s_last_rx = (ot_rx_diag_t){.edges = s_rx_edges, .bits = (uint8_t)s_rx.bits, .state = (uint8_t)rx,
+                               .sent = st != ST_SENDING};
     if (!got) {
         if (st == ST_SENDING) {
             gptimer_stop(s_timer);

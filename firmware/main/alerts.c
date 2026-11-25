@@ -27,14 +27,17 @@ static const ct_field_t FIELDS[] = {
     {"alert_pasteur_on", CT_BOOL, offsetof(alert_config_t, pasteur_on), 0, 1, "alert: pasteurisation did not finish on/off"},
     F(clock_on, CT_BOOL, 0, 1, "alert: no valid clock on/off"),
     F(clock_s, CT_U16, 60, 3600, "no clock: after this long (s)"),
+    F(link_poor_on, CT_BOOL, 0, 1, "alert: boiler link unreliable on/off"),
+    F(link_poor_pct, CT_U8, 5, 90, "link unreliable: at least this share of frames failed in 5 min (%)"),
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 
 static const char *NAMES[ALERT_COUNT] = {"fault", "low_pressure", "pressure_falling", "link_lost", "sensor_lost",
-                                         "short_cycling", "cold_room", "pasteurisation", "no_clock"};
+                                         "short_cycling", "cold_room", "pasteurisation", "no_clock", "link_poor"};
 static const char *TITLES[ALERT_COUNT] = {"Boiler fault", "Low water pressure", "Water pressure falling",
                                           "Boiler not answering", "Room sensor lost", "Short cycling",
-                                          "Room not reaching target", "Pasteurisation failed", "Clock not set"};
+                                          "Room not reaching target", "Pasteurisation failed", "Clock not set",
+                                          "Boiler link unreliable"};
 
 const char *alert_name(alert_id_t id)
 {
@@ -59,7 +62,31 @@ void alert_default_config(alert_config_t *c)
         .cold_on = true, .cold_k = 1.0f, .cold_h = 3,
         .pasteur_on = true,
         .clock_on = true, .clock_s = 600,
+        .link_poor_on = true, .link_poor_pct = 20,
     };
+}
+
+// Version 1 ended with clock_s; everything before it is unchanged.
+bool alert_config_migrate(alert_config_t *out, const void *blob, size_t len)
+{
+    alert_default_config(out);
+    if (len < sizeof(uint16_t)) {
+        return false;
+    }
+    uint16_t ver;
+    memcpy(&ver, blob, sizeof(ver));
+    size_t keep;
+    if (ver == ALERT_CONFIG_VERSION && len == sizeof(*out)) {
+        keep = sizeof(*out);
+    } else if (ver == 1 && len >= offsetof(alert_config_t, clock_s) + sizeof(out->clock_s) && len <= sizeof(*out)) {
+        keep = offsetof(alert_config_t, clock_s) + sizeof(out->clock_s);
+    } else {
+        return false;
+    }
+    memcpy(out, blob, keep);
+    out->version = ALERT_CONFIG_VERSION;
+    alert_sanitize(out);
+    return true;
 }
 
 void alert_sanitize(alert_config_t *c)
@@ -188,6 +215,9 @@ const alert_out_t *alerts_step(alerts_t *a, const alert_in_t *in)
                  in->pasteur_result == PASTEUR_NO_TANK || in->pasteur_result == PASTEUR_NO_SETPOINT;
     eval(a, ALERT_PASTEUR, k->pasteur_on, pfail, 0, now);
     eval(a, ALERT_CLOCK, k->clock_on, !in->clock_ok, k->clock_s, now);
+    // At least 60 frames (a minute of talking); gone at once while "not answering" covers it
+    bool poor = in->frames_5m >= 60 && (uint32_t)in->fails_5m * 100 >= (uint32_t)k->link_poor_pct * in->frames_5m;
+    eval(a, ALERT_LINK_POOR, k->link_poor_on && !a->out.active[ALERT_LINK], poor, 0, now);
 
     // Count and the headline (array order = importance)
     alert_out_t *o = &a->out;
@@ -200,6 +230,9 @@ const alert_out_t *alerts_step(alerts_t *a, const alert_in_t *in)
         if (!o->count) {
             if (i == ALERT_FAULT && in->fault_valid) {
                 snprintf(o->text, sizeof(o->text), "%s (code %u)", TITLES[i], in->oem_fault);
+            } else if (i == ALERT_LINK_POOR && in->frames_5m) {
+                snprintf(o->text, sizeof(o->text), "%s (%u %% of frames failed)", TITLES[i],
+                         (unsigned)(in->fails_5m * 100u / in->frames_5m));
             } else if (i == ALERT_PRESSURE) {
                 snprintf(o->text, sizeof(o->text), "%s (%.1f bar)", TITLES[i], in->pressure_bar);
             } else {

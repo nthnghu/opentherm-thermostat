@@ -78,6 +78,10 @@ typedef struct {
     uint16_t last_latency_ms, max_latency_ms;
     uint32_t latency_sum_ms, latency_n;
     int fails_in_row;
+    // Link quality: frames and failed frames (timeout or bad) in the last ~5 minutes (5 one-minute buckets)
+    uint16_t frames_5m, fails_5m;
+    uint16_t win_frames[5], win_fails[5];
+    int64_t win_minute;           // minute (now / 60000) of the current bucket; -1 = none yet
 } otb_status_t;
 
 float otb_decode_mod(uint16_t d);

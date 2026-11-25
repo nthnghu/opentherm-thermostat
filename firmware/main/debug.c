@@ -599,6 +599,10 @@ void debug_exec(const char *line, FILE *o)
                (unsigned long)b.timeouts, (unsigned long)b.bad, (unsigned long)b.unknown_id,
                (unsigned long)b.retries, (unsigned long)b.link_losses, b.last_latency_ms, b.max_latency_ms,
                b.mod_raw, (unsigned long)b.mod_odd, b.mod_odd_raw);
+        otbus_fail_split_t fs;
+        otbus_fail_split(&fs);
+        fprintf(o, "OT failed frames: %lu no answer, %lu broken off, %lu garbled | last 5 min: %u of %u failed\n",
+                (unsigned long)fs.silent, (unsigned long)fs.partial, (unsigned long)fs.noise, b.fails_5m, b.frames_5m);
         uint8_t sup[128];
         otbus_get_support(sup);
         fprintf(o, "OT supported:");

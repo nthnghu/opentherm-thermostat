@@ -1,4 +1,5 @@
 // OpenTherm frames, the bus core and the simulated Immergas boiler.
+#include <stddef.h>
 #include <string.h>
 #include "test.h"
 #include "ot_frame.h"
@@ -286,6 +287,97 @@ static void test_exhaust_decode(void)
     CHECK(otb_decode_exhaust((uint16_t)-5) == -5, "negative s16 kept");
 }
 
+// A loose wire (2026-11-25): the boiler still answers now and then, so the link never stays lost long enough for
+// "not answering". The 5-minute failed share catches it, and clears once the line is clean again.
+static alert_in_t poor_in(const otb_core_t *c, double now_s)
+{
+    return (alert_in_t){.now_s = now_s, .sensor_ok = true, .clock_ok = true, .link_up = c->st.link == OTB_LINK_UP,
+                        .link_known = c->st.link != OTB_LINK_UNKNOWN, .frames_5m = c->st.frames_5m,
+                        .fails_5m = c->st.fails_5m};
+}
+
+static void test_poor_link(void)
+{
+    ot_sim_t b;
+    ot_sim_init(&b, 20, 8);
+    otb_core_t c;
+    otb_init(&c);
+    alert_config_t k;
+    alert_default_config(&k);
+    alerts_t a;
+    alerts_init(&a, &k);
+    int64_t now = 0;
+    const alert_out_t *o = NULL;
+    for (int s = 0; s < 360; s++) {
+        run(&c, &b, &now, 1);
+        alert_in_t in = poor_in(&c, now / 1000.0);
+        o = alerts_step(&a, &in);
+    }
+    CHECK(c.st.frames_5m >= 600 && c.st.fails_5m == 0, "clean line: %u frames, %u failed", c.st.frames_5m,
+          c.st.fails_5m);
+    CHECK(!o->active[ALERT_LINK_POOR], "no alert on a clean line");
+
+    b.q.miss_pct = 50;
+    int fired = -1;
+    for (int s = 0; s < 400; s++) {
+        run(&c, &b, &now, 1);
+        alert_in_t in = poor_in(&c, now / 1000.0);
+        o = alerts_step(&a, &in);
+        if (fired < 0 && o->active[ALERT_LINK_POOR]) {
+            fired = s;
+        }
+    }
+    CHECK(fired >= 0 && fired < 180, "half the frames lost (after 5 clean minutes): alert after %d s", fired);
+    CHECK(c.st.fails_5m * 100 >= 30u * c.st.frames_5m, "failed share %u of %u", c.st.fails_5m, c.st.frames_5m);
+    CHECK(strstr(o->text, "unreliable") != NULL, "headline: %s", o->text);
+
+    b.q.miss_pct = 0;
+    for (int s = 0; s < 420; s++) {
+        run(&c, &b, &now, 1);
+        alert_in_t in = poor_in(&c, now / 1000.0);
+        o = alerts_step(&a, &in);
+    }
+    CHECK(c.st.fails_5m == 0 && !o->active[ALERT_LINK_POOR], "clean again: cleared (%u failed)", c.st.fails_5m);
+
+    // Switched off: never reported
+    k.link_poor_on = false;
+    alerts_set_config(&a, &k);
+    alert_in_t bad = {.now_s = 1e5, .sensor_ok = true, .clock_ok = true, .link_up = true, .link_known = true,
+                      .frames_5m = 900, .fails_5m = 800};
+    CHECK(!alerts_step(&a, &bad)->active[ALERT_LINK_POOR], "link_poor_on 0: no alert");
+    // While "not answering" is active, the unreliable alert stays out of the way
+    k.link_poor_on = true;
+    alerts_init(&a, &k);
+    alert_in_t lost = {.sensor_ok = true, .clock_ok = true, .link_up = false, .link_known = true, .frames_5m = 300,
+                       .fails_5m = 300};
+    for (int s = 0; s <= k.link_s + 1; s++) {
+        lost.now_s = s;
+        o = alerts_step(&a, &lost);
+    }
+    CHECK(o->active[ALERT_LINK] && !o->active[ALERT_LINK_POOR], "lost: only 'not answering'");
+}
+
+// Saved alert settings from before the new alert (version 1) keep their values; the new fields get defaults.
+static void test_alert_migrate(void)
+{
+    alert_config_t v1;
+    alert_default_config(&v1);
+    v1.version = 1;
+    v1.link_s = 120;
+    v1.clock_s = 900;
+    size_t v1_len = offsetof(alert_config_t, clock_s) + sizeof(v1.clock_s);
+    alert_config_t out;
+    CHECK(alert_config_migrate(&out, &v1, v1_len), "v1 blob accepted");
+    CHECK(out.link_s == 120 && out.clock_s == 900 && out.link_poor_on && out.link_poor_pct == 20 &&
+              out.version == ALERT_CONFIG_VERSION, "v1 values kept, new defaults (%u %u %d %u)", out.link_s,
+          out.clock_s, out.link_poor_on, out.link_poor_pct);
+    alert_config_t cur = out;
+    cur.link_poor_pct = 35;
+    CHECK(alert_config_migrate(&out, &cur, sizeof(cur)) && out.link_poor_pct == 35, "current blob loads");
+    cur.version = 7;
+    CHECK(!alert_config_migrate(&out, &cur, sizeof(cur)), "unknown version refused");
+}
+
 int main(void)
 {
     test_exhaust_decode();
@@ -297,6 +389,8 @@ int main(void)
     test_link_loss();
     test_cmd_guard();
     test_never_answered();
+    test_poor_link();
+    test_alert_migrate();
     test_plant();
     test_new_boiler();
     TEST_DONE();

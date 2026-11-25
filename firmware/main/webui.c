@@ -1069,18 +1069,20 @@ static esp_err_t get_otlog(httpd_req_t *req)
     // Wall-clock time of a frame = now - (uptime_now - t_ms), when the clock is set.
     int64_t up_ms = esp_timer_get_time() / 1000;
     time_t now = timekeep_valid() ? time(NULL) : 0;
-    SEND(req, "uptime_ms,unix_time,source,result,latency_ms,request,response,id,req_type,resp_type,resp_value_f88\n");
+    SEND(req, "uptime_ms,unix_time,source,result,latency_ms,request,response,id,req_type,resp_type,resp_value_f88,rx_edges,rx_bits,rx_state\n");
     static const char *const res_names[] = {"ok", "timeout", "bad", "skip"};
+    static const char *const rx_names[] = {"none", "start", "partial", "complete", "invalid"};
     char *chunk = malloc(4096);
     int used = 0;
     for (int i = 0; chunk && i < n; i++) {
         const otbus_frame_t *e = &f[i];
         long long unix_t = now ? (long long)now - (up_ms - (int64_t)e->t_ms) / 1000 : 0;
-        used += snprintf(chunk + used, 4096 - used, "%lu,%lld,%s,%s,%u,%08lX,%08lX,%u,%s,%s,%.2f\n",
+        used += snprintf(chunk + used, 4096 - used, "%lu,%lld,%s,%s,%u,%08lX,%08lX,%u,%s,%s,%.2f,%u,%u,%s\n",
                          (unsigned long)e->t_ms, unix_t, e->sim ? "sim" : "real", res_names[e->result & 3],
                          e->latency_ms, (unsigned long)e->req, (unsigned long)e->resp, ot_id(e->req),
                          ot_type_name(ot_type(e->req)), e->result == 0 ? ot_type_name(ot_type(e->resp)) : "",
-                         e->result == 0 ? ot_f88(ot_data(e->resp)) : 0.0f);
+                         e->result == 0 ? ot_f88(ot_data(e->resp)) : 0.0f, e->rx_edges, e->rx_bits,
+                         e->sim ? "" : rx_names[e->rx_state < 5 ? e->rx_state : 4]);
         if (used > 4096 - 160) {
             httpd_resp_send_chunk(req, chunk, used);
             used = 0;

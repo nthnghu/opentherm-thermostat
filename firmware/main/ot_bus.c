@@ -49,13 +49,25 @@ static portMUX_TYPE s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
 #define LOCK()   xSemaphoreTake(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_lock)
 
-static void capture(uint32_t req, uint32_t resp, uint16_t lat, otb_xfer_result_t r, bool sim)
+static otbus_fail_split_t s_split;  // bus task writes, readers copy (counters only)
+
+void otbus_fail_split(otbus_fail_split_t *out)
+{
+    *out = s_split;
+}
+
+static void capture(uint32_t req, uint32_t resp, uint16_t lat, otb_xfer_result_t r, bool sim, const ot_rx_diag_t *d)
 {
     if (!s_ring) {
         return;
     }
     otbus_frame_t f = {.t_ms = (uint32_t)(esp_timer_get_time() / 1000), .req = req, .resp = resp,
                        .latency_ms = lat, .result = (uint8_t)r, .sim = sim};
+    if (d) {
+        f.rx_edges = d->edges;
+        f.rx_bits = d->bits;
+        f.rx_state = d->state;
+    }
     portENTER_CRITICAL(&s_ring_mux);
     s_ring[s_ring_head] = f;
     s_ring_head = (s_ring_head + 1) % OTBUS_FRAME_RING;
@@ -73,10 +85,17 @@ int otbus_frames(otbus_frame_t *out, int max)
     portENTER_CRITICAL(&s_ring_mux);
     int n = (int)s_ring_count < max ? (int)s_ring_count : max;
     uint32_t start = (s_ring_head + OTBUS_FRAME_RING - n) % OTBUS_FRAME_RING;
-    for (int i = 0; i < n; i++) {
-        out[i] = s_ring[(start + i) % OTBUS_FRAME_RING];
-    }
     portEXIT_CRITICAL(&s_ring_mux);
+    // Copied in short pieces: one long critical section (640 KB) held off interrupts for milliseconds. A frame
+    // written meanwhile may replace the oldest entries (a capture for diagnosis, not an exact snapshot).
+    for (int i = 0; i < n; i += 64) {
+        int k = n - i < 64 ? n - i : 64;
+        portENTER_CRITICAL(&s_ring_mux);
+        for (int j = 0; j < k; j++) {
+            out[i + j] = s_ring[(start + i + j) % OTBUS_FRAME_RING];
+        }
+        portEXIT_CRITICAL(&s_ring_mux);
+    }
     return n;
 }
 
@@ -134,7 +153,17 @@ static otb_xfer_result_t xfer_real(void *ctx, uint32_t req, uint32_t *resp, uint
     }
     s_last_frame_end_us = esp_timer_get_time();
     otb_xfer_result_t res = err == ESP_OK ? OTB_XFER_OK : (err == ESP_ERR_TIMEOUT ? OTB_XFER_TIMEOUT : OTB_XFER_BAD);
-    capture(req, r, l, res, false);
+    ot_rx_diag_t d = ot_last_rx();
+    if (res != OTB_XFER_OK) {
+        if (d.edges == 0) {
+            s_split.silent++;
+        } else if (d.state == 1 || d.state == 2) {  // OTM_START_BIT / OTM_RECEIVING: started, never finished
+            s_split.partial++;
+        } else {
+            s_split.noise++;
+        }
+    }
+    capture(req, r, l, res, false, &d);
     *resp = r;
     *lat = l;
     return res;
@@ -146,7 +175,7 @@ static otb_xfer_result_t xfer_sim(void *ctx, uint32_t req, uint32_t *resp, uint1
     bool ok = ot_sim_respond(&s_bsim, req, &r);
     otb_xfer_result_t res = ok ? OTB_XFER_OK : OTB_XFER_TIMEOUT;
     *lat = ok ? 40 : 0;
-    capture(req, r, *lat, res, true);
+    capture(req, r, *lat, res, true, NULL);
     *resp = r;
     return res;
 }
@@ -166,8 +195,15 @@ static void sim_init_locked(void)
 
 static bool s_core_sim = true;  // which boiler s_core has been talking to (bus task only)
 
+static SemaphoreHandle_t s_started;
+
 static void bus_task(void *arg)
 {
+    // The PHY's interrupts (input edges, transmit timer) are allocated on the core that sets them up: here, core 1.
+    // On core 0 the display, Wi-Fi and web server delayed them; a late edge timestamp breaks the decoding
+    // (2026-11-25: answers complete but shifted or without a stop bit, 2-7 % of the frames).
+    ot_init();
+    xSemaphoreGive(s_started);
     esp_task_wdt_add(NULL);
     TickType_t wake = xTaskGetTickCount();
     for (;;) {
@@ -251,9 +287,11 @@ void otbus_start(void)
         nvs_close(h);
     }
     ESP_LOGI(TAG, "flags: ca=%d mirror57=%d explicitoff=%d", s_flags.status_ca, s_flags.mirror_57, s_flags.explicit_off);
-    ot_init();
-    // Above the thermostat task (20), on core 1 with it; the UI and Wi-Fi run on core 0.
+    // Above the thermostat task (20), on core 1 with it; the UI and Wi-Fi run on core 0. Waits for the PHY set-up,
+    // so the GPIO interrupt service is installed (on core 1, level 3) before other drivers install it.
+    s_started = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(bus_task, "otbus", 4096, NULL, 21, NULL, 1);
+    xSemaphoreTake(s_started, pdMS_TO_TICKS(2000));
     ESP_LOGI(TAG, "bus task started (%s boiler)", s_sim ? "simulated" : "real");
 }
 

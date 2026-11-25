@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define ALERT_CONFIG_VERSION 1
+#define ALERT_CONFIG_VERSION 2  // 2: link_poor_on / link_poor_pct appended
 #define ALERT_CLEAR_S 60
 
 typedef enum {
@@ -20,6 +20,7 @@ typedef enum {
     ALERT_COLD,          // room below target for hours while heating may run
     ALERT_PASTEUR,       // the last pasteurisation did not finish
     ALERT_CLOCK,         // no valid clock (schedule falls back to Comfort)
+    ALERT_LINK_POOR,     // the boiler answers, but many frames fail (loose wire, interference)
     ALERT_COUNT
 } alert_id_t;
 
@@ -43,6 +44,8 @@ typedef struct {
     bool pasteur_on;
     bool clock_on;
     uint16_t clock_s;
+    bool link_poor_on;
+    uint8_t link_poor_pct;       // failed frames over the last 5 minutes, at least this share (%)
 } alert_config_t;
 
 typedef struct {
@@ -54,6 +57,7 @@ typedef struct {
     float pressure_bar;
     bool link_up;
     bool link_known;             // false for the first 5 s (before the bus gave up or got an answer); never-answered = lost
+    uint16_t frames_5m, fails_5m;  // frames to the boiler and failed ones in the last ~5 minutes
     bool sensor_ok;
     uint16_t ch_starts_1h;
     float median_burn_1h_min;
@@ -83,6 +87,8 @@ typedef struct {
 
 void alert_default_config(alert_config_t *c);
 void alert_sanitize(alert_config_t *c);
+// A saved blob of an older version (len bytes): its fields kept, the newer ones at their defaults. false = unknown.
+bool alert_config_migrate(alert_config_t *out, const void *blob, size_t len);
 void alerts_init(alerts_t *a, const alert_config_t *cfg);
 void alerts_set_config(alerts_t *a, const alert_config_t *cfg);
 const alert_out_t *alerts_step(alerts_t *a, const alert_in_t *in);

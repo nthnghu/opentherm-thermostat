@@ -99,6 +99,34 @@ void otb_init(otb_core_t *c)
     c->last_57_ms = NEVER;
     c->last_57_sent = -100;
     c->dhw_write_ms = NEVER;
+    c->st.win_minute = -1;
+}
+
+// Moves the 5-minute window of frame results to the minute of now (empty buckets for the minutes passed)
+static void window_roll(otb_status_t *st, int64_t now)
+{
+    int64_t m = now / 60000;
+    if (st->win_minute < 0 || m - st->win_minute >= 5 || m < st->win_minute) {
+        memset(st->win_frames, 0, sizeof(st->win_frames));
+        memset(st->win_fails, 0, sizeof(st->win_fails));
+    } else {
+        for (int64_t k = st->win_minute + 1; k <= m; k++) {
+            st->win_frames[k % 5] = 0;
+            st->win_fails[k % 5] = 0;
+        }
+    }
+    st->win_minute = m;
+}
+
+static void window_sum(otb_status_t *st)
+{
+    uint32_t f = 0, e = 0;
+    for (int i = 0; i < 5; i++) {
+        f += st->win_frames[i];
+        e += st->win_fails[i];
+    }
+    st->frames_5m = (uint16_t)(f > 0xFFFF ? 0xFFFF : f);
+    st->fails_5m = (uint16_t)(e > 0xFFFF ? 0xFFFF : e);
 }
 
 void otb_new_boiler(otb_core_t *c)
@@ -162,6 +190,14 @@ static otb_xfer_result_t send(otb_core_t *c, otb_xfer_fn xfer, void *ctx, uint8_
     c->st.frames++;
     if (r == OTB_XFER_OK && ot_id(*resp) != id) {
         r = OTB_XFER_BAD;
+    }
+    if (c->st.win_minute >= 0) {
+        int b = (int)(c->st.win_minute % 5);
+        if (c->st.win_frames[b] < 0xFFFF) {
+            c->st.win_frames[b]++;
+            c->st.win_fails[b] += r != OTB_XFER_OK;
+        }
+        window_sum(&c->st);
     }
     switch (r) {
     case OTB_XFER_OK:
@@ -375,6 +411,8 @@ void otb_cycle(otb_core_t *c, int64_t now, otb_xfer_fn xfer, void *ctx)
 {
     otb_status_t *st = &c->st;
     st->cycles++;
+    window_roll(st, now);
+    window_sum(st);
     if (c->silent) {
         return;  // nothing on the line (service comm-loss test); the link state is judged when talking again
     }

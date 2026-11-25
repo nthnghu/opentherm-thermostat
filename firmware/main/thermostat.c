@@ -187,9 +187,10 @@ static void load_alert_config(void)
     alert_default_config(&s_acfg);
     nvs_handle_t h;
     if (nvs_open("thermo", NVS_READONLY, &h) == ESP_OK) {
+        uint8_t blob[sizeof(alert_config_t) + 16];
+        size_t len = sizeof(blob);
         alert_config_t c;
-        size_t len = sizeof(c);
-        if (nvs_get_blob(h, "alert", &c, &len) == ESP_OK && len == sizeof(c) && c.version == ALERT_CONFIG_VERSION) {
+        if (nvs_get_blob(h, "alert", blob, &len) == ESP_OK && alert_config_migrate(&c, blob, len)) {
             s_acfg = c;
         }
         nvs_close(h);
@@ -686,6 +687,8 @@ static void thermo_task(void *arg)
             .pressure_bar = b.pressure_bar,
             .link_up = b.link == OTB_LINK_UP,
             .link_known = b.link != OTB_LINK_UNKNOWN,
+            .frames_5m = s_st.boiler_sim ? 0 : b.frames_5m,
+            .fails_5m = s_st.boiler_sim ? 0 : b.fails_5m,
             .sensor_ok = s_st.sensor_ok,
             .ch_starts_1h = s_kpi1.ch_starts,
             .median_burn_1h_min = s_kpi1.median_burn_min,

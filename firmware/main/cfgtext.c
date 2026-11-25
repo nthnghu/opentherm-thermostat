@@ -247,6 +247,12 @@ static const cfgtext_t T[] = {
      "Report when the boiler stops answering the thermostat.", "", NULL, NOOPTS},
     {"link_s", CG_ALERTS, "Not answering: after", "How long without replies",
      "Report after the boiler has not answered for this long.", "s", "link_on", NOOPTS},
+    {"link_poor_on", CG_ALERTS, "Boiler link unreliable", "Many messages to the boiler fail",
+     "Report when the boiler still answers, but many messages fail: usually a loose wire or interference "
+     "on the boiler cable.", "", NULL, NOOPTS},
+    {"link_poor_pct", CG_ALERTS, "Unreliable: failed share", "Share of failed messages over 5 minutes",
+     "Report when at least this share of the messages in the last 5 minutes failed. Normal is below 1 %.", "%",
+     "link_poor_on", NOOPTS},
     {"sensor_on", CG_ALERTS, "Room sensor lost", "No room temperature",
      "Report when the room temperature sensor stops giving readings.", "", NULL, NOOPTS},
     {"sensor_s", CG_ALERTS, "Sensor lost: after", "How long without a reading",

@@ -41,9 +41,20 @@ typedef struct {
     uint16_t latency_ms;
     uint8_t result;  // otb_xfer_result_t
     uint8_t sim;
+    uint16_t rx_edges;  // real boiler: input edges after the request (ot_rx_diag_t)
+    uint8_t rx_bits;    // data bits decoded
+    uint8_t rx_state;   // otm_state_t at the end
 } otbus_frame_t;
 
-#define OTBUS_FRAME_RING 32768  // ~3 h at 3 frames/s (512 KB PSRAM)
+#define OTBUS_FRAME_RING 32768  // ~3 h at 3 frames/s (640 KB PSRAM)
+
+// Failed frames of the real boiler by how far the answer got (since the start): silent = no edge at all (the
+// boiler did not answer), partial = an answer started and broke off, noise = edges that made no frame.
+// Partial and noise point to the wiring, the shield or interference.
+typedef struct {
+    uint32_t silent, partial, noise;
+} otbus_fail_split_t;
+void otbus_fail_split(otbus_fail_split_t *out);
 
 // Copies up to max of the most recent frames, oldest first; returns the count.
 int otbus_frames(otbus_frame_t *out, int max);
