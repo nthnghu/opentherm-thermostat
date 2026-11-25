@@ -22,7 +22,7 @@ OpenTherm side runs against a built-in simulated boiler until the real boiler is
 
 - **Thermostat** that always runs in its own high-priority task on CPU core 1: SHT40 reading, hysteresis
   control, a flow setpoint computed from the room-temperature error (proportional plus integral), and
-  OpenTherm master (Manchester PHY on GPIO29/30) with a simulated boiler. Failsafe: no sensor reading
+  OpenTherm master (Manchester PHY on GPIO51/52) with a simulated boiler. Failsafe: no sensor reading
   for 30 s turns heating off; frost protection at 7 °C.
 - **Boot hardware check** of memory, touch, sensor, audio, Wi-Fi chip, camera and the OpenTherm line.
 - **UI**: status bar (clock, heating, warnings, HA state, Wi-Fi signal bars) with a pull-down quick panel, app
@@ -41,7 +41,7 @@ OpenTherm side runs against a built-in simulated boiler until the real boiler is
 | Part | Connection |
 |---|---|
 | SHT40 room sensor | I2C 0x44 on CN3 (GPIO7 SDA / GPIO8 SCL, shared with touch, codec and camera) |
-| OpenTherm shield | GPIO29 (shield → ESP), GPIO30 (ESP → shield), 3V3, GND |
+| OpenTherm shield | GPIO51 (shield → ESP), GPIO52 (ESP → shield), 3V3, GND (header top row: GPIO30 is 5th, GPIO29 6th from the left) |
 | OV02C10 camera | MIPI-CSI, 1 lane; driver vendored from Guition's SDK (Apache-2.0) |
 | ESP32-C6 | Wi-Fi coprocessor over SDIO (ESP-Hosted) |
 

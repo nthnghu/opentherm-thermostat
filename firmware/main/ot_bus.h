@@ -11,6 +11,8 @@ void otbus_start(void);
 // Flash writers: wait until no OpenTherm frame is on the wire and hold the bus off until otbus_quiet_end().
 // Returns false on timeout (write anyway or skip).
 bool otbus_quiet_begin(uint32_t timeout_ms);
+// Line test only: the bus task keeps looping (watchdog fed) but sends no frames while paused.
+void otbus_pause(bool on);
 void otbus_quiet_end(void);
 
 void otbus_set_cmd(const otb_cmd_t *cmd);

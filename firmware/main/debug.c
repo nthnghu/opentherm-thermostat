@@ -23,6 +23,7 @@
 #include "motion.h"
 #include "settings.h"
 #include "ot_bus.h"
+#include "opentherm.h"
 #include "ot_frame.h"
 #include "schedule.h"
 #include "alerts.h"
@@ -35,6 +36,74 @@
 // Runs one command line and writes its answer to o (the serial console, or a web request: /api/cmd).
 
 #define TS_MAX 48
+// "OT line": with the bus paused, holds the line low (master active) and high (idle) in turns, so the voltage
+// swing can be measured on the boiler terminals, and counts input edges (a boiler answering moves the input).
+// "OT find": GPIO30 slowly on and off, so the pin can be found on an unlabelled header with a multimeter.
+// The shield's data wires should be off: our line output then drives nothing.
+static volatile bool s_find_running;
+
+static void ot_find_task(void *arg)
+{
+    bool in = *(bool *)arg;
+    otbus_pause(true);
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    ESP_LOGW("otline", "OT find: GPIO%d 1 s high / 1 s low for 60 s", in ? OT_PIN_IN : OT_PIN_OUT);
+    for (int i = 0; i < 30; i++) {
+        if (in) {
+            ot_in_probe(true, 1);
+        } else {
+            ot_line_hold(false);  // idle = GPIO high
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (in) {
+            ot_in_probe(true, 0);
+        } else {
+            ot_line_hold(true);  // active = GPIO low
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    if (in) {
+        ot_in_probe(false, 0);
+    }
+    ot_line_hold(false);
+    otbus_pause(false);
+    ESP_LOGW("otline", "OT find done, requests resume");
+    s_find_running = false;
+    vTaskDelete(NULL);
+}
+
+// 2.5 s low at most: the spec lets a boiler take a low line for 5 s as shorted terminals (a heat demand).
+static void ot_line_task(void *arg)
+{
+    volatile bool *running = arg;
+    // Not otbus_quiet_begin(): the bus task waits for that lock without a limit, and 30 s trips the watchdog.
+    otbus_pause(true);
+    bool quiet = otbus_quiet_begin(3000);  // the frame in flight (if any) ends first
+    if (quiet) {
+        otbus_quiet_end();
+    }
+    vTaskDelay(pdMS_TO_TICKS(1200));  // a frame that passed the pause check before it was set ends too
+    ESP_LOGW("otline", "OT line test: bus paused; measure DC volts on boiler terminals 41-44");
+    for (int i = 0; i < 6; i++) {
+        uint32_t e0 = ot_in_edges();
+        ot_line_hold(true);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        int in_low = ot_in_level();
+        vTaskDelay(pdMS_TO_TICKS(2400));
+        uint32_t e1 = ot_in_edges();
+        ot_line_hold(false);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        int in_high = ot_in_level();
+        vTaskDelay(pdMS_TO_TICKS(2400));
+        ESP_LOGW("otline", "OT line %d/6: LOW phase input=%d edges=%lu | HIGH phase input=%d edges=%lu", i + 1, in_low,
+                 (unsigned long)(e1 - e0), in_high, (unsigned long)(ot_in_edges() - e1));
+    }
+    otbus_pause(false);
+    ESP_LOGW("otline", "OT line test done, requests resume");
+    *running = false;
+    vTaskDelete(NULL);
+}
+
 static struct {
     TaskHandle_t h;
     configRUN_TIME_COUNTER_TYPE rt;
@@ -360,6 +429,34 @@ void debug_exec(const char *line, FILE *o)
             fprintf(o, "SVC manual: %s\n", mt[0] ? mt : "-");
             free(rec);
         }
+        return;
+    }
+    if (strcmp(line, "OT find") == 0 || strcmp(line, "OT find in") == 0) {  // a pin 1 s high / 1 s low for 60 s
+        volatile bool *running = &s_find_running;
+        static bool in;
+        in = line[7] == ' ';
+        if (*running || xTaskCreate(ot_find_task, "ot_find", 3072, &in, 3, NULL) != pdPASS) {
+            fprintf(o, "OT find: already running\n");
+            return;
+        }
+        *running = true;
+        fprintf(o, "OT find: GPIO%d switches 3.3 V / 0 V every second for 60 s (requests paused)\n",
+                in ? OT_PIN_IN : OT_PIN_OUT);
+        return;
+    }
+    if (strcmp(line, "OT pins") == 0) {  // how GPIO29/30 are really set up (IO MUX / GPIO matrix), and their levels
+        gpio_dump_io_configuration(o, (1ULL << OT_PIN_IN) | (1ULL << OT_PIN_OUT));
+        fprintf(o, "OT pins: in GPIO%d level %d\n", OT_PIN_IN, ot_in_level());
+        return;
+    }
+    if (strcmp(line, "OT line") == 0) {  // wiring test with a multimeter on the boiler terminals (results in the log)
+        static volatile bool running;
+        if (running || xTaskCreate(ot_line_task, "ot_line", 3072, (void *)&running, 3, NULL) != pdPASS) {
+            fprintf(o, "OT line: already running\n");
+            return;
+        }
+        running = true;
+        fprintf(o, "OT line: requests paused; 6 x (2.5 s line LOW, 2.5 s line HIGH), results in /api/log\n");
         return;
     }
     if (strncmp(line, "OT read ", 8) == 0 || strncmp(line, "OT write ", 9) == 0) {

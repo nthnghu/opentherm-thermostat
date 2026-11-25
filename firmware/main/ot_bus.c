@@ -91,8 +91,18 @@ void otbus_quiet_end(void)
     }
 }
 
+static volatile bool s_paused;  // console "OT line": no frames while the line is held by hand
+
+void otbus_pause(bool on)
+{
+    s_paused = on;
+}
+
 static otb_xfer_result_t xfer_real(void *ctx, uint32_t req, uint32_t *resp, uint16_t *lat)
 {
+    if (s_paused) {
+        return OTB_XFER_SKIP;
+    }
     int64_t now = esp_timer_get_time();
     if (now - s_cycle_start_us > BUDGET_MS * 1000LL) {
         return OTB_XFER_SKIP;

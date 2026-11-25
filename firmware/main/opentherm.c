@@ -24,6 +24,7 @@ static volatile int s_tx_pos;
 static otm_rx_t s_rx;
 static volatile int64_t s_tx_end;
 static bool s_inited;
+static volatile uint32_t s_edges;  // every input edge, also outside a frame (OT line test)
 
 static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_data_t *e, void *arg)
 {
@@ -44,6 +45,7 @@ static bool IRAM_ATTR tx_alarm(gptimer_handle_t t, const gptimer_alarm_event_dat
 // Response decoding: ot_manchester.h (inlined here, so it stays in IRAM)
 static void IRAM_ATTR rx_edge(void *arg)
 {
+    s_edges++;
     if (s_state != ST_RECEIVING) {
         return;
     }
@@ -89,6 +91,30 @@ esp_err_t ot_init(void)
     s_inited = true;
     ESP_LOGI(TAG, "OpenTherm PHY ready (in GPIO%d, out GPIO%d)", OT_PIN_IN, OT_PIN_OUT);
     return ESP_OK;
+}
+
+void ot_line_hold(bool active)
+{
+    if (s_inited && s_state == ST_IDLE) {
+        gpio_set_level(OT_PIN_OUT, active ? OUT_ACTIVE : OUT_IDLE);
+    }
+}
+
+void ot_in_probe(bool on, int level)
+{
+    if (on) {
+        gpio_intr_disable(OT_PIN_IN);
+        gpio_set_direction(OT_PIN_IN, GPIO_MODE_OUTPUT);
+        gpio_set_level(OT_PIN_IN, level);
+    } else {
+        gpio_set_direction(OT_PIN_IN, GPIO_MODE_INPUT);
+        gpio_intr_enable(OT_PIN_IN);
+    }
+}
+
+uint32_t ot_in_edges(void)
+{
+    return s_edges;
 }
 
 int ot_in_level(void)

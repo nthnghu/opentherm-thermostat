@@ -19,7 +19,7 @@ A new image is kept only if the boot hardware check passes; otherwise the device
 | Part | Bus / pins |
 |---|---|
 | SHT40 room sensor | I2C 0x44 on CN3 (GPIO7 SDA / GPIO8 SCL, shared with GT911 0x5D, ES8311 0x18, camera 0x36) |
-| OpenTherm shield | GPIO29 in (shield → ESP), GPIO30 out |
+| OpenTherm shield | GPIO51 in (shield → ESP), GPIO52 out |
 | OV02C10 camera | MIPI-CSI 1 lane, 1288×728; driver vendored in `components/ov02c10` (Guition SDK, Apache-2.0) |
 | ESP32-C6 Wi-Fi | ESP-Hosted over SDIO |
 
