@@ -44,6 +44,8 @@ typedef struct {
 
 // Marker for minutes and burns in service mode. A value, not a bit: the byte was padding in older records.
 #define DL_MARK_SVC 0x5C
+// Marker for a burn already going when the log started (a restart mid-burn): its start and length are unknown.
+#define DL_MARK_PARTIAL 0x5D
 
 // One minute (56 bytes; 7 days = 565 KB of PSRAM).
 typedef struct {
@@ -140,7 +142,7 @@ typedef struct {
     // Burn in progress
     bool flame;
     uint32_t burn_start, burn_t;
-    bool burn_dhw, burn_svc;
+    bool burn_dhw, burn_svc, burn_partial;
     double burn_ret, burn_mod;
     int burn_n;
     // Totals since start

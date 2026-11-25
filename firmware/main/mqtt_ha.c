@@ -141,6 +141,14 @@ static const sensor_def_t SENSORS[] = {
     {"pressure", "Water pressure", "bar", "pressure", "measurement", 2, false},
     {"tank", "Tank temperature", "°C", "temperature", "measurement", 1, false},
     {"outside", "Outdoor temperature (boiler)", "°C", "temperature", "measurement", 1, true},
+    {"exhaust", "Flue gas temperature", "°C", "temperature", "measurement", 1, false},
+    {"fan_rpm", "Boiler fan speed", "rpm", NULL, "measurement", 0, true},
+    {"flame_current", "Flame current", "µA", NULL, "measurement", 1, true},
+    {"boiler_burner_starts", "Burner starts (boiler counter)", NULL, NULL, "total_increasing", 0, false},
+    {"boiler_dhw_burner_starts", "Hot water burner starts (boiler counter)", NULL, NULL, "total_increasing", 0, true},
+    {"boiler_burner_hours", "Burner hours (boiler counter)", "h", "duration", "total_increasing", 0, false},
+    {"boiler_ch_pump_hours", "Heating pump hours (boiler counter)", "h", "duration", "total_increasing", 0, true},
+    {"boiler_dhw_pump_hours", "Hot water pump hours (boiler counter)", "h", "duration", "total_increasing", 0, true},
     {"starts_1h", "Burner starts (last hour)", NULL, NULL, "measurement", 0, false},
     {"starts_h_24h", "Burner starts per hour (24 h)", NULL, NULL, "measurement", 2, false},
     {"median_burn_24h", "Median burn (24 h)", "min", "duration", "measurement", 1, false},
@@ -376,6 +384,15 @@ static bool build_state(void)
     jb_num(&j, "pressure", st.boiler_online && st.press_valid, "%.2f", st.pressure_bar);
     jb_num(&j, "tank", st.boiler_online && st.tank_valid, "%.1f", st.tank_c);
     jb_num(&j, "outside", st.outside_valid, "%.1f", st.outside_c);
+    jb_num(&j, "exhaust", st.exhaust_valid, "%.1f", st.exhaust_c);
+    jb_num(&j, "fan_rpm", st.fan_valid, "%.0f", st.fan_rpm);
+    jb_num(&j, "flame_current", st.flame_i_valid, "%.1f", st.flame_ua);
+    // The boiler's own counters (IDs 116, 119-122); 0 = not reported yet
+    jb_num(&j, "boiler_burner_starts", st.counters_valid && st.counters[0], "%.0f", st.counters[0]);
+    jb_num(&j, "boiler_dhw_burner_starts", st.counters_valid && st.counters[3], "%.0f", st.counters[3]);
+    jb_num(&j, "boiler_burner_hours", st.counters_valid && st.counters[4], "%.0f", st.counters[4]);
+    jb_num(&j, "boiler_ch_pump_hours", st.counters_valid && st.counters[5], "%.0f", st.counters[5]);
+    jb_num(&j, "boiler_dhw_pump_hours", st.counters_valid && st.counters[6], "%.0f", st.counters[6]);
     jb_num(&j, "dhw_enable", true, "%.0f", st.dhw_enable);
     jb_str(&j, "dhw_reason", sched_dhw_reason_name(st.dhw_reason));
     jb_num(&j, "dhw_boost_left_min", true, "%.0f", (st.dhw_boost_left_s + 59) / 60);

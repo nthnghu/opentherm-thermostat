@@ -71,6 +71,11 @@ typedef struct {
     // Boiler extras and totals since start
     bool press_valid;
     float pressure_bar;
+    bool exhaust_valid, fan_valid, flame_i_valid, counters_valid;
+    float exhaust_c;        // flue gas (ID 33)
+    uint16_t fan_rpm;       // ID 35 actual x 60
+    float flame_ua;         // ID 36
+    uint16_t counters[8];   // the boiler's own IDs 116..123 (starts, hours); 117/118/123 unsupported on the Tera
     bool boiler_fault;
     uint8_t oem_fault;
     double gas_kwh_total;   // estimate from the modulation

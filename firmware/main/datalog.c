@@ -207,7 +207,7 @@ static void end_burn(dl_t *d)
             .dhw = d->burn_dhw,
             .ret_c = d->burn_n ? u8c(d->burn_ret / d->burn_n) : 0,
             .mod = d->burn_n ? u8c(d->burn_mod / d->burn_n) : 0,
-            .mark = d->burn_svc ? DL_MARK_SVC : 0,
+            .mark = d->burn_svc ? DL_MARK_SVC : (d->burn_partial ? DL_MARK_PARTIAL : 0),
         };
         put_burn(d, &b);
     }
@@ -222,8 +222,20 @@ bool datalog_tick(dl_t *d, const dl_sample_t *s)
         d->have_err0 = true;
     }
 
-    // Burns (edges on the flame bit); a CH burn that turns into a tank burn counts as DHW
-    if (s->flame && !d->flame) {
+    // Burns (edges on the flame bit); a CH burn that turns into a tank burn counts as DHW.
+    // A flame already on at the first sample (restart mid-burn) is a burn in progress, not a start: the
+    // boiler's own counter (ID 116) did not move over three restarts while this one counted three starts.
+    if (s->flame && !d->flame && d->sec == 1) {
+        d->flame = true;
+        d->burn_start = d->sec;
+        d->burn_t = s->epoch > 0 ? (uint32_t)s->epoch : 0;
+        d->burn_dhw = s->dhw_active;
+        d->burn_svc = s->svc;
+        d->burn_partial = true;
+        d->burn_ret = d->burn_mod = 0;
+        d->burn_n = 0;
+    } else if (s->flame && !d->flame) {
+        d->burn_partial = false;
         d->flame = true;
         d->burn_start = d->sec;
         d->burn_t = s->epoch > 0 ? (uint32_t)s->epoch : 0;
@@ -493,7 +505,7 @@ void datalog_kpi(const dl_t *d, float window_h, dl_kpi_t *k)
         if (!inside) {
             break;
         }
-        if (b->dhw || b->mark == DL_MARK_SVC) {  // tank burns and service-test burns are not CH cycling
+        if (b->dhw || b->mark == DL_MARK_SVC || b->mark == DL_MARK_PARTIAL) {  // not CH cycling / length unknown
             continue;
         }
         durs[nb++] = b->dur_s;

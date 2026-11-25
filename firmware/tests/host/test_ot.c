@@ -277,8 +277,18 @@ static void test_modulation_decode(void)
     CHECK(otb_decode_mod(0) == 0 && otb_decode_mod(ot_to_f88(100)) == 100, "edges");
 }
 
+// ID 33 as sent by the Tera (f8.8) and by the spec (s16)
+static void test_exhaust_decode(void)
+{
+    CHECK(NEAR(otb_decode_exhaust(0x2E00), 46.0, 0.01), "Tera f8.8 0x2E00 = 46 C (not 11776)");
+    CHECK(NEAR(otb_decode_exhaust(0x2E80), 46.5, 0.01), "f8.8 with a fraction");
+    CHECK(otb_decode_exhaust(46) == 46 && otb_decode_exhaust(180) == 180, "spec s16 kept");
+    CHECK(otb_decode_exhaust((uint16_t)-5) == -5, "negative s16 kept");
+}
+
 int main(void)
 {
+    test_exhaust_decode();
     test_modulation_decode();
     test_frames();
     test_link_and_support();

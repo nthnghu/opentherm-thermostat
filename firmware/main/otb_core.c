@@ -6,6 +6,14 @@
 // ID 17 relative modulation. The Victrix Tera sends a negative f8.8 (-113 %) while it burns at its minimum flame
 // (flow steady at the minimum-fire temperature, 2026-11-25): taken as 0 %. Above 100 % is capped (some boilers go
 // past 100 during DHW). The raw word stays in mod_raw / mod_odd_raw for checking.
+// ID 33 flue gas: the spec has a signed integer (°C); the Victrix Tera sends f8.8 (0x2E00 = 46 °C, seen
+// 2026-11-25), which read as s16 would be 11776 °C. Outside -40..250 °C as s16 means f8.8.
+float otb_decode_exhaust(uint16_t d)
+{
+    int16_t s = (int16_t)d;
+    return (s >= -40 && s <= 250) ? (float)s : ot_f88(d);
+}
+
 float otb_decode_mod(uint16_t d)
 {
     float f = ot_f88(d);
@@ -17,6 +25,7 @@ float otb_decode_mod(uint16_t d)
 #define REPROBE_MS (3600LL * 1000)
 #define MIRROR_57_REFRESH_MS (60LL * 1000)
 #define DHWSET_RETRY_MS (600LL * 1000)  // rewrite ID 56 when the boiler shows another value (or ignored it)
+#define BURNING_PERIOD_MS (30LL * 1000)  // flue gas, fan and flame current while the flame is on
 #define CONFIRM_MS (5LL * 1000)  // re-ask soon after a negative answer, to settle support quickly
 
 static const struct {
@@ -44,7 +53,9 @@ static const struct {
     {OT_ID_TOUTSIDE, false, 60},
     {OT_ID_FAULT, false, 10},  // only while the fault bit is set
     {OT_ID_TDHW_SET, false, 300},
-    {OT_ID_TEXHAUST, false, 300},
+    {OT_ID_TEXHAUST, false, 300},   // every BURNING_PERIOD_MS while the flame is on
+    {OT_ID_FAN_SPEED, false, 600},  // likewise
+    {OT_ID_FLAME_CURRENT, false, 600},  // likewise
     {OT_ID_DHW_FLOW, false, 300},
     {OT_ID_MAXTSET, true, 0},  // the ID 57 mirror, scheduled separately
     {OT_ID_TDHW_SET, true, 0}, // ID 56 write (only with cmd.dhw_set), scheduled separately
@@ -200,7 +211,9 @@ static void parse(otb_core_t *c, uint8_t id, uint16_t d)
     case OT_ID_CH_PRESSURE: st->pressure_bar = ot_f88(d); st->valid |= OTB_V_PRESS; break;
     case OT_ID_TDHW: st->tank_c = ot_f88(d); st->valid |= OTB_V_TDHW; break;
     case OT_ID_TOUTSIDE: st->outside_c = ot_f88(d); st->valid |= OTB_V_TOUT; break;
-    case OT_ID_TEXHAUST: st->exhaust_c = (int16_t)d; st->valid |= OTB_V_TEXH; break;
+    case OT_ID_TEXHAUST: st->exhaust_c = otb_decode_exhaust(d); st->valid |= OTB_V_TEXH; break;
+    case OT_ID_FAN_SPEED: st->fan_set_hz = ot_hb(d); st->fan_hz = ot_lb(d); st->valid |= OTB_V_FAN; break;
+    case OT_ID_FLAME_CURRENT: st->flame_ua = ot_f88(d); st->valid |= OTB_V_FLAME_I; break;
     case OT_ID_DHW_FLOW: st->dhw_flow = ot_f88(d); st->valid |= OTB_V_DHW_FLOW; break;
     case OT_ID_FAULT: st->fault_flags = ot_hb(d); st->oem_fault = ot_lb(d); st->valid |= OTB_V_FAULT; break;
     case OT_ID_SLAVE_CONFIG: st->slave_config = ot_hb(d); st->member_id = ot_lb(d); st->valid |= OTB_V_CONFIG; break;
@@ -302,6 +315,11 @@ static otb_slot_t *pick_slot(otb_core_t *c, int64_t now)
             return s;
         }
         int64_t period = (c->neg[s->id] && c->support[s->id] == OTB_ID_UNKNOWN) ? CONFIRM_MS : (int64_t)s->period_ms;
+        // Burner values: often while it burns (the flue gas tells whether it condenses), rarely otherwise
+        bool burning_id = s->id == OT_ID_TEXHAUST || s->id == OT_ID_FAN_SPEED || s->id == OT_ID_FLAME_CURRENT;
+        if (burning_id && (c->st.slave_flags & OT_S_FLAME) && period > BURNING_PERIOD_MS) {
+            period = BURNING_PERIOD_MS;
+        }
         int64_t over = now - s->last_ms - period;
         if (over >= 0 && over > best_over) {
             best_over = over;

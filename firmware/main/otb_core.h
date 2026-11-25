@@ -47,7 +47,7 @@ enum {
     OTB_V_TOUT = 1u << 5, OTB_V_FAULT = 1u << 6, OTB_V_CONFIG = 1u << 7, OTB_V_CAPS = 1u << 8,
     OTB_V_DHW_BOUNDS = 1u << 9, OTB_V_CH_BOUNDS = 1u << 10, OTB_V_DHW_SET = 1u << 11, OTB_V_MAXSET = 1u << 12,
     OTB_V_VERSION = 1u << 13, OTB_V_COUNTERS = 1u << 14, OTB_V_REMOTE = 1u << 15, OTB_V_TEXH = 1u << 16,
-    OTB_V_DHW_FLOW = 1u << 17,
+    OTB_V_DHW_FLOW = 1u << 17, OTB_V_FAN = 1u << 18, OTB_V_FLAME_I = 1u << 19,
 };
 
 typedef struct {
@@ -68,6 +68,8 @@ typedef struct {
     bool tset_acked;              // the last ID 1 write was acknowledged with the same value
     float dhw_set_written;        // last ID 56 value written (0 = none)
     uint8_t dhw_set_verify;       // otb_dhwset_t
+    uint8_t fan_set_hz, fan_hz;   // ID 35: fan speed setpoint / actual in rps (x 60 = rpm)
+    float flame_ua;               // ID 36: flame (ionisation) current
     uint16_t mod_raw;             // ID 17 as received (data word)
     uint16_t mod_odd_raw;         // last ID 17 outside 0..100 % (0 = none seen); counted in mod_odd
     uint32_t mod_odd;
@@ -78,7 +80,8 @@ typedef struct {
     int fails_in_row;
 } otb_status_t;
 
-float otb_decode_mod(uint16_t d);  // ID 17 data word -> 0..100 % (negative = minimum flame on the Tera)
+float otb_decode_mod(uint16_t d);
+float otb_decode_exhaust(uint16_t d);  // ID 33: s16 (spec) or f8.8 (Victrix Tera), whichever is plausible  // ID 17 data word -> 0..100 % (negative = minimum flame on the Tera)
 
 typedef struct {
     uint8_t id;

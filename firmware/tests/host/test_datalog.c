@@ -153,6 +153,27 @@ static void test_service_excluded(void)
           "minutes marked");
 }
 
+// A restart while the burner runs: the flame seen at the first sample is not a new start, and that burn's
+// length (start unknown) stays out of the burn statistics.
+static void test_restart_mid_burn(void)
+{
+    dl_rec_t recs[30];
+    dl_burn_t burns[8];
+    dl_t d;
+    datalog_init(&d, recs, 30, burns, 8, NULL, 0);
+    dl_sample_t s = {.sensor_ok = true, .room_c = 20, .target_c = 21, .heat_mode = true, .ch_allowed = true};
+    for (int t = 0; t < 20 * 60; t++) {
+        s.flame = t < 90 || (t >= 600 && t < 1200 - 60);  // on at the start for 90 s, then a 9-min burn
+        datalog_tick(&d, &s);
+    }
+    dl_kpi_t k;
+    datalog_kpi(&d, 1, &k);
+    CHECK(k.ch_starts == 1, "only the real start counts (%u)", k.ch_starts);
+    CHECK(k.ch_burns == 1 && NEAR(k.median_burn_min, 9, 0.02), "the partial burn is left out (%u burns, %.1f min)",
+          k.ch_burns, k.median_burn_min);
+    CHECK(d.bcount == 2 && d.burns[0].mark == DL_MARK_PARTIAL, "but stored, marked partial");
+}
+
 // Hourly summaries, and a restart: everything saved is put back and the KPIs come out the same.
 static void test_hours_and_restore(void)
 {
@@ -385,6 +406,7 @@ int main(void)
     test_closed_loop_kpis();
     test_ring_wrap();
     test_service_excluded();
+    test_restart_mid_burn();
     test_hours_and_restore();
     test_clock_steps();
     test_alerts();

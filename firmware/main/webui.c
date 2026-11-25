@@ -998,6 +998,8 @@ static esp_err_t get_ot(httpd_req_t *req)
           "\"pressure\":%.2f,\"tank\":%.2f,\"tset_sent\":%.1f,\"tset_acked\":%s,",
           otbus_simulated() ? "simulated" : "real", otb_link_name(b.link), b.slave_flags, b.flow_c, b.return_c,
           b.modulation, b.pressure_bar, b.tank_c, b.tset_sent, b.tset_acked ? "true" : "false");
+    sendf(req, "\"exhaust\":%.1f,\"fan_rpm\":%u,\"fan_set_rpm\":%u,\"flame_ua\":%.2f,\"mod_raw\":%u,",
+          (b.valid & OTB_V_TEXH) ? b.exhaust_c : -999.0f, b.fan_hz * 60u, b.fan_set_hz * 60u, b.flame_ua, b.mod_raw);
     sendf(req,
           "\"fault_flags\":%u,\"oem_fault\":%u,\"member_id\":%u,\"slave_config\":%u,\"max_cap_kw\":%u,"
           "\"min_mod_pct\":%u,\"ch_bounds\":[%d,%d],\"dhw_bounds\":[%d,%d],\"dhw_set\":%.1f,\"maxset\":%.1f,",

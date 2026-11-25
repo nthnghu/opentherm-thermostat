@@ -31,6 +31,8 @@
 #define OT_ID_TOUTSIDE          27
 #define OT_ID_TRET              28
 #define OT_ID_TEXHAUST          33
+#define OT_ID_FAN_SPEED         35  // hb setpoint, lb actual (rpm / 60)
+#define OT_ID_FLAME_CURRENT     36  // f8.8 uA
 #define OT_ID_TDHW_BOUNDS       48
 #define OT_ID_MAXTSET_BOUNDS    49
 #define OT_ID_TDHW_SET          56

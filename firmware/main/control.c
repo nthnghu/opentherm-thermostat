@@ -291,13 +291,15 @@ const ctrl_out_t *ctrl_step(ctrl_t *c, const ctrl_in_t *in)
 {
     const ctrl_config_t *k = &c->cfg;
     const double now = in->now_s;
-    double dt = c->last_s < 0 ? 1 : now - c->last_s;
+    bool first = c->last_s < 0;
+    double dt = first ? 1 : now - c->last_s;
     c->last_s = now;
 
-    // CH burner starts (DHW burns excluded)
+    // CH burner starts (DHW burns excluded). A flame already on at the first step (restart mid-burn) is not a
+    // start: it would eat into the starts-per-hour limit after every restart.
     if (in->flame && !c->last_flame) {
         c->flame_since_s = now;
-        if (!in->dhw_active) {
+        if (!in->dhw_active && !first) {
             c->starts[c->start_head] = now;
             c->start_head = (c->start_head + 1) % 16;
         }

@@ -339,6 +339,15 @@ static void boiler_read(otb_status_t *b)
     s_st.id56 = b->dhw_set_verify;
     s_st.press_valid = b->valid & OTB_V_PRESS;
     s_st.pressure_bar = b->pressure_bar;
+    bool up = b->link == OTB_LINK_UP;
+    s_st.exhaust_valid = up && (b->valid & OTB_V_TEXH);
+    s_st.exhaust_c = b->exhaust_c;
+    s_st.fan_valid = up && (b->valid & OTB_V_FAN);
+    s_st.fan_rpm = (uint16_t)(b->fan_hz * 60);
+    s_st.flame_i_valid = up && (b->valid & OTB_V_FLAME_I);
+    s_st.flame_ua = b->flame_ua;
+    s_st.counters_valid = b->valid & OTB_V_COUNTERS;
+    memcpy(s_st.counters, b->counters, sizeof(s_st.counters));
     s_st.boiler_fault = b->link == OTB_LINK_UP && (b->slave_flags & OT_S_FAULT);
     s_st.oem_fault = b->oem_fault;
     UNLOCK();

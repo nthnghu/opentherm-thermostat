@@ -354,7 +354,7 @@ void ui_pages_boiler(lv_obj_t *p)
 
     // Tiles
     static const char *titles[6] = {"Water out / back", "Burner power", "Water pressure",
-                                    "Hot water tank",   "Burner starts", "Condensing (24 h)"};
+                                    "Hot water tank",   "Burner starts", "Flue gas"};
     for (int i = 0; i < 6; i++) {
         lv_obj_t *t = card(p, 20 + (i % 2) * 228, 208 + (i / 2) * 118, 212, 108);
         label(t, titles[i], 12, 10, 196, UI_MUTED, &lv_font_montserrat_16);
@@ -458,16 +458,32 @@ void ui_pages_boiler_update(void)
     } else {
         lv_label_set_text_fmt(s_bl_note[4], "24 h: %u starts", k24.ch_starts);
     }
-    if (k24.burner_h > 0) {
-        lv_label_set_text_fmt(s_bl_val[5], "%.0f %%", k24.cond_pct);
-        lv_label_set_text(s_bl_note[5], "of the burner time");
+    // Flue gas (ID 33): below ~55 °C the water vapour condenses and the boiler gets its extra ~10 %
+    char cond24[32] = "";
+    if (k24.burner_h > k24.dhw_burner_h) {
+        snprintf(cond24, sizeof(cond24), ", 24 h %.0f %%", k24.cond_pct);
+    }
+    if (st.exhaust_valid && st.flame) {
+        bool cond = st.exhaust_c < DL_COND_RETURN_C;
+        lv_label_set_text_fmt(s_bl_val[5], "%.0f °C", st.exhaust_c);
+        lv_obj_set_style_text_color(s_bl_val[5], ui_c(cond ? UI_OK : UI_WARN), 0);
+        lv_label_set_text_fmt(s_bl_note[5], "%s%s", cond ? "condensing" : "not condensing", cond24);
     } else {
-        lv_label_set_text(s_bl_val[5], "-");
-        lv_label_set_text(s_bl_note[5], "no burns yet");
+        lv_obj_set_style_text_color(s_bl_val[5], ui_c(UI_TEXT), 0);
+        if (st.exhaust_valid) {
+            lv_label_set_text_fmt(s_bl_val[5], "%.0f °C", st.exhaust_c);
+        } else {
+            lv_label_set_text(s_bl_val[5], "-");
+        }
+        lv_label_set_text_fmt(s_bl_note[5], "burner off%s", cond24);
     }
 
-    lv_label_set_text_fmt(s_bl_gas, "Gas (estimate): %.1f kWh in 24 h, %.1f kWh last hour", k24.gas_kwh,
-                          k1.gas_kwh);
+    char ctr[96] = "";
+    if (st.counters_valid && st.counters[0]) {
+        snprintf(ctr, sizeof(ctr), "\nBoiler counters: %u starts, %u h burner", st.counters[0], st.counters[4]);
+    }
+    lv_label_set_text_fmt(s_bl_gas, "Gas (estimate): %.1f kWh in 24 h, %.1f kWh last hour%s", k24.gas_kwh, k1.gas_kwh,
+                          ctr);
     if (st.alert_count) {
         char a[300];
         size_t n = (size_t)snprintf(a, sizeof(a), "#FFB74D " LV_SYMBOL_WARNING " Alerts:#");
